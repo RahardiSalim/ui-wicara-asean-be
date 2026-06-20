@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from app.core.language import is_indonesian_language
+from app.core.language import is_indonesian_language, language_display_name
 from app.modules.curriculum.kurikulum_merdeka import (
     translate_curriculum_label_to_english,
 )
@@ -22,9 +22,12 @@ def build_goal_resolution_prompt(
     language: str,
     search_scope: str,
 ) -> str:
-    response_language = "id" if is_indonesian_language(language) else "en"
+    # Node content is localized binary (id/en seed columns); the AI's *response*
+    # is generated in the full target language (e.g. "Vietnamese").
+    content_language = "id" if is_indonesian_language(language) else "en"
+    response_language = language_display_name(language)
     node_payload = [
-        _node_payload(candidate, language=response_language) for candidate in candidates
+        _node_payload(candidate, language=content_language) for candidate in candidates
     ]
     return f"""
 You resolve a learner's free-text learning goal to an existing knowledge_concepts node.
