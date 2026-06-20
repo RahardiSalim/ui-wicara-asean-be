@@ -20,6 +20,7 @@ from app.modules.curriculum.kurikulum_merdeka import (
 from app.modules.curriculum.models import KnowledgeConcept, Subject
 from app.modules.curriculum.seed import seed_curriculum
 from app.modules.learning.models import AssessmentSession, LearningGoal
+from app.modules.review.flagger import enqueue_flag
 from app.modules.learning_goal_resolution.candidate_retriever import (
     CandidateConceptRetriever,
     ConceptCandidate,
@@ -133,6 +134,15 @@ class GoalResolverService:
             )
             session.add(resolution)
             session.commit()
+            enqueue_flag(
+                artifact_type="diagnosis",
+                artifact_id=resolution.id,
+                confidence=0.0,
+                signals={"status": resolution.status},
+                subject=resolution.subject_code,
+                learner_id=resolution.user_id,
+                summary=resolution.raw_query[:160],
+            )
             return ResolveLearningGoalResponse(
                 resolution_id=resolution.id,
                 status=resolution.status,
@@ -173,6 +183,16 @@ class GoalResolverService:
         )
         session.add(resolution)
         session.commit()
+        enqueue_flag(
+            artifact_type="diagnosis",
+            artifact_id=resolution.id,
+            confidence=resolution.confidence,
+            signals={"status": resolution.status},
+            subject=resolution.subject_code,
+            concept_id=resolution.suggested_concept_id,
+            learner_id=resolution.user_id,
+            summary=resolution.raw_query[:160],
+        )
 
         return ResolveLearningGoalResponse(
             resolution_id=resolution.id,

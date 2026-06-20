@@ -274,12 +274,44 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("WICARA_SUPABASE_JWT_SECRET", "SUPABASE_JWT_SECRET"),
     )
+    review_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("WICARA_REVIEW_ENABLED", "REVIEW_ENABLED"),
+    )
+    review_confidence_threshold: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices(
+            "WICARA_REVIEW_CONFIDENCE_THRESHOLD",
+            "REVIEW_CONFIDENCE_THRESHOLD",
+        ),
+    )
+    review_sample_pct: int = Field(
+        default=10,
+        ge=0,
+        le=100,
+        validation_alias=AliasChoices("WICARA_REVIEW_SAMPLE_PCT", "REVIEW_SAMPLE_PCT"),
+    )
+    teacher_emails: str = Field(
+        default="",
+        validation_alias=AliasChoices("WICARA_TEACHER_EMAILS", "TEACHER_EMAILS"),
+    )
+
     cors_allow_origins: list[str] = [
         "http://localhost",
         "http://localhost:*",
         "http://127.0.0.1",
         "http://127.0.0.1:*",
     ]
+
+    @property
+    def teacher_email_set(self) -> set[str]:
+        return {
+            email.strip().lower()
+            for email in self.teacher_emails.split(",")
+            if email.strip()
+        }
 
     model_config = SettingsConfigDict(
         env_prefix="WICARA_",

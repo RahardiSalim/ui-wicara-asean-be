@@ -27,6 +27,7 @@ from app.modules.pretests.generation_service import (
     _concept_prompt_title,
 )
 from app.modules.pretests.graph_scope_builder import GraphScopeBuilder
+from app.modules.review.flagger import enqueue_flag
 from app.modules.pretests.schemas import (
     PretestAnswerResponse,
     PretestEvaluationRead,
@@ -274,6 +275,19 @@ class AdaptivePretestService:
         )
         session.add(attempt)
         session.flush()
+
+        enqueue_flag(
+            artifact_type="evaluation",
+            artifact_id=attempt.id,
+            confidence=attempt.reasoning_score,
+            signals={
+                "diagnostic_signal": attempt.diagnostic_signal,
+                "structured_parse_ok": evaluation.get("reasoning_evaluation_source")
+                != "parse_error",
+            },
+            learner_id=user.id,
+            summary=(typed_reasoning.strip() or "MCQ-only answer")[:160],
+        )
 
         state = self.decision_engine.record_attempt(
             assessment_state,

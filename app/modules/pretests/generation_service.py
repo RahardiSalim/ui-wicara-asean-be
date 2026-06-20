@@ -21,6 +21,7 @@ from app.modules.learning.models import (
     AssessmentSession,
 )
 from app.modules.pretests.question_validator import QuestionValidator
+from app.modules.review.flagger import enqueue_flag
 
 PACK_PROMPT_VERSION = "adaptive_node_pack_v6_flexible_subject_tasks"
 FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v3_workspace_posttest"
@@ -110,6 +111,13 @@ class AdaptivePretestGenerationService:
             )
             session.add(question)
             session.flush()
+            enqueue_flag(
+                artifact_type="question",
+                artifact_id=question.id,
+                signals={"generation_source": generation_metadata["generation_source"]},
+                concept_id=concept.id,
+                summary=question.prompt[:160],
+            )
             for sort_order, option in enumerate(payload["options"], start=1):
                 session.add(
                     AssessmentOption(
@@ -319,6 +327,13 @@ class AdaptivePretestGenerationService:
                 )
             )
         session.flush()
+        enqueue_flag(
+            artifact_type="question",
+            artifact_id=question.id,
+            signals={"generation_source": str(metadata.get("generation_source") or "llm_generated")},
+            concept_id=concept.id,
+            summary=question.prompt[:160],
+        )
         return session.scalar(
             select(AssessmentQuestion)
             .where(AssessmentQuestion.id == question.id)

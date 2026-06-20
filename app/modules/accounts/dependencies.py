@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.db.session import get_session
 from app.modules.accounts.models import UserAccount
-from app.modules.accounts.service import sync_supabase_user
+from app.modules.accounts.service import resolve_role, sync_supabase_user
 from app.modules.accounts.supabase import (
     SupabaseTokenError,
     verify_supabase_access_token,
@@ -68,8 +68,9 @@ def verify_supabase_token_or_401(token: str, settings: Settings) -> dict[str, An
 def get_current_account(
     claims: dict[str, Any] = Depends(verified_supabase_claims),
     session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> UserAccount:
-    return sync_supabase_user(session, claims=claims, role="learner")
+    return sync_supabase_user(session, claims=claims, role=resolve_role(claims, settings))
 
 
 def get_optional_current_account(
@@ -81,4 +82,15 @@ def get_optional_current_account(
         return None
 
     claims = verify_supabase_token_or_401(token, settings)
-    return sync_supabase_user(session, claims=claims, role="learner")
+    return sync_supabase_user(session, claims=claims, role=resolve_role(claims, settings))
+
+
+def get_current_teacher(
+    account: UserAccount = Depends(get_current_account),
+) -> UserAccount:
+    if account.role != "teacher":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Teacher role required.",
+        )
+    return account

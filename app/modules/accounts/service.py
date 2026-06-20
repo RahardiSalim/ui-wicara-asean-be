@@ -84,8 +84,23 @@ def save_onboarding_profile(
 
 
 def _normalize_role(role: str) -> str:
-    cleaned = role.strip().lower()
-    return cleaned if cleaned in {"learner"} else "learner"
+    cleaned = (role or "").strip().lower()
+    return cleaned if cleaned in {"learner", "teacher"} else "learner"
+
+
+def resolve_role(claims: dict[str, Any], settings: Any) -> str:
+    """Derive the account role from a teacher allowlist or Supabase claims.
+
+    Falls back to ``learner`` when nothing matches. Kept dependency-free of the
+    Settings type so it can be called from anywhere a settings object is handy.
+    """
+    email = _string_or_none(claims.get("email"))
+    if email and email.lower() in settings.teacher_email_set:
+        return "teacher"
+    app_metadata = claims.get("app_metadata") or {}
+    user_metadata = claims.get("user_metadata") or {}
+    claimed = app_metadata.get("role") or user_metadata.get("role") or "learner"
+    return _normalize_role(str(claimed))
 
 
 def _metadata(claims: dict[str, Any]) -> dict[str, Any]:
