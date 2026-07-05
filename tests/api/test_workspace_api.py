@@ -4,6 +4,7 @@ from fastapi import Depends
 from sqlalchemy.orm import Session
 
 from app.db.session import get_session
+from app.modules.eduillustrate.service import EduIllustrateGenerationResult
 from app.modules.accounts.dependencies import get_current_account
 from app.modules.accounts.models import UserAccount
 
@@ -190,6 +191,54 @@ def test_workspace_rejects_event_with_unknown_type(client):
     )
 
     assert response.status_code == 422
+
+
+def test_workspace_generate_explanation_persists_eduillustrate_events(client, monkeypatch):
+    _override_account(client)
+    track_id, module_id = _create_track_and_first_module(client)
+    workspace = client.post(
+        "/api/v1/workspaces",
+        json={"track_id": track_id, "module_id": module_id},
+    ).json()
+
+    async def fake_generate_problem_explanation(**kwargs):
+        assert kwargs["problem"] == "Explain x + 2 = 5."
+        return EduIllustrateGenerationResult(
+            success=True,
+            output_dir="tmp/eduillustrate_outputs/test/problem_0_math",
+            explanation_path="tmp/eduillustrate_outputs/test/problem_0_math/problem_0_math.mp4",
+            doc_path="tmp/eduillustrate_outputs/test/problem_0_math/doc/solution.md",
+            markdown="# problem_0_math\n\nSubtract 2 from both sides.",
+            time_seconds=1.25,
+            model="fake-eduillustrate-model",
+        )
+
+    monkeypatch.setattr(
+        "app.modules.workspaces.service.generate_problem_explanation",
+        fake_generate_problem_explanation,
+    )
+
+    response = client.post(
+        f"/api/v1/workspaces/{workspace['id']}/generate-explanation",
+        json={"problem": "  Explain x + 2 = 5.  "},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["request_event"]["actor_type"] == "learner"
+    assert payload["request_event"]["event_index"] == 1
+    assert payload["request_event"]["text_payload"] == "Explain x + 2 = 5."
+    assert payload["request_event"]["metadata"]["source"] == "eduillustrate_explanation_request"
+    assert payload["event"]["actor_type"] == "tutor"
+    assert payload["event"]["event_index"] == 2
+    assert payload["event"]["metadata"]["source"] == "eduillustrate_explanation_response"
+    assert payload["event"]["text_payload"] == "# problem_0_math\n\nSubtract 2 from both sides."
+    assert payload["explanation"]["doc_path"].endswith("doc/solution.md")
+    assert payload["explanation"]["model"] == "fake-eduillustrate-model"
+    assert [event["actor_type"] for event in payload["workspace"]["events"]] == [
+        "learner",
+        "tutor",
+    ]
 
 
 def _create_track_and_first_module(client) -> tuple[str, str]:
