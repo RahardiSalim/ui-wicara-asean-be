@@ -30,6 +30,23 @@ render = [
   "manim-voiceover[gtts]>=0.3.7",
   "setuptools<81",
 ]
+eduillustrate = [
+  "chromadb>=0.6",
+  "ffmpeg-python>=0.2",
+  "google-cloud-aiplatform>=1.79",
+  "google-generativeai>=0.8,<0.9",
+  "langchain~=0.3.14",
+  "langchain-community~=0.3.14",
+  "langfuse>=2.58,<3",
+  "litellm>=1.60",
+  "moviepy>=2.1",
+  "numpy>=2.0",
+  "pillow",
+  "pylatexenc>=2.10,<3",
+  "pysrt",
+  "SpeechRecognition>=3.14",
+  "tqdm>=4.66",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

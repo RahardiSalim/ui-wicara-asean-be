@@ -243,6 +243,52 @@ class Settings(BaseSettings):
             "MEDIA_DURATION_MIN_SECONDS_DEFAULT",
         ),
     )
+    eduillustrate_repo_dir: str = Field(
+        default="../EduIllustrate",
+        validation_alias=AliasChoices(
+            "WICARA_EDUILLUSTRATE_REPO_DIR",
+            "EDUILLUSTRATE_REPO_DIR",
+        ),
+    )
+    eduillustrate_output_dir: str = Field(
+        default="../.wicara_eduillustrate_outputs",
+        validation_alias=AliasChoices(
+            "WICARA_EDUILLUSTRATE_OUTPUT_DIR",
+            "EDUILLUSTRATE_OUTPUT_DIR",
+        ),
+    )
+    eduillustrate_model: str = Field(
+        default="gemini/gemini-2.5-flash",
+        validation_alias=AliasChoices(
+            "WICARA_EDUILLUSTRATE_MODEL",
+            "EDUILLUSTRATE_MODEL",
+        ),
+    )
+    eduillustrate_max_retries: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        validation_alias=AliasChoices(
+            "WICARA_EDUILLUSTRATE_MAX_RETRIES",
+            "EDUILLUSTRATE_MAX_RETRIES",
+        ),
+    )
+    eduillustrate_max_scene_concurrency: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        validation_alias=AliasChoices(
+            "WICARA_EDUILLUSTRATE_MAX_SCENE_CONCURRENCY",
+            "EDUILLUSTRATE_MAX_SCENE_CONCURRENCY",
+        ),
+    )
+    eduillustrate_translate_to_chinese: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "WICARA_EDUILLUSTRATE_TRANSLATE_TO_CHINESE",
+            "EDUILLUSTRATE_TRANSLATE_TO_CHINESE",
+        ),
+    )
     supabase_project_url: str = Field(
         default="https://gwbqhirtkgkghnpahtgt.supabase.co",
         validation_alias=AliasChoices("WICARA_SUPABASE_PROJECT_URL", "SUPABASE_PROJECT_URL"),
