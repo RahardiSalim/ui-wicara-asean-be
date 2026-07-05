@@ -226,7 +226,7 @@ async def generate_tutor_response(
     if event_type == "text" and _is_brief_greeting(text_payload):
         return (
             TutorResponseRead(
-                text=_greeting_response(language_code=language_code),
+                text=_greeting_response(language_code=language_code, topic=topic),
                 intent=_STAGE_INTENT.get(phase, "ask_followup"),
                 next_actions=_STAGE_ACTIONS.get(phase, ["ask_followup"]),
                 next_phase_ready=False,
@@ -303,6 +303,7 @@ async def generate_tutor_response(
                 language_code=language_code,
                 phase=phase,
                 student_message=text_payload,
+                topic=topic,
             )
             audit["anti_repeat_fallback"] = True
         audit["structured_parse_ok"] = parsed["parse_ok"]
@@ -466,12 +467,13 @@ def _is_brief_greeting(text: str) -> bool:
     }
 
 
-def _greeting_response(*, language_code: str) -> str:
+def _greeting_response(*, language_code: str, topic: str) -> str:
+    topic_text = _clean_topic_for_tutor_text(topic)
     if language_code == "id":
         return (
-            "Halo, siap. Kamu mau mulai dari mana dulu: variabel, koefisien, atau suku?"
+            f"Halo, siap. Kita mulai dari {topic_text}. Bagian mana yang paling ingin kamu cek dulu?"
         )
-    return "Hi, ready to start. Do you want to begin with variables, coefficients, or terms?"
+    return f"Hi, ready to start. Let us begin with {topic_text}. Which part do you want to check first?"
 
 
 def _enforce_brevity(text: str, *, phase: str) -> str:
@@ -517,16 +519,17 @@ def _is_repetitive_response(current_text: str, previous_text: str | None) -> boo
     return similarity >= 0.86
 
 
-def _anti_repeat_response(*, language_code: str, phase: str, student_message: str) -> str:
+def _anti_repeat_response(*, language_code: str, phase: str, student_message: str, topic: str) -> str:
     message = student_message.strip()
+    topic_text = _clean_topic_for_tutor_text(topic)
     if language_code == "id":
         if phase == "engage":
             return (
-                "Mantap, kita fokus dari jawabanmu saja. Menurutmu bagian mana yang paling bikin bingung: variabel, koefisien, atau suku?"
+                f"Mantap, kita fokus ke {topic_text}. Bagian mana yang paling bikin bingung?"
             )
         if phase == "explore":
             return (
-                "Oke, sekarang uji cepat: dari ungkapanmu, mana suku sejenis yang bisa digabung dan kenapa?"
+                f"Oke, uji cepat: sebutkan satu contoh dari {topic_text} yang menurutmu paling mudah dicek."
             )
         if phase == "explain":
             return (
@@ -534,7 +537,7 @@ def _anti_repeat_response(*, language_code: str, phase: str, student_message: st
             )
         if phase == "elaborate":
             return (
-                "Lanjut latihan: sederhanakan 3x + 2 - x + 5, lalu jelaskan langkahnya singkat."
+                f"Lanjut latihan: terapkan {topic_text} ke satu kasus baru, lalu jelaskan langkah pertamamu."
             )
         if phase == "evaluate":
             return (
@@ -545,16 +548,16 @@ def _anti_repeat_response(*, language_code: str, phase: str, student_message: st
         )
     if phase == "engage":
         return (
-            "Great, let's use your answer directly. Which part feels most confusing: variables, coefficients, or terms?"
+            f"Great, let us focus on {topic_text}. Which part feels most confusing?"
         )
     if phase == "explore":
         return (
-            "Quick check: from your expression, which like terms can be combined, and why?"
+            f"Quick check: name one example from {topic_text} that feels easiest to verify."
         )
     if phase == "explain":
         return "Nice. Restate the idea in your own words and give one short example."
     if phase == "elaborate":
-        return "Try this: simplify 3x + 2 - x + 5, then explain your steps briefly."
+        return f"Try applying {topic_text} to one new case, then explain your first step briefly."
     if phase == "evaluate":
         return (
             "I noted your answer. Recheck the step you are least sure about and revise it once."
@@ -562,6 +565,11 @@ def _anti_repeat_response(*, language_code: str, phase: str, student_message: st
     if message:
         return "Good point. Continue from your last step and add one more concrete step."
     return "Good point. Add one concrete next step."
+
+
+def _clean_topic_for_tutor_text(topic: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(topic or "").strip())
+    return normalized if normalized else "this topic"
 
 
 def _normalize_phase(phase: str | None) -> str:
