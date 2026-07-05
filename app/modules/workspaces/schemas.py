@@ -55,6 +55,30 @@ class WorkspaceGenerateVideoRequest(BaseModel):
         return self
 
 
+class WorkspaceGenerateExplanationRequest(BaseModel):
+    problem: str = Field(..., min_length=1, max_length=20000)
+    model: str | None = Field(default=None, min_length=1, max_length=160)
+    max_retries: int | None = Field(default=None, ge=1, le=10)
+    max_scene_concurrency: int | None = Field(default=None, ge=1, le=10)
+    translate_to_chinese: bool | None = None
+
+    @field_validator("problem")
+    @classmethod
+    def normalize_problem(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("problem must not be empty.")
+        return text
+
+    @field_validator("model")
+    @classmethod
+    def normalize_optional_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        return text or None
+
+
 class WorkspaceEventRead(BaseModel):
     id: UUID
     workspace_id: UUID
@@ -130,4 +154,29 @@ class WorkspaceEventCreateResponse(BaseModel):
 class WorkspaceGenerateVideoResponse(BaseModel):
     queue: AnimationQueueResponse
     event: WorkspaceEventRead
+    workspace: WorkspaceRead
+
+
+class WorkspaceEduIllustrateAssetRead(BaseModel):
+    kind: str
+    url: str
+    filename: str
+    content_type: str | None = None
+
+
+class WorkspaceEduIllustrateExplanationRead(BaseModel):
+    success: bool = True
+    text: str
+    output_dir: str
+    explanation_path: str | None = None
+    doc_path: str | None = None
+    assets: list[WorkspaceEduIllustrateAssetRead] = Field(default_factory=list)
+    time_seconds: float
+    model: str
+
+
+class WorkspaceGenerateExplanationResponse(BaseModel):
+    request_event: WorkspaceEventRead
+    event: WorkspaceEventRead
+    explanation: WorkspaceEduIllustrateExplanationRead
     workspace: WorkspaceRead

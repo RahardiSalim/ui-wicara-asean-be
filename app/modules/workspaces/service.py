@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import mimetypes
+from pathlib import Path
+import re
+import shutil
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.config import get_settings, resolve_project_path
 from app.core.language import normalize_language_code, preferred_language_code
+from app.modules.eduillustrate.service import generate_problem_explanation
 from app.modules.accounts.models import UserAccount
 from app.modules.curriculum.kurikulum_merdeka import (
     translate_curriculum_label_to_english,
@@ -22,8 +28,11 @@ from app.modules.workspaces.mastery import WorkspaceMasteryService
 from app.modules.workspaces.models import WorkspaceEvent, WorkspaceSession
 from app.modules.workspaces.schemas import (
     TutorResponseRead,
+    WorkspaceEduIllustrateAssetRead,
+    WorkspaceEduIllustrateExplanationRead,
     WorkspaceEventCreateResponse,
     WorkspaceEventRead,
+    WorkspaceGenerateExplanationResponse,
     WorkspaceGenerateVideoResponse,
     WorkspaceRead,
     WorkspaceSessionHistoryRead,
@@ -590,6 +599,117 @@ def queue_workspace_video_generation(
     )
 
 
+async def generate_workspace_explanation(
+    session: Session,
+    *,
+    user: UserAccount,
+    workspace_id: UUID,
+    problem: str,
+    model: str | None = None,
+    max_retries: int | None = None,
+    max_scene_concurrency: int | None = None,
+    translate_to_chinese: bool | None = None,
+) -> WorkspaceGenerateExplanationResponse | None:
+    workspace = _load_workspace(session, user=user, workspace_id=workspace_id)
+    if workspace is None:
+        return None
+
+    problem_text = str(problem or "").strip()
+    if not problem_text:
+        raise ValueError("Problem text must not be empty.")
+
+    _resolve_owned_track_module(
+        session,
+        user=user,
+        track_id=workspace.track_id,
+        module_id=workspace.module_id,
+    )
+    workspace_db_id = workspace.id
+    session.commit()
+
+    result = await generate_problem_explanation(
+        problem=problem_text,
+        output_dir=_eduillustrate_output_dir(workspace_id=workspace_db_id),
+        model=model,
+        max_retries=max_retries,
+        max_scene_concurrency=max_scene_concurrency,
+        translate_to_chinese=translate_to_chinese,
+    )
+    response_text, published_assets = _publish_eduillustrate_response(
+        workspace_id=workspace_db_id,
+        markdown=_eduillustrate_response_text(result.markdown),
+        output_dir=result.output_dir,
+        doc_path=result.doc_path,
+        explanation_path=result.explanation_path,
+    )
+
+    workspace = _load_workspace(session, user=user, workspace_id=workspace_db_id)
+    if workspace is None:
+        return None
+
+    first_index = _next_event_index(session, workspace_id=workspace.id)
+    request_event = WorkspaceEvent(
+        workspace_session_id=workspace.id,
+        event_index=first_index,
+        event_type="text",
+        actor_type="learner",
+        text_payload=problem_text,
+        image_asset_id=None,
+        media_artifact_id=None,
+        input_event_id=None,
+        metadata_json={
+            "source": "eduillustrate_explanation_request",
+            "generation_model": result.model,
+        },
+    )
+    response_event = WorkspaceEvent(
+        workspace_session_id=workspace.id,
+        event_index=first_index + 1,
+        event_type="text",
+        actor_type="tutor",
+        text_payload=response_text,
+        image_asset_id=None,
+        media_artifact_id=None,
+        input_event_id=None,
+        metadata_json={
+            "source": "eduillustrate_explanation_response",
+            "output_dir": result.output_dir,
+            "explanation_path": result.explanation_path,
+            "doc_path": result.doc_path,
+            "assets": [asset.model_dump() for asset in published_assets],
+            "time_seconds": result.time_seconds,
+            "model": result.model,
+        },
+    )
+
+    workspace.updated_at = datetime.now(UTC)
+    session.add(request_event)
+    session.add(response_event)
+    session.commit()
+    session.refresh(request_event)
+    session.refresh(response_event)
+
+    workspace = _load_workspace(session, user=user, workspace_id=workspace.id)
+    if workspace is None:
+        return None
+
+    return WorkspaceGenerateExplanationResponse(
+        request_event=event_to_schema(request_event),
+        event=event_to_schema(response_event),
+        explanation=WorkspaceEduIllustrateExplanationRead(
+            success=result.success,
+            text=response_text,
+            output_dir=result.output_dir,
+            explanation_path=result.explanation_path,
+            doc_path=result.doc_path,
+            assets=published_assets,
+            time_seconds=result.time_seconds,
+            model=result.model,
+        ),
+        workspace=workspace_to_schema(session, workspace, user=user),
+    )
+
+
 def workspace_to_schema(
     session: Session,
     workspace: WorkspaceSession,
@@ -639,13 +759,20 @@ def workspace_to_schema(
 def event_to_schema(event: WorkspaceEvent) -> WorkspaceEventRead:
     public_metadata = dict(event.metadata_json or {})
     public_metadata.pop("ai_audit", None)
+    text_payload = event.text_payload
+    if public_metadata.get("source") == "eduillustrate_explanation_response":
+        text_payload, public_metadata = _eduillustrate_public_event_payload(
+            text_payload=text_payload,
+            metadata=public_metadata,
+            workspace_id=event.workspace_session_id,
+        )
     return WorkspaceEventRead(
         id=event.id,
         workspace_id=event.workspace_session_id,
         event_index=event.event_index,
         event_type=event.event_type,
         actor_type=event.actor_type,
-        text_payload=event.text_payload,
+        text_payload=text_payload,
         image_asset_id=event.image_asset_id,
         media_artifact_id=event.media_artifact_id,
         input_event_id=event.input_event_id,
@@ -724,6 +851,210 @@ def _resolve_owned_media_artifact(
     if artifact is None:
         raise LookupError("Media artifact was not found.")
     return artifact
+
+
+def _eduillustrate_output_dir(*, workspace_id: UUID):
+    settings = get_settings()
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    return resolve_project_path(settings.eduillustrate_output_dir) / (
+        f"workspace_{workspace_id}_{timestamp}"
+    )
+
+
+def _eduillustrate_response_text(markdown: str) -> str:
+    text = str(markdown or "").strip()
+    if text:
+        return text
+    return (
+        "EduIllustrate finished generation, but no Markdown explanation document "
+        "was found in the output directory."
+    )
+
+
+def _eduillustrate_public_event_payload(
+    *,
+    text_payload: str,
+    metadata: dict[str, Any],
+    workspace_id: UUID,
+) -> tuple[str, dict[str, Any]]:
+    output_dir = metadata.get("output_dir")
+    if not isinstance(output_dir, str) or not output_dir.strip():
+        return text_payload, metadata
+
+    try:
+        rewritten_text, assets = _publish_eduillustrate_response(
+            workspace_id=workspace_id,
+            markdown=text_payload,
+            output_dir=output_dir,
+            doc_path=metadata.get("doc_path")
+            if isinstance(metadata.get("doc_path"), str)
+            else None,
+            explanation_path=metadata.get("explanation_path")
+            if isinstance(metadata.get("explanation_path"), str)
+            else None,
+        )
+    except Exception:
+        return text_payload, metadata
+
+    public_metadata = dict(metadata)
+    if assets:
+        public_metadata["assets"] = [asset.model_dump() for asset in assets]
+    return rewritten_text, public_metadata
+
+
+_MARKDOWN_IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_EDUILLUSTRATE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+_EDUILLUSTRATE_VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov"}
+
+
+def _publish_eduillustrate_response(
+    *,
+    workspace_id: UUID,
+    markdown: str,
+    output_dir: str,
+    doc_path: str | None,
+    explanation_path: str | None,
+) -> tuple[str, list[WorkspaceEduIllustrateAssetRead]]:
+    topic_dir = Path(output_dir).resolve()
+    doc_file = Path(doc_path).resolve() if doc_path else None
+    doc_dir = doc_file.parent if doc_file and doc_file.exists() else topic_dir / "doc"
+    run_dir = topic_dir.parent if topic_dir.parent != topic_dir else topic_dir
+    object_prefix = (
+        f"eduillustrate/{workspace_id}/{_safe_media_segment(run_dir.name)}/"
+        f"{_safe_media_segment(topic_dir.name)}"
+    )
+    assets: list[WorkspaceEduIllustrateAssetRead] = []
+    published_by_source: dict[Path, WorkspaceEduIllustrateAssetRead] = {}
+
+    def publish(source_path: Path, relative_path: Path) -> WorkspaceEduIllustrateAssetRead | None:
+        source = source_path.resolve()
+        if not source.exists() or not source.is_file():
+            return None
+        existing = published_by_source.get(source)
+        if existing is not None:
+            return existing
+
+        safe_relative = _safe_media_relative_path(relative_path)
+        object_path = f"{object_prefix}/{safe_relative}"
+        settings = get_settings()
+        storage_root = resolve_project_path(settings.media_storage_local_dir)
+        target_path = storage_root / object_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target_path)
+
+        content_type, _ = mimetypes.guess_type(str(source))
+        asset = WorkspaceEduIllustrateAssetRead(
+            kind=_eduillustrate_asset_kind(source),
+            url=_join_public_media_url(settings.media_storage_public_base_url, object_path),
+            filename=source.name,
+            content_type=content_type,
+        )
+        published_by_source[source] = asset
+        assets.append(asset)
+        return asset
+
+    def rewrite_image(match: re.Match[str]) -> str:
+        alt_text = match.group(1)
+        raw_target = match.group(2).strip().strip("<>")
+        if _is_external_or_public_markdown_target(raw_target):
+            return match.group(0)
+        source = _resolve_eduillustrate_markdown_asset(
+            raw_target=raw_target,
+            doc_dir=doc_dir,
+            topic_dir=topic_dir,
+        )
+        if source is None:
+            return match.group(0)
+        relative = _relative_to_or_name(source, topic_dir)
+        asset = publish(source, relative)
+        if asset is None:
+            return match.group(0)
+        return f"![{alt_text}]({asset.url})"
+
+    rewritten_markdown = _MARKDOWN_IMAGE_PATTERN.sub(rewrite_image, markdown)
+
+    if explanation_path:
+        source_video = Path(explanation_path)
+        publish(source_video, _relative_to_or_name(source_video, topic_dir))
+    if topic_dir.exists():
+        for source in sorted(topic_dir.rglob("*"), key=lambda item: str(item)):
+            suffix = source.suffix.lower()
+            if suffix in _EDUILLUSTRATE_VIDEO_EXTENSIONS:
+                publish(source, _relative_to_or_name(source, topic_dir))
+
+    return rewritten_markdown, assets
+
+
+def _resolve_eduillustrate_markdown_asset(
+    *,
+    raw_target: str,
+    doc_dir: Path,
+    topic_dir: Path,
+) -> Path | None:
+    cleaned = raw_target.split("#", 1)[0].split("?", 1)[0].replace("\\", "/")
+    if not cleaned:
+        return None
+    candidates = [
+        (doc_dir / cleaned).resolve(),
+        (topic_dir / cleaned).resolve(),
+        (topic_dir / "doc" / cleaned).resolve(),
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _is_external_or_public_markdown_target(raw_target: str) -> bool:
+    target = raw_target.strip().lower()
+    return (
+        target.startswith("http://")
+        or target.startswith("https://")
+        or target.startswith("data:")
+        or target.startswith("mailto:")
+        or target.startswith("#")
+        or target.startswith("/")
+    )
+
+
+def _relative_to_or_name(path: Path, base: Path) -> Path:
+    try:
+        return path.resolve().relative_to(base.resolve())
+    except ValueError:
+        return Path(path.name)
+
+
+def _safe_media_relative_path(path: Path) -> str:
+    parts = [
+        _safe_media_segment(part)
+        for part in path.parts
+        if part not in {"", ".", ".."}
+    ]
+    if not parts:
+        return "asset"
+    return "/".join(parts)
+
+
+def _safe_media_segment(value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value).strip())
+    return safe.strip("._") or "asset"
+
+
+def _eduillustrate_asset_kind(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in _EDUILLUSTRATE_IMAGE_EXTENSIONS:
+        return "image"
+    if suffix in _EDUILLUSTRATE_VIDEO_EXTENSIONS:
+        return "video"
+    return "file"
+
+
+def _join_public_media_url(base_url: str, object_path: str) -> str:
+    normalized_base = (base_url or "").strip() or "/media-storage"
+    normalized_path = object_path.replace("\\", "/").lstrip("/")
+    if normalized_base.endswith("/"):
+        return f"{normalized_base}{normalized_path}"
+    return f"{normalized_base}/{normalized_path}"
 
 
 def _load_workspace(

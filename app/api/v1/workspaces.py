@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_session
 from app.modules.accounts.dependencies import get_current_account
 from app.modules.accounts.models import UserAccount
+from app.modules.eduillustrate.service import EduIllustrateGenerationError
 from app.modules.workspaces import schemas, service
 
 router = APIRouter(prefix="/workspaces")
@@ -162,6 +163,39 @@ def generate_workspace_video(
             concept_id=payload.concept_id,
             metadata=payload.metadata,
         )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    if response is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace was not found.")
+    return response
+
+
+@router.post(
+    "/{workspace_id}/generate-explanation",
+    response_model=schemas.WorkspaceGenerateExplanationResponse,
+)
+async def generate_workspace_explanation(
+    workspace_id: UUID,
+    payload: schemas.WorkspaceGenerateExplanationRequest,
+    account: UserAccount = Depends(get_current_account),
+    session: Session = Depends(get_session),
+) -> schemas.WorkspaceGenerateExplanationResponse:
+    try:
+        response = await service.generate_workspace_explanation(
+            session,
+            user=account,
+            workspace_id=workspace_id,
+            problem=payload.problem,
+            model=payload.model,
+            max_retries=payload.max_retries,
+            max_scene_concurrency=payload.max_scene_concurrency,
+            translate_to_chinese=payload.translate_to_chinese,
+        )
+    except EduIllustrateGenerationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
