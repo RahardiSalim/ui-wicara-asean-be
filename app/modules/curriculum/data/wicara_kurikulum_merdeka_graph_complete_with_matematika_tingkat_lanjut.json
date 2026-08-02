@@ -23098,6 +23098,14 @@
       "edge_type": "prerequisite",
       "strength": 0.9,
       "reason_id": "Chain-rule fluency supports differentiation of composed trigonometric functions."
+    },
+    {
+      "id": "edge_00605",
+      "from_node_id": "km_f_matematika_tingkat_lanjut_turunan_secara_aljabar",
+      "to_node_id": "km_f_matematika_tingkat_lanjut_aturan_rantai",
+      "edge_type": "prerequisite",
+      "strength": 0.88,
+      "reason_id": "Algebraic understanding of derivatives supports learning the chain rule."
     }
   ]
 }
