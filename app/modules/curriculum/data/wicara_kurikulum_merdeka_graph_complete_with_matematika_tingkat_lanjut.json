@@ -17819,6 +17819,43 @@
       "concept_hierarchy_confidence": 0.86
     },
     {
+      "id": "km_f_matematika_tingkat_lanjut_aturan_rantai",
+      "curriculum": "kurikulum_merdeka",
+      "version": "v0.1-curated-2026-08-02",
+      "phase": "F",
+      "school_level": "SMA/MA",
+      "grade_range": "11-12",
+      "subject": "matematika_tingkat_lanjut",
+      "subject_label": "Matematika Tingkat Lanjut",
+      "domain": "Kalkulus",
+      "element": "Kalkulus",
+      "label_id": "Aturan rantai",
+      "label_en": "Chain rule",
+      "description_id": "Memahami dan menerapkan aturan rantai sebagai prasyarat untuk menurunkan fungsi polinomial, eksponensial, dan trigonometri.",
+      "description_en": "Understand and apply the chain rule as a prerequisite for differentiating polynomial, exponential, and trigonometric functions.",
+      "node_type": "concept",
+      "difficulty_order": 46,
+      "is_assessable": true,
+      "is_standalone_subject": true,
+      "source_basis": "inferred_atomic_node_from_cp",
+      "cp_summary_id": "Polinomial, matriks dan transformasi geometri, trigonometri dan berbagai keluarga fungsi; vektor serta persamaan lingkaran, elips, dan garis singgung; variabel acak dan distribusi seragam, binomial, normal; limit, turunan, integral, dan penerapannya.",
+      "source_ref": "official:CP_ATP_Matematika_Tingkat_Lanjut_Fase_F; official:Panduan_Mata_Pelajaran_Matematika_2025",
+      "recommended_visual_engine": "manim",
+      "tags": "",
+      "concept_family": "calculus_change_accumulation",
+      "concept_family_label_id": "Kalkulus perubahan dan akumulasi",
+      "concept_type": "derivative_rate_change_model",
+      "concept_type_label_id": "Laju perubahan dan turunan",
+      "concept_subtype": "derivative_rate_change_model.aturan_rantai",
+      "concept_subtype_label_id": "Aturan rantai",
+      "default_template_id": "manim.function_composition_transform.v1",
+      "media_engine_family": "manim",
+      "concept_visual_pattern": "nested function layers, dependency tree, outer-inner derivative flow",
+      "real_world_anchor_examples": ["pertumbuhan majemuk", "perubahan suhu bertingkat", "gerak dengan posisi komposit", "model fungsi bersarang"],
+      "concept_hierarchy_assignment_method": "deterministic_hierarchy_rule_v1_teacher_review_required",
+      "concept_hierarchy_confidence": 0.86
+    },
+    {
       "id": "km_f_matematika_tingkat_lanjut_turunan_fungsi_polinomial",
       "curriculum": "kurikulum_merdeka",
       "version": "v0.1-curated-2026-08-02",
@@ -23037,6 +23074,30 @@
       "edge_type": "cross_subject_prerequisite",
       "strength": 0.86,
       "reason_id": "General function modeling supports interpretation of rates of change."
+    },
+    {
+      "id": "edge_00602",
+      "from_node_id": "km_f_matematika_tingkat_lanjut_aturan_rantai",
+      "to_node_id": "km_f_matematika_tingkat_lanjut_turunan_fungsi_polinomial",
+      "edge_type": "prerequisite",
+      "strength": 0.9,
+      "reason_id": "Chain-rule fluency supports differentiation of composed polynomial functions."
+    },
+    {
+      "id": "edge_00603",
+      "from_node_id": "km_f_matematika_tingkat_lanjut_aturan_rantai",
+      "to_node_id": "km_f_matematika_tingkat_lanjut_turunan_fungsi_eksponensial",
+      "edge_type": "prerequisite",
+      "strength": 0.9,
+      "reason_id": "Chain-rule fluency supports differentiation of composed exponential functions."
+    },
+    {
+      "id": "edge_00604",
+      "from_node_id": "km_f_matematika_tingkat_lanjut_aturan_rantai",
+      "to_node_id": "km_f_matematika_tingkat_lanjut_turunan_fungsi_trigonometri",
+      "edge_type": "prerequisite",
+      "strength": 0.9,
+      "reason_id": "Chain-rule fluency supports differentiation of composed trigonometric functions."
     }
   ]
 }
