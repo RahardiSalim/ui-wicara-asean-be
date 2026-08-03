@@ -15,8 +15,26 @@ from app.modules.workspaces.schemas import TutorResponseRead
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "wicara_5e_profile_language_v3"
+PROMPT_VERSION = "wicara_5e_evidence_context_v4"
 PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
+
+_ALLOWED_EVIDENCE_TAGS = {
+    "challenge_accepted",
+    "prior_knowledge_shared",
+    "exploration_attempt",
+    "pattern_identified",
+    "misconception_shifted",
+    "learner_explanation",
+    "micro_check_correct",
+    "transfer_attempt",
+    "transfer_correct",
+    "independent_attempt",
+    "error_analysis",
+    "reflection",
+}
+_ALLOWED_CORRECTNESS = {"correct", "partial", "incorrect", "unknown"}
+_ALLOWED_MISCONCEPTION = {"none", "suspected", "active", "resolved"}
+_ALLOWED_EVALUATION_OUTCOMES = {"passed", "partial", "misconception", "continue"}
 
 _PHASE_TRANSITION_CRITERIA: dict[str, str] = {
     "engage": (
@@ -46,8 +64,22 @@ _TUTOR_OUTPUT_SCHEMA: dict[str, Any] = {
         "text": {"type": "string"},
         "next_phase_ready": {"type": "boolean"},
         "phase_reasoning": {"type": "string"},
+        "evidence_tags": {"type": "array", "items": {"type": "string"}},
+        "correctness": {"type": "string"},
+        "misconception_status": {"type": "string"},
+        "confidence": {"type": "number"},
+        "evaluation_outcome": {"type": ["string", "null"]},
+        "evidence_request": {"type": ["object", "null"]},
+        "explanation_card": {"type": ["object", "null"]},
     },
-    "required": ["text", "next_phase_ready"],
+    "required": [
+        "text",
+        "next_phase_ready",
+        "evidence_tags",
+        "correctness",
+        "misconception_status",
+        "confidence",
+    ],
 }
 
 _SYSTEM_INSTRUCTION = """
@@ -62,9 +94,14 @@ Language rule:
 Teaching rules:
 - Be concise: avoid long generic monologues.
 - End with one guiding question or clear next action.
-- Never give away the full answer — lead the student to discover it.
+- Lead the student to discover the answer. A worked example is allowed only when the
+  backend scaffold level is 3 or higher, and it must use a different example.
 - Be warm, encouraging, and precise.
 - Avoid repeating the same opening pattern (for example repeated "Imagine..." hooks).
+- Treat the supplied learning context as authoritative. Ground the activity in the
+  diagnosed evidence and remember the learner's original target.
+- Report evidence only when the latest learner message actually demonstrates it.
+- Never claim mastery merely because the learner says they understand or watches media.
 """.strip()
 
 _PROMPTS: dict[str, str] = {
@@ -92,8 +129,9 @@ _PROMPTS: dict[str, str] = {
         "Stage: Explain\n"
         "Conversation so far:\n{history}\n\n"
         "Student: {message}\n\n"
-        "Give a clear explanation in {response_language}: what it is, why it matters, and one worked example. "
-        "Keep it concise and concrete. End with one short check-in question."
+        "First elicit the learner's explanation in their own words. Only after the "
+        "learning context shows learner_explanation evidence, give a concise grounded "
+        "formal explanation and a micro-check. Do not skip learner articulation."
     ),
     "elaborate": (
         "Topic: {topic}\n"
@@ -161,6 +199,7 @@ def _build_user_instruction(
     *,
     learner_language: str | None,
     response_language: str,
+    learning_context: dict[str, Any],
 ) -> str:
     template = _PROMPTS.get(current_phase, _PROMPTS["chat"])
     next_phase = _next_phase(current_phase)
@@ -171,8 +210,18 @@ def _build_user_instruction(
         f"- Transition criteria: {_PHASE_TRANSITION_CRITERIA.get(current_phase, _PHASE_TRANSITION_CRITERIA['engage'])}\n"
         "- Set next_phase_ready=true only if the learner is pedagogically ready for the next phase.\n"
         "- If current phase is evaluate, always return next_phase_ready=false.\n\n"
+        "Evidence contract:\n"
+        f"- Allowed evidence_tags: {', '.join(sorted(_ALLOWED_EVIDENCE_TAGS))}.\n"
+        "- correctness: correct|partial|incorrect|unknown.\n"
+        "- misconception_status: none|suspected|active|resolved.\n"
+        "- In Evaluate, evaluation_outcome is passed only with an independent attempt, "
+        "error analysis, and reflection; otherwise use partial, misconception, or continue.\n"
+        "- evidence_request describes the next task/tool but must not claim a result.\n"
+        "- explanation_card is allowed only in Explain after learner_explanation evidence.\n\n"
         "Output format requirement:\n"
-        "Return JSON object with keys exactly: text (string), next_phase_ready (boolean), phase_reasoning (string)."
+        "Return one JSON object with keys: text, next_phase_ready, phase_reasoning, "
+        "evidence_tags, correctness, misconception_status, confidence, "
+        "evaluation_outcome, evidence_request, explanation_card."
     )
     language_context = (
         f"Learner profile language: {learner_language or 'unknown'}\n"
@@ -186,6 +235,8 @@ def _build_user_instruction(
     return "\n\n".join(
         [
             language_context,
+            "Authoritative learning context:\n"
+            + json.dumps(learning_context, ensure_ascii=False, default=str),
             template.format(
                 topic=topic,
                 history=history,
@@ -212,7 +263,7 @@ async def generate_tutor_response(
     Falls back to deterministic response if AI generation fails.
     Only returns a response for event types that warrant one.
     """
-    if event_type not in {"text", "quiz_answer", "canvas_sent"}:
+    if event_type not in {"text", "quiz_answer", "canvas_sent", "media_viewed"}:
         return None, {"ai_source": "skipped", "reason": f"no_response_for_{event_type}"}
 
     topic = workspace.current_topic or "this module"
@@ -222,11 +273,23 @@ async def generate_tutor_response(
         learner_language=learner_language,
         latest_message=text_payload,
     )
+    workspace_metadata = workspace.metadata_json or {}
+    learning_context = _safe_prompt_learning_context(workspace_metadata)
+    learning_context.update(
+        {
+            "current_phase": phase,
+            "phase_evidence": (workspace_metadata.get("phase_evidence") or {}).get(
+                phase, []
+            ),
+            "hint_level": int(workspace_metadata.get("hint_level") or 0),
+            "recent_event_count": len(events),
+        }
+    )
 
     if event_type == "text" and _is_brief_greeting(text_payload):
         return (
             TutorResponseRead(
-                text=_greeting_response(language_code=language_code),
+                text=_greeting_response(language_code=language_code, topic=topic),
                 intent=_STAGE_INTENT.get(phase, "ask_followup"),
                 next_actions=_STAGE_ACTIONS.get(phase, ["ask_followup"]),
                 next_phase_ready=False,
@@ -254,6 +317,7 @@ async def generate_tutor_response(
         message=text_payload or "(no message)",
         learner_language=learner_language,
         response_language=response_language,
+        learning_context=learning_context,
     )
 
     audit: dict[str, Any] = {
@@ -267,6 +331,7 @@ async def generate_tutor_response(
         "language_code": language_code,
         "language_source": language_source,
         "history_turns": history.count("\n") + 1,
+        "learning_context": learning_context,
     }
 
     try:
@@ -303,6 +368,7 @@ async def generate_tutor_response(
                 language_code=language_code,
                 phase=phase,
                 student_message=text_payload,
+                topic=topic,
             )
             audit["anti_repeat_fallback"] = True
         audit["structured_parse_ok"] = parsed["parse_ok"]
@@ -314,6 +380,13 @@ async def generate_tutor_response(
             next_actions=_STAGE_ACTIONS.get(phase, ["ask_followup"]),
             next_phase_ready=bool(next_phase_ready) if phase != "evaluate" else False,
             phase_reasoning=phase_reasoning,
+            evidence_tags=parsed["evidence_tags"],
+            correctness=parsed["correctness"],
+            misconception_status=parsed["misconception_status"],
+            confidence=parsed["confidence"],
+            evaluation_outcome=parsed["evaluation_outcome"],
+            evidence_request=parsed["evidence_request"],
+            explanation_card=parsed["explanation_card"],
         ), audit
 
     except AIError as exc:
@@ -360,6 +433,60 @@ def _fallback_text(event_type: str, *, language_code: str) -> str:
             "I recorded your answer. Review the core concept and try the quiz again if needed."
         )
     return "I recorded that. Keep exploring the topic."
+
+
+def _safe_prompt_learning_context(metadata: dict[str, Any]) -> dict[str, Any]:
+    source = metadata.get("learning_context")
+    source = source if isinstance(source, dict) else {}
+    diagnosis = source.get("diagnosis")
+    diagnosis = diagnosis if isinstance(diagnosis, dict) else {}
+    evidence = diagnosis.get("evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    summary = evidence.get("summary")
+    summary = summary if isinstance(summary, dict) else {}
+
+    def safe_concept(value: Any) -> dict[str, Any]:
+        row = value if isinstance(value, dict) else {}
+        return {
+            key: row.get(key)
+            for key in ("concept_code", "title", "role", "route_index", "route_length")
+            if row.get(key) is not None
+        }
+
+    understood = source.get("already_understood")
+    safe_understood = []
+    if isinstance(understood, list):
+        for item in understood[:20]:
+            if not isinstance(item, dict):
+                continue
+            safe_understood.append(
+                {
+                    key: item.get(key)
+                    for key in ("concept_code", "title", "status")
+                    if item.get(key) is not None
+                }
+            )
+    return {
+        "original_target": safe_concept(source.get("original_target")),
+        "current_module": safe_concept(source.get("current_module")),
+        "diagnosis": {
+            "status": evidence.get("status"),
+            "confidence": evidence.get("confidence"),
+            "diagnostic_signals": summary.get("diagnostic_signals", []),
+            "misconception_detected": bool(
+                summary.get("misconception_detected", False)
+            ),
+            "reasoning_quality": summary.get("reasoning_quality"),
+        },
+        "already_understood": safe_understood,
+        "route": [
+            str(code)
+            for code in source.get("route", [])
+            if isinstance(code, str)
+        ][:20],
+        "tools": dict(source.get("tools") or {}),
+        "data_minimization": "no_identity_raw_reasoning_or_attempt_ids",
+    }
 
 
 def _fallback_response(
@@ -466,12 +593,10 @@ def _is_brief_greeting(text: str) -> bool:
     }
 
 
-def _greeting_response(*, language_code: str) -> str:
+def _greeting_response(*, language_code: str, topic: str) -> str:
     if language_code == "id":
-        return (
-            "Halo, siap. Kamu mau mulai dari mana dulu: variabel, koefisien, atau suku?"
-        )
-    return "Hi, ready to start. Do you want to begin with variables, coefficients, or terms?"
+        return f"Halo, siap belajar {topic}. Apa yang sudah kamu ketahui tentang topik ini?"
+    return f"Hi, ready to learn {topic}. What do you already know about this topic?"
 
 
 def _enforce_brevity(text: str, *, phase: str) -> str:
@@ -517,51 +642,41 @@ def _is_repetitive_response(current_text: str, previous_text: str | None) -> boo
     return similarity >= 0.86
 
 
-def _anti_repeat_response(*, language_code: str, phase: str, student_message: str) -> str:
-    message = student_message.strip()
+def _anti_repeat_response(
+    *,
+    language_code: str,
+    phase: str,
+    student_message: str,
+    topic: str,
+) -> str:
+    has_message = bool(student_message.strip())
     if language_code == "id":
-        if phase == "engage":
-            return (
-                "Mantap, kita fokus dari jawabanmu saja. Menurutmu bagian mana yang paling bikin bingung: variabel, koefisien, atau suku?"
-            )
-        if phase == "explore":
-            return (
-                "Oke, sekarang uji cepat: dari ungkapanmu, mana suku sejenis yang bisa digabung dan kenapa?"
-            )
-        if phase == "explain":
-            return (
-                "Bagus. Coba jelaskan lagi dengan kata-katamu sendiri, lalu beri 1 contoh singkat."
-            )
-        if phase == "elaborate":
-            return (
-                "Lanjut latihan: sederhanakan 3x + 2 - x + 5, lalu jelaskan langkahnya singkat."
-            )
-        if phase == "evaluate":
-            return (
-                "Jawabanmu sudah dicatat. Coba cek lagi bagian yang paling ragu, lalu perbaiki satu langkah."
-            )
-        return (
-            "Masuk. Lanjutkan dari poin terakhirmu dan jelaskan satu langkah berikutnya."
+        prompts = {
+            "engage": f"Kita fokus pada jawabanmu tentang {topic}. Bagian mana yang paling ingin kamu uji?",
+            "explore": "Coba satu pendekatan berbeda dan sebutkan pola yang kamu temukan.",
+            "explain": "Jelaskan idenya dengan kata-katamu sendiri, lalu beri satu alasan.",
+            "elaborate": "Terapkan ide yang sama pada situasi baru dan jelaskan perubahan langkahnya.",
+            "evaluate": "Periksa langkah yang paling kamu ragukan, lalu revisi dengan alasan.",
+        }
+        return prompts.get(
+            phase,
+            "Lanjutkan dari poin terakhirmu dan tambahkan satu langkah konkret."
+            if has_message
+            else "Tambahkan satu langkah konkret.",
         )
-    if phase == "engage":
-        return (
-            "Great, let's use your answer directly. Which part feels most confusing: variables, coefficients, or terms?"
-        )
-    if phase == "explore":
-        return (
-            "Quick check: from your expression, which like terms can be combined, and why?"
-        )
-    if phase == "explain":
-        return "Nice. Restate the idea in your own words and give one short example."
-    if phase == "elaborate":
-        return "Try this: simplify 3x + 2 - x + 5, then explain your steps briefly."
-    if phase == "evaluate":
-        return (
-            "I noted your answer. Recheck the step you are least sure about and revise it once."
-        )
-    if message:
-        return "Good point. Continue from your last step and add one more concrete step."
-    return "Good point. Add one concrete next step."
+    prompts = {
+        "engage": f"Let's focus on your answer about {topic}. Which part would you test first?",
+        "explore": "Try a different approach and name the pattern you observe.",
+        "explain": "State the idea in your own words and give one reason.",
+        "elaborate": "Apply the idea to a new situation and explain what changes.",
+        "evaluate": "Recheck the step you trust least, then revise it with a reason.",
+    }
+    return prompts.get(
+        phase,
+        "Continue from your last point and add one concrete step."
+        if has_message
+        else "Add one concrete step.",
+    )
 
 
 def _normalize_phase(phase: str | None) -> str:
@@ -581,12 +696,7 @@ def _parse_structured_tutor_output(raw_text: str) -> dict[str, Any]:
     payload: dict[str, Any] | None = None
     text = str(raw_text or "").strip()
     if not text:
-        return {
-            "text": "",
-            "next_phase_ready": False,
-            "phase_reasoning": None,
-            "parse_ok": False,
-        }
+        return _unverified_tutor_payload(text="")
 
     payload = _parse_json_payload(text)
     if payload is None:
@@ -594,12 +704,7 @@ def _parse_structured_tutor_output(raw_text: str) -> dict[str, Any]:
         if match:
             payload = _parse_json_payload(match.group(0))
     if payload is None:
-        return {
-            "text": text,
-            "next_phase_ready": False,
-            "phase_reasoning": None,
-            "parse_ok": False,
-        }
+        return _unverified_tutor_payload(text=text)
 
     parsed_text = str(payload.get("text") or "").strip()
     if not parsed_text:
@@ -612,11 +717,68 @@ def _parse_structured_tutor_output(raw_text: str) -> dict[str, Any]:
     )
     if phase_reasoning == "":
         phase_reasoning = None
+    raw_tags = payload.get("evidence_tags")
+    evidence_tags = (
+        [
+            str(tag)
+            for tag in raw_tags
+            if str(tag) in _ALLOWED_EVIDENCE_TAGS
+        ]
+        if isinstance(raw_tags, list)
+        else []
+    )
+    correctness = str(payload.get("correctness") or "unknown").strip().lower()
+    if correctness not in _ALLOWED_CORRECTNESS:
+        correctness = "unknown"
+    misconception_status = str(
+        payload.get("misconception_status") or "none"
+    ).strip().lower()
+    if misconception_status not in _ALLOWED_MISCONCEPTION:
+        misconception_status = "none"
+    try:
+        confidence = max(0.0, min(1.0, float(payload.get("confidence") or 0.0)))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    outcome_raw = payload.get("evaluation_outcome")
+    evaluation_outcome = (
+        str(outcome_raw).strip().lower() if outcome_raw is not None else None
+    )
+    if evaluation_outcome not in _ALLOWED_EVALUATION_OUTCOMES:
+        evaluation_outcome = None
+    evidence_request = payload.get("evidence_request")
+    if not isinstance(evidence_request, dict):
+        evidence_request = None
+    explanation_card = payload.get("explanation_card")
+    if not isinstance(explanation_card, dict):
+        explanation_card = None
     return {
         "text": parsed_text,
         "next_phase_ready": next_phase_ready,
         "phase_reasoning": phase_reasoning,
+        "evidence_tags": evidence_tags,
+        "correctness": correctness,
+        "misconception_status": misconception_status,
+        "confidence": round(confidence, 4),
+        "evaluation_outcome": evaluation_outcome,
+        "evidence_request": evidence_request,
+        "explanation_card": explanation_card,
         "parse_ok": True,
+    }
+
+
+def _unverified_tutor_payload(*, text: str) -> dict[str, Any]:
+    return {
+        "text": text,
+        "next_phase_ready": False,
+        "phase_reasoning": None,
+        "evidence_tags": [],
+        "correctness": "unknown",
+        "misconception_status": "none",
+        "confidence": 0.0,
+        "evaluation_outcome": None,
+        "evidence_request": None,
+        "explanation_card": None,
+        "parse_ok": False,
     }
 
 

@@ -40,7 +40,7 @@ class WorkspaceMasteryService:
                 concept_id=None,
             )
 
-        if event_type == "media_generated":
+        if event_type.startswith("media_"):
             return WorkspaceMasteryResult(
                 update=WorkspaceMasteryUpdateRead(
                     concept_id=concept_id,
@@ -49,31 +49,34 @@ class WorkspaceMasteryService:
                 concept_id=concept_id,
             )
 
-        evidence_delta = 0
-        mastery_delta = 0.0
-        confidence_delta = 0.0
-        reason = "no_mastery_signal"
-
-        if event_type == "quiz_answer":
-            evidence_delta = 1
-            is_correct = _metadata_bool(metadata, "is_correct")
-            mastery_delta = 0.08 if is_correct else -0.05
-            confidence_delta = 0.06 if is_correct else -0.04
-            reason = "quiz_answer_correct" if is_correct else "quiz_answer_needs_review"
-        elif event_type == "canvas_sent":
-            evidence_delta = 1
-            confidence_delta = 0.03
-            reason = "canvas_evidence_recorded"
-        elif event_type == "text" and _is_meaningful_text(text_payload):
-            evidence_delta = 1
-            confidence_delta = 0.02
-            reason = "text_evidence_recorded"
-
-        if evidence_delta == 0 and mastery_delta == 0 and confidence_delta == 0:
+        if not _metadata_bool(metadata, "evidence_verified"):
             return WorkspaceMasteryResult(
                 update=WorkspaceMasteryUpdateRead(
                     concept_id=concept_id,
-                    reason=reason,
+                    reason="unverified_activity_recorded_without_mastery_delta",
+                ),
+                concept_id=concept_id,
+            )
+
+        correctness = str(metadata.get("evidence_correctness") or "unknown")
+        evidence_delta = 1
+        if correctness == "correct":
+            mastery_delta = 0.08
+            confidence_delta = 0.06
+            reason = "backend_evidence_correct"
+        elif correctness == "partial":
+            mastery_delta = 0.02
+            confidence_delta = 0.01
+            reason = "backend_evidence_partial"
+        elif correctness == "incorrect":
+            mastery_delta = -0.05
+            confidence_delta = -0.04
+            reason = "backend_evidence_needs_review"
+        else:
+            return WorkspaceMasteryResult(
+                update=WorkspaceMasteryUpdateRead(
+                    concept_id=concept_id,
+                    reason="backend_evidence_has_no_correctness",
                 ),
                 concept_id=concept_id,
             )
@@ -85,7 +88,7 @@ class WorkspaceMasteryService:
         )
         state.evidence_count = (state.evidence_count or 0) + evidence_delta
         state.last_evaluated_at = datetime.now(UTC)
-        if event_type == "quiz_answer" and mastery_delta < 0:
+        if mastery_delta < 0:
             state.status = "review_due"
             state.next_review_at = datetime.now(UTC) + timedelta(days=1)
         elif state.mastery_score >= 0.7:

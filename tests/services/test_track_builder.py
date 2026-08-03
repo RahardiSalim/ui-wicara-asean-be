@@ -3,8 +3,10 @@ from sqlalchemy import select
 from app.modules.accounts.models import UserAccount
 from app.modules.curriculum.models import KnowledgeConcept, Subject
 from app.modules.curriculum.seed import seed_curriculum
-from app.modules.learning.models import LearningGoal, TrackModule
+from app.modules.learning.models import LearningGoal, MediaArtifact, TrackModule
 from app.modules.tracks.path_builder import TrackBuilderService
+from app.modules.workspaces.models import WorkspaceEvent, WorkspaceSession
+from app.modules.workspaces.service import create_or_resume_workspace, read_workspace
 
 
 def test_repair_path_materializes_diagnosed_gap_connectors_and_target(db_session):
@@ -134,3 +136,67 @@ def test_repair_path_materializes_diagnosed_gap_connectors_and_target(db_session
         codes["connector"],
         codes["target"],
     ]
+
+    workspace = create_or_resume_workspace(
+        db_session,
+        user=user,
+        track_id=response.track_id,
+        module_id=modules[0].id,
+        content_mode="chat",
+    )
+    assert workspace.learning_context["original_target"]["concept_code"] == codes["target"]
+    assert workspace.learning_context["current_module"]["role"] == "prerequisite_gap"
+    assert workspace.learning_context["diagnosis"]["evidence"]["source_attempt_ids"] == [
+        "attempt-source-1"
+    ]
+    assert workspace.learning_context["route"] == [
+        codes["gap"],
+        codes["connector"],
+        codes["target"],
+    ]
+
+    artifact = MediaArtifact(
+        user_id=user.id,
+        track_id=response.track_id,
+        module_id=modules[0].id,
+        workspace_id=workspace.id,
+        concept_id=concepts[codes["gap"]].id,
+        template_id="opaque.visual.v1",
+        spec_json={},
+        title="Opaque visual",
+        status="ready",
+    )
+    db_session.add(artifact)
+    db_session.flush()
+    db_session.add(
+        WorkspaceEvent(
+            workspace_session_id=workspace.id,
+            event_index=1,
+            event_type="media_generated",
+            actor_type="system",
+            text_payload="",
+            media_artifact_id=artifact.id,
+            metadata_json={"generation_mode": "context_auto"},
+        )
+    )
+    db_session.commit()
+
+    first_read = read_workspace(
+        db_session,
+        user=user,
+        workspace_id=workspace.id,
+    )
+    second_read = read_workspace(
+        db_session,
+        user=user,
+        workspace_id=workspace.id,
+    )
+    assert first_read is not None
+    assert second_read is not None
+    followups = [
+        event
+        for event in second_read.events
+        if event.metadata.get("follow_up_for_media_artifact_id") == str(artifact.id)
+    ]
+    assert len(followups) == 1
+    assert followups[0].metadata["mastery_delta"] == 0.0

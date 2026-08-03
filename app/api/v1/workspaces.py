@@ -95,7 +95,6 @@ async def append_workspace_event(
 @router.post("/{workspace_id}/advance-phase", response_model=schemas.WorkspaceRead)
 def advance_workspace_phase(
     workspace_id: UUID,
-    force: bool = False,
     account: UserAccount = Depends(get_current_account),
     session: Session = Depends(get_session),
 ) -> schemas.WorkspaceRead:
@@ -104,7 +103,6 @@ def advance_workspace_phase(
             session,
             user=account,
             workspace_id=workspace_id,
-            force=force,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

@@ -85,6 +85,9 @@ class WorkspaceRead(BaseModel):
     current_phase: str = "engage"
     phase_transition_pending: bool = False
     posttest_eligible: bool = False
+    learning_context: dict[str, Any] = Field(default_factory=dict)
+    phase_evidence: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    hint_level: int = 0
 
 
 class WorkspaceSessionSummaryRead(BaseModel):
@@ -108,6 +111,14 @@ class TutorResponseRead(BaseModel):
     next_actions: list[str] = Field(default_factory=list)
     next_phase_ready: bool = False
     phase_reasoning: str | None = None
+    evidence_tags: list[str] = Field(default_factory=list)
+    correctness: str = "unknown"
+    misconception_status: str = "none"
+    confidence: float = 0.0
+    evaluation_outcome: str | None = None
+    scaffold_level: int = 0
+    evidence_request: dict[str, Any] | None = None
+    explanation_card: dict[str, Any] | None = None
 
 
 class WorkspaceMasteryUpdateRead(BaseModel):
