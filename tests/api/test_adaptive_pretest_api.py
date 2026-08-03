@@ -366,7 +366,7 @@ def test_cancel_abandons_active_pretest_and_releases_lock(client):
     assert confirm.status_code == 200
 
 
-def test_posttest_six_of_ten_does_not_pass_even_with_strong_reasoning(client, monkeypatch):
+def test_posttest_six_of_ten_does_not_pass_with_unverified_written_evidence(client, monkeypatch):
     monkeypatch.setenv("WICARA_PRETEST_LLM_EVALUATION", "0")
     _override_account(client)
     learning_goal_id, concept_id, concept_code = _goal_with_posttest_node(client)
@@ -397,7 +397,7 @@ def test_posttest_six_of_ten_does_not_pass_even_with_strong_reasoning(client, mo
     assert last["completed"] is True
     assert last["is_correct"] is False
     assert last["evaluation"]["is_correct"] is False
-    assert last["evaluation"]["diagnostic_signal"] == "possible_careless_mistake"
+    assert last["evaluation"]["diagnostic_signal"] == "concept_gap_likely"
     assert last["node_result"]["answer_percent"] == 60
     assert last["node_result"]["passed"] is False
 

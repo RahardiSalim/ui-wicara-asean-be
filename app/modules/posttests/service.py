@@ -13,6 +13,7 @@ from app.modules.accounts.models import UserAccount
 from app.modules.assessments.metrics import AssessmentEvidenceEvaluator, PASS_PERCENT
 from app.modules.curriculum.kurikulum_merdeka import translate_curriculum_label_to_english
 from app.modules.curriculum.models import KnowledgeConcept
+from app.modules.evidence.models import ImageAsset
 from app.modules.learning.models import (
     AssessmentAttempt,
     AssessmentQuestion,
@@ -272,18 +273,26 @@ class AdaptivePosttestService:
         option = next((item for item in question.options if item.id == selected_option_id), None)
         if option is None:
             raise LookupError("Selected option was not found for this question.")
+        if canvas_asset_id is not None:
+            asset = session.get(ImageAsset, canvas_asset_id)
+            if asset is None or asset.user_id != user.id:
+                raise LookupError("Canvas asset was not found.")
 
         evaluation = _mcq_only_posttest_evaluation(selected_option=option)
+        if canvas_asset_id is not None:
+            evaluation["canvas_status"] = "stored_not_evaluated"
+        elif used_canvas:
+            evaluation["canvas_status"] = "client_canvas_not_uploaded"
         is_correct = bool(evaluation["is_correct"])
         attempt = AssessmentAttempt(
             session_id=assessment.id,
             question_id=question.id,
             selected_option_id=option.id,
-            canvas_asset_id=None,
+            canvas_asset_id=canvas_asset_id,
             confidence=confidence,
-            explanation_text="",
-            typed_reasoning="",
-            used_canvas=False,
+            explanation_text=typed_reasoning.strip(),
+            typed_reasoning=typed_reasoning.strip(),
+            used_canvas=used_canvas or canvas_asset_id is not None,
             score=float(evaluation["answer_score"]),
             is_correct=is_correct,
             answer_score=float(evaluation["answer_score"]),
@@ -307,7 +316,12 @@ class AdaptivePosttestService:
                 "reasoning_signal": evaluation["reasoning_signal"],
                 "reasoning_feedback": evaluation["reasoning_feedback"],
                 "reasoning_evaluation_source": evaluation["reasoning_evaluation_source"],
-                "ignored_reasoning_or_canvas": bool(typed_reasoning.strip() or used_canvas or canvas_asset_id is not None),
+                "written_evidence_status": (
+                    "stored_not_evaluated" if typed_reasoning.strip() else "not_provided"
+                ),
+                "diagnostic_evidence_only": bool(
+                    typed_reasoning.strip() or used_canvas or canvas_asset_id is not None
+                ),
             },
         )
         session.add(attempt)
@@ -395,7 +409,7 @@ class AdaptivePosttestService:
         now_iso = now.isoformat()
         already_finalized = bool((assessment.metadata_json or {}).get("posttest_finalized_at"))
         target_concept = session.get(KnowledgeConcept, assessment.target_concept_id) if assessment.target_concept_id else None
-        if target_concept is not None and official_result["official_pass"]:
+        if target_concept is not None:
             concept_state = session.scalar(
                 select(LearnerConceptState).where(
                     LearnerConceptState.user_id == user.id,
@@ -413,7 +427,6 @@ class AdaptivePosttestService:
                 )
                 session.add(concept_state)
             scaled_mastery = _clamp01(float(official_result["official_scaled_score"]) / 10.0)
-            concept_state.status = "mastered"
             concept_state.mastery_score = scaled_mastery
             concept_state.confidence_score = scaled_mastery
             if not already_finalized:
@@ -421,7 +434,12 @@ class AdaptivePosttestService:
                     official_result["answered_count"]
                 )
             concept_state.last_evaluated_at = now
-            concept_state.next_review_at = now + timedelta(days=7)
+            if official_result["official_pass"]:
+                concept_state.status = "mastered"
+                concept_state.next_review_at = now + timedelta(days=7)
+            else:
+                concept_state.status = "review_due"
+                concept_state.next_review_at = now
 
         assessment.status = "completed"
         assessment.completed_at = assessment.completed_at or now
