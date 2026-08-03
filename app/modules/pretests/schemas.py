@@ -74,6 +74,11 @@ class PretestEvaluationRead(BaseModel):
     confidence: float
     diagnostic_signal: str
     canvas_status: str | None = None
+    method_valid: bool | None = None
+    evidence_tags: list[str] = Field(default_factory=list)
+    suspected_prerequisite_code: str | None = None
+    method_reason: str = ""
+    method_evaluation_source: str = ""
 
 
 class PretestAnswerResponse(BaseModel):

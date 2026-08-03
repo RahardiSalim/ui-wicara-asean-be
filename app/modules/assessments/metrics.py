@@ -26,15 +26,18 @@ class AssessmentEvidenceEvaluator:
         typed_reasoning: str,
         canvas_asset_id: object | None,
         used_canvas: bool = False,
+        reasoning_result_override: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         is_correct = bool(selected_option.is_correct)
         answer_score = 1.0 if is_correct else 0.0
-        reasoning_result = _evaluate_reasoning(
-            question=question,
-            selected_option=selected_option,
-            typed_reasoning=typed_reasoning,
-            is_correct=is_correct,
-        )
+        reasoning_result = reasoning_result_override
+        if reasoning_result is None:
+            reasoning_result = _evaluate_reasoning(
+                question=question,
+                selected_option=selected_option,
+                typed_reasoning=typed_reasoning,
+                is_correct=is_correct,
+            )
         reasoning_score = reasoning_result["reasoning_score"]
         canvas_status = None
         canvas_score = None

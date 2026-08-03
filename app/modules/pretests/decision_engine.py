@@ -23,6 +23,11 @@ class PretestDecisionEngine:
         reasoning_signal: str = "",
         attempt_id: str | None = None,
         evidence_deferred: bool = False,
+        method_valid: bool | None = None,
+        evidence_tags: list[str] | None = None,
+        suspected_prerequisite_code: str | None = None,
+        method_reason: str = "",
+        method_evaluation_source: str = "",
     ) -> dict[str, Any]:
         next_state = deepcopy(state)
         node_results = next_state.setdefault("node_results", {})
@@ -44,6 +49,11 @@ class PretestDecisionEngine:
                 "reasoning_signal": reasoning_signal,
                 "attempt_id": attempt_id,
                 "evidence_deferred": evidence_deferred,
+                "method_valid": method_valid,
+                "evidence_tags": list(evidence_tags or []),
+                "suspected_prerequisite_code": suspected_prerequisite_code,
+                "method_reason": method_reason,
+                "method_evaluation_source": method_evaluation_source,
             }
         )
         node_state["status"] = _node_status(node_state)
@@ -58,12 +68,31 @@ class PretestDecisionEngine:
         last_difficulty: str,
         last_is_correct: bool,
         graph_scope: dict[str, Any],
+        method_valid: bool | None = None,
+        suspected_prerequisite_code: str | None = None,
+        evidence_tags: list[str] | None = None,
+        method_reason: str = "",
+        source_attempt_id: str | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         next_state = deepcopy(state)
         limit_action = self._limit_action(next_state)
         if limit_action is not None:
             next_state["stop_reason"] = limit_action["reason"]
             return next_state, limit_action
+
+        method_action = self._method_evidence_action(
+            next_state,
+            last_concept_code=last_concept_code,
+            last_is_correct=last_is_correct,
+            graph_scope=graph_scope,
+            method_valid=method_valid,
+            suspected_prerequisite_code=suspected_prerequisite_code,
+            evidence_tags=evidence_tags or [],
+            method_reason=method_reason,
+            source_attempt_id=source_attempt_id,
+        )
+        if method_action is not None:
+            return next_state, method_action
 
         target_code = str(next_state["target_concept_code"])
         if last_concept_code == target_code:
@@ -80,6 +109,77 @@ class PretestDecisionEngine:
             last_is_correct=last_is_correct,
             graph_scope=graph_scope,
         )
+
+    def _method_evidence_action(
+        self,
+        state: dict[str, Any],
+        *,
+        last_concept_code: str,
+        last_is_correct: bool,
+        graph_scope: dict[str, Any],
+        method_valid: bool | None,
+        suspected_prerequisite_code: str | None,
+        evidence_tags: list[str],
+        method_reason: str,
+        source_attempt_id: str | None,
+    ) -> dict[str, Any] | None:
+        if not last_is_correct or method_valid is not False:
+            return None
+
+        allowed_codes = {
+            str(node.get("concept_code"))
+            for node in graph_scope.get("nodes", [])
+            if isinstance(node, dict)
+            and node.get("role") == "prerequisite"
+            and str(node.get("concept_code") or "").strip()
+        }
+        visited = set(state.get("node_results", {}))
+        candidate = (
+            str(suspected_prerequisite_code)
+            if suspected_prerequisite_code in allowed_codes
+            and suspected_prerequisite_code not in visited
+            else None
+        )
+        queue = [
+            item
+            for item in state.get("probe_queue", [])
+            if isinstance(item, dict)
+            and str(item.get("concept_code") or "") in allowed_codes
+        ]
+        if candidate is None:
+            available = [
+                item
+                for item in queue
+                if str(item.get("concept_code") or "") not in visited
+            ]
+            available.sort(
+                key=lambda item: (
+                    -float(item.get("priority", 0)),
+                    int(item.get("depth", 0)),
+                    str(item.get("concept_code")),
+                )
+            )
+            if available:
+                candidate = str(available[0]["concept_code"])
+
+        route = {
+            "source_attempt_id": source_attempt_id,
+            "from_concept_code": last_concept_code,
+            "method_valid": False,
+            "evidence_tags": list(evidence_tags),
+            "reason": method_reason,
+            "suspected_prerequisite_code": suspected_prerequisite_code,
+            "routed_prerequisite_code": candidate,
+        }
+        state.setdefault("method_evidence_routes", []).append(route)
+        if candidate is None:
+            state["stop_reason"] = "method_evidence_requires_reinforcement"
+            return {"type": "finalize", "reason": state["stop_reason"]}
+
+        state["probe_queue"] = [
+            item for item in queue if str(item.get("concept_code") or "") != candidate
+        ]
+        return _ask(candidate, "medium", "method_evidence_prerequisite_probe")
 
     def _decide_target(
         self,
@@ -209,15 +309,28 @@ def _node_status(node_state: dict[str, Any]) -> str:
     hard = node_state.get("hard")
     easy = node_state.get("easy")
     if medium == "correct" and hard == "correct":
-        return "ready"
-    if medium == "correct" and hard == "wrong":
-        return "partial"
-    if medium == "wrong" and easy == "correct":
-        return "fragile"
-    if medium == "wrong" and easy == "wrong":
-        return "gap"
-    if medium == "correct":
-        return "probably_ready"
-    if medium == "wrong":
-        return "probably_gap"
-    return "not_asked"
+        status = "ready"
+    elif medium == "correct" and hard == "wrong":
+        status = "partial"
+    elif medium == "wrong" and easy == "correct":
+        status = "fragile"
+    elif medium == "wrong" and easy == "wrong":
+        status = "gap"
+    elif medium == "correct":
+        status = "probably_ready"
+    elif medium == "wrong":
+        status = "probably_gap"
+    else:
+        status = "not_asked"
+
+    attempts = node_state.get("attempts")
+    if isinstance(attempts, list):
+        explicit_method_results = [
+            attempt.get("method_valid")
+            for attempt in attempts
+            if isinstance(attempt, dict) and isinstance(attempt.get("method_valid"), bool)
+        ]
+        if explicit_method_results and explicit_method_results[-1] is False:
+            if status in {"ready", "probably_ready"}:
+                return "fragile"
+    return status
