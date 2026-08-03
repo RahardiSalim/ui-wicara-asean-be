@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
+os.environ["WICARA_REVIEW_ENABLED"] = "false"
 
 from app.db.base import Base  # noqa: E402
 from app.db.session import get_session  # noqa: E402
