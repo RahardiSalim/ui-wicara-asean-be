@@ -12,6 +12,9 @@ GRAPH_FILE_NAME = (
 SUBJECT_ALIASES = {
     "math": "matematika",
     "mathematics": "matematika",
+    "advanced math": "matematika_tingkat_lanjut",
+    "advanced mathematics": "matematika_tingkat_lanjut",
+    "matematika lanjut": "matematika_tingkat_lanjut",
     "physics": "fisika",
     "chemistry": "kimia",
     "biology": "biologi",
@@ -25,6 +28,7 @@ SUBJECT_DISPLAY_ORDER = {
     "fisika": 4,
     "kimia": 5,
     "biologi": 6,
+    "matematika_tingkat_lanjut": 7,
 }
 
 SUBJECT_LABEL_EN = {
@@ -34,6 +38,7 @@ SUBJECT_LABEL_EN = {
     "fisika": "Physics",
     "kimia": "Chemistry",
     "biologi": "Biology",
+    "matematika_tingkat_lanjut": "Advanced Mathematics",
 }
 
 DOMAIN_LABEL_EN = {

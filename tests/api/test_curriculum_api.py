@@ -23,9 +23,12 @@ def test_get_subjects_returns_seeded_subject_catalog(client, seeded_curriculum):
     payload = response.json()
     assert [subject["code"] for subject in payload["items"]] == [
         "matematika",
+        "ipas",
+        "ipa",
         "fisika",
         "kimia",
         "biologi",
+        "matematika_tingkat_lanjut",
     ]
     subjects_by_code = {subject["code"]: subject for subject in payload["items"]}
     matematika = subjects_by_code["matematika"]
@@ -35,15 +38,21 @@ def test_get_subjects_returns_seeded_subject_catalog(client, seeded_curriculum):
     assert matematika["metadata"]["curriculum"] == "kurikulum_merdeka"
     assert matematika["metadata"]["is_available_in_knowledge_graph"] is True
     assert matematika["metadata"]["is_locked_in_knowledge_graph"] is False
+    advanced_math = subjects_by_code["matematika_tingkat_lanjut"]
+    assert advanced_math["name"] == "Matematika Tingkat Lanjut"
+    assert advanced_math["metadata"]["name_en"] == "Advanced Mathematics"
+    assert advanced_math["metadata"]["is_available_in_knowledge_graph"] is True
+    assert advanced_math["metadata"]["is_locked_in_knowledge_graph"] is False
+    enabled_codes = {"matematika", "matematika_tingkat_lanjut"}
     assert all(
         subject["metadata"]["is_available_in_knowledge_graph"] is False
         for code, subject in subjects_by_code.items()
-        if code != "matematika"
+        if code not in enabled_codes
     )
     assert all(
         subject["metadata"]["is_locked_in_knowledge_graph"] is True
         for code, subject in subjects_by_code.items()
-        if code != "matematika"
+        if code not in enabled_codes
     )
 
 
@@ -71,7 +80,7 @@ def test_get_knowledge_map_returns_mobile_ready_kurikulum_graph(client, seeded_c
     payload = response.json()
 
     assert payload["subject"]["code"] == "matematika"
-    assert payload["graph"]["title"] == "Kurikulum Merdeka Matematika Knowledge Map"
+    assert payload["graph"]["title"] == "Peta Pengetahuan Matematika"
     assert payload["graph"]["top_down"] is True
     assert payload["groups"][0] == {"label": "Fase A / Aljabar", "x": 28.0}
 
@@ -110,17 +119,48 @@ def test_get_knowledge_map_localizes_english_graph_fields(client, seeded_curricu
     nodes_by_id = {node["id"]: node for node in payload["nodes"]}
 
     assert payload["subject"]["name"] == "Mathematics"
-    assert payload["graph"]["title"] == "Kurikulum Merdeka Mathematics Knowledge Map"
+    assert payload["graph"]["title"] == "Mathematics Knowledge Map"
     assert payload["groups"][0] == {"label": "Phase A / Algebra", "x": 28.0}
     assert nodes_by_id["km_d_matematika_bilangan_bulat"]["label"] == "Integers"
     assert (
         nodes_by_id["km_d_matematika_bilangan_bulat"]["description"]
-        == "Build understanding of Integers within Numbers for Phase D / SMP/MTs / grades 7-9."
+        == "Build understanding of Integers within Numbers."
     )
     assert nodes_by_id["km_d_matematika_bilangan_desimal"]["label"] == (
         "Decimal numbers"
     )
     assert nodes_by_id["km_d_matematika_bilangan_bulat"]["metadata"]["locale"] == "en"
+
+
+def test_advanced_math_graph_exposes_chain_rule_route_in_english(
+    client,
+    seeded_curriculum,
+):
+    response = client.get(
+        "/api/v1/knowledge-map"
+        "?subject=matematika_tingkat_lanjut&locale=en"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    nodes = {node["id"]: node for node in payload["nodes"]}
+    edges = {(edge["from"], edge["to"]) for edge in payload["edges"]}
+
+    algebraic = "km_f_matematika_tingkat_lanjut_turunan_secara_aljabar"
+    chain_rule = "km_f_matematika_tingkat_lanjut_aturan_rantai"
+    trig = "km_f_matematika_tingkat_lanjut_turunan_fungsi_trigonometri"
+    curve_sketch = (
+        "km_f_matematika_tingkat_lanjut_sketsa_kurva_menggunakan_turunan"
+    )
+
+    assert payload["subject"]["name"] == "Advanced Mathematics"
+    assert payload["graph"]["title"] == "Advanced Mathematics Knowledge Map"
+    assert nodes[chain_rule]["label"] == "Chain rule"
+    assert nodes[trig]["label"] == "Derivatives of trigonometric functions"
+    assert nodes[curve_sketch]["label"] == "Curve sketching using derivatives"
+    assert (algebraic, chain_rule) in edges
+    assert (chain_rule, trig) in edges
+    assert (trig, curve_sketch) in edges
 
 
 def test_get_knowledge_map_rejects_unsupported_locale(client, seeded_curriculum):

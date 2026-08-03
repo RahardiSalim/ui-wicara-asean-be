@@ -61,9 +61,13 @@ KNOWLEDGE_MAP_SUBJECT_SCOPES = {
     "fisika": {"ipas", "ipa", "fisika"},
     "kimia": {"ipas", "ipa", "kimia"},
     "biologi": {"ipas", "ipa", "biologi"},
+    "matematika_tingkat_lanjut": {"matematika_tingkat_lanjut"},
 }
 
-KNOWLEDGE_GRAPH_ENABLED_SUBJECTS = {"matematika"}
+KNOWLEDGE_GRAPH_ENABLED_SUBJECTS = {
+    "matematika",
+    "matematika_tingkat_lanjut",
+}
 
 
 @dataclass(frozen=True)
@@ -1241,6 +1245,9 @@ def _concept_display_label(
     metadata: dict[str, Any] = concept.metadata_json or {}
     if _normalize_locale(locale) == "en":
         source_label = _localized(metadata, "label", "id", fallback=concept.title)
+        explicit_label = str(metadata.get("label_en") or "").strip()
+        if explicit_label and explicit_label.casefold() != source_label.casefold():
+            return explicit_label
         translated_label = translate_curriculum_label_to_english(source_label)
         if translated_label:
             return translated_label
