@@ -5,7 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-GRAPH_FILE_NAME = "wicara_kurikulum_merdeka_graph_complete.json"
+GRAPH_FILE_NAME = (
+    "wicara_kurikulum_merdeka_graph_complete_with_matematika_tingkat_lanjut.json"
+)
 
 SUBJECT_ALIASES = {
     "math": "matematika",

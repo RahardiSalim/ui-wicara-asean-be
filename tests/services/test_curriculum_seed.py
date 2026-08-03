@@ -23,9 +23,37 @@ def test_curriculum_seed_is_idempotent_and_creates_kurikulum_graph(db_session):
     subject_count = db_session.scalar(select(func.count()).select_from(Subject))
     concept_count = db_session.scalar(select(func.count()).select_from(KnowledgeConcept))
     edge_count = db_session.scalar(select(func.count()).select_from(ConceptEdge))
-    assert subject_count == 6
+    assert subject_count == len(seed_data.subjects)
     assert concept_count == len(seed_data.concepts)
     assert edge_count == len(seed_data.edges)
+
+
+def test_default_seed_contains_advanced_derivative_path(db_session):
+    seed_curriculum(db_session)
+
+    route_codes = [
+        "km_f_matematika_tingkat_lanjut_turunan_secara_aljabar",
+        "km_f_matematika_tingkat_lanjut_aturan_rantai",
+        "km_f_matematika_tingkat_lanjut_turunan_fungsi_trigonometri",
+        "km_f_matematika_tingkat_lanjut_sketsa_kurva_menggunakan_turunan",
+    ]
+    concepts = {
+        concept.code: concept
+        for concept in db_session.scalars(
+            select(KnowledgeConcept).where(KnowledgeConcept.code.in_(route_codes))
+        )
+    }
+    assert list(concepts) == route_codes
+
+    for source_code, target_code in zip(route_codes, route_codes[1:]):
+        edge = db_session.scalar(
+            select(ConceptEdge).where(
+                ConceptEdge.from_concept_id == concepts[source_code].id,
+                ConceptEdge.to_concept_id == concepts[target_code].id,
+                ConceptEdge.edge_type == "prerequisite",
+            )
+        )
+        assert edge is not None
 
 
 def test_curriculum_seed_creates_required_prerequisite_edge(db_session):

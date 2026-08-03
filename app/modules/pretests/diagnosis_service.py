@@ -534,6 +534,7 @@ def _diagnosis_nodes(
                 "title": node.get("title"),
                 "role": node.get("role"),
                 "depth": node.get("depth"),
+                "parent": node.get("parent"),
                 "status": status,
                 "mastery_score": mastery,
                 "confidence": _node_confidence(attempts),
