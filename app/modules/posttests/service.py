@@ -104,6 +104,11 @@ class AdaptivePosttestService:
         )
         if existing is not None:
             return self.read(session, user=user, session_id=existing.id)
+        if workspace is not None and not _workspace_allows_posttest(workspace):
+            raise ValueError(
+                "Posttest is not eligible for this workspace. "
+                "Complete the Evaluate evidence requirements first."
+            )
 
         language = _preferred_language(user)
         target_title = _localized_concept_title(target, language=language)
@@ -548,6 +553,14 @@ def _resolve_posttest_context(
         "workspace": workspace,
         "posttest_source": "latest_workspace_for_goal" if workspace is not None else "learning_goal_fallback",
     }
+
+
+def _workspace_allows_posttest(workspace: WorkspaceSession) -> bool:
+    metadata = workspace.metadata_json or {}
+    if bool(metadata.get("posttest_eligible", False)):
+        return True
+    trigger = metadata.get("posttest_trigger")
+    return isinstance(trigger, dict) and str(trigger.get("status") or "") == "ready"
 
 
 def _resolve_goal_context(

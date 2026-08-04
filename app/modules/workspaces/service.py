@@ -1320,6 +1320,9 @@ def _apply_workspace_context(
             if isinstance(module_metadata.get("route"), list)
             else []
         ),
+        "returns_to_original_target": bool(
+            module_metadata.get("returns_to_original_target", False)
+        ),
         "current_phase": str(metadata.get("current_phase") or "engage"),
         "phase_evidence": dict(metadata.get("phase_evidence") or {}),
         "hint_level": max(0, _safe_int(metadata.get("hint_level"), 0)),
