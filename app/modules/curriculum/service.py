@@ -61,13 +61,9 @@ KNOWLEDGE_MAP_SUBJECT_SCOPES = {
     "fisika": {"ipas", "ipa", "fisika"},
     "kimia": {"ipas", "ipa", "kimia"},
     "biologi": {"ipas", "ipa", "biologi"},
-    "matematika_tingkat_lanjut": {"matematika_tingkat_lanjut"},
 }
 
-KNOWLEDGE_GRAPH_ENABLED_SUBJECTS = {
-    "matematika",
-    "matematika_tingkat_lanjut",
-}
+KNOWLEDGE_GRAPH_ENABLED_SUBJECTS = {"matematika"}
 
 
 @dataclass(frozen=True)

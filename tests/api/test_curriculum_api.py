@@ -28,7 +28,6 @@ def test_get_subjects_returns_seeded_subject_catalog(client, seeded_curriculum):
         "fisika",
         "kimia",
         "biologi",
-        "matematika_tingkat_lanjut",
     ]
     subjects_by_code = {subject["code"]: subject for subject in payload["items"]}
     matematika = subjects_by_code["matematika"]
@@ -38,21 +37,15 @@ def test_get_subjects_returns_seeded_subject_catalog(client, seeded_curriculum):
     assert matematika["metadata"]["curriculum"] == "kurikulum_merdeka"
     assert matematika["metadata"]["is_available_in_knowledge_graph"] is True
     assert matematika["metadata"]["is_locked_in_knowledge_graph"] is False
-    advanced_math = subjects_by_code["matematika_tingkat_lanjut"]
-    assert advanced_math["name"] == "Matematika Tingkat Lanjut"
-    assert advanced_math["metadata"]["name_en"] == "Advanced Mathematics"
-    assert advanced_math["metadata"]["is_available_in_knowledge_graph"] is True
-    assert advanced_math["metadata"]["is_locked_in_knowledge_graph"] is False
-    enabled_codes = {"matematika", "matematika_tingkat_lanjut"}
     assert all(
         subject["metadata"]["is_available_in_knowledge_graph"] is False
         for code, subject in subjects_by_code.items()
-        if code not in enabled_codes
+        if code != "matematika"
     )
     assert all(
         subject["metadata"]["is_locked_in_knowledge_graph"] is True
         for code, subject in subjects_by_code.items()
-        if code not in enabled_codes
+        if code != "matematika"
     )
 
 
@@ -132,13 +125,13 @@ def test_get_knowledge_map_localizes_english_graph_fields(client, seeded_curricu
     assert nodes_by_id["km_d_matematika_bilangan_bulat"]["metadata"]["locale"] == "en"
 
 
-def test_advanced_math_graph_exposes_chain_rule_route_in_english(
+def test_unified_math_graph_exposes_chain_rule_route_in_english(
     client,
     seeded_curriculum,
 ):
     response = client.get(
         "/api/v1/knowledge-map"
-        "?subject=matematika_tingkat_lanjut&locale=en"
+        "?subject=matematika&locale=en"
     )
 
     assert response.status_code == 200
@@ -153,8 +146,8 @@ def test_advanced_math_graph_exposes_chain_rule_route_in_english(
         "km_f_matematika_tingkat_lanjut_sketsa_kurva_menggunakan_turunan"
     )
 
-    assert payload["subject"]["name"] == "Advanced Mathematics"
-    assert payload["graph"]["title"] == "Advanced Mathematics Knowledge Map"
+    assert payload["subject"]["name"] == "Mathematics"
+    assert payload["graph"]["title"] == "Mathematics Knowledge Map"
     assert nodes[chain_rule]["label"] == "Chain rule"
     assert nodes[trig]["label"] == "Derivatives of trigonometric functions"
     assert nodes[curve_sketch]["label"] == "Curve sketching using derivatives"
@@ -171,6 +164,18 @@ def test_get_knowledge_map_rejects_unsupported_locale(client, seeded_curriculum)
 
 def test_get_knowledge_map_supports_math_alias(client, seeded_curriculum):
     response = client.get("/api/v1/knowledge-map?subject=math")
+
+    assert response.status_code == 200
+    assert response.json()["subject"]["code"] == "matematika"
+
+
+def test_get_knowledge_map_supports_legacy_advanced_math_alias(
+    client,
+    seeded_curriculum,
+):
+    response = client.get(
+        "/api/v1/knowledge-map?subject=matematika_tingkat_lanjut"
+    )
 
     assert response.status_code == 200
     assert response.json()["subject"]["code"] == "matematika"

@@ -43,7 +43,7 @@ def test_default_seed_contains_advanced_derivative_path(db_session):
             select(KnowledgeConcept).where(KnowledgeConcept.code.in_(route_codes))
         )
     }
-    assert list(concepts) == route_codes
+    assert set(concepts) == set(route_codes)
 
     for source_code, target_code in zip(route_codes, route_codes[1:]):
         edge = db_session.scalar(
@@ -54,6 +54,46 @@ def test_default_seed_contains_advanced_derivative_path(db_session):
             )
         )
         assert edge is not None
+
+
+def test_unified_seed_moves_legacy_advanced_math_concepts_without_changing_ids(
+    db_session,
+):
+    legacy_subject = Subject(
+        code="matematika_tingkat_lanjut",
+        name="Matematika Tingkat Lanjut",
+        is_active=True,
+    )
+    concept = KnowledgeConcept(
+        subject=legacy_subject,
+        code="km_f_matematika_tingkat_lanjut_aturan_rantai",
+        title="Aturan rantai",
+        display_order=1,
+    )
+    db_session.add_all([legacy_subject, concept])
+    db_session.flush()
+    original_concept_id = concept.id
+
+    seed_curriculum(db_session)
+    db_session.expire_all()
+
+    mathematics = db_session.scalar(
+        select(Subject).where(Subject.code == "matematika")
+    )
+    moved_concept = db_session.scalar(
+        select(KnowledgeConcept).where(
+            KnowledgeConcept.subject_id == mathematics.id,
+            KnowledgeConcept.code
+            == "km_f_matematika_tingkat_lanjut_aturan_rantai",
+        )
+    )
+    legacy_subject = db_session.scalar(
+        select(Subject).where(Subject.code == "matematika_tingkat_lanjut")
+    )
+
+    assert moved_concept.id == original_concept_id
+    assert legacy_subject.is_active is False
+    assert legacy_subject.metadata_json["superseded_by"] == "matematika"
 
 
 def test_curriculum_seed_creates_required_prerequisite_edge(db_session):

@@ -24,7 +24,7 @@ def test_repair_path_materializes_diagnosed_gap_connectors_and_target(db_session
         )
     }
     subject = db_session.scalar(
-        select(Subject).where(Subject.code == "matematika_tingkat_lanjut")
+        select(Subject).where(Subject.code == "matematika")
     )
     user = UserAccount(
         supabase_user_id="track-builder-user",

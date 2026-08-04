@@ -5,16 +5,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-GRAPH_FILE_NAME = (
-    "wicara_kurikulum_merdeka_graph_complete_with_matematika_tingkat_lanjut.json"
-)
+GRAPH_FILE_NAME = "wicara_kurikulum_merdeka_graph_complete_matematika_digabung.json"
 
 SUBJECT_ALIASES = {
     "math": "matematika",
     "mathematics": "matematika",
-    "advanced math": "matematika_tingkat_lanjut",
-    "advanced mathematics": "matematika_tingkat_lanjut",
-    "matematika lanjut": "matematika_tingkat_lanjut",
+    "advanced math": "matematika",
+    "advanced mathematics": "matematika",
+    "matematika lanjut": "matematika",
+    "matematika_tingkat_lanjut": "matematika",
     "physics": "fisika",
     "chemistry": "kimia",
     "biology": "biologi",
@@ -28,7 +27,6 @@ SUBJECT_DISPLAY_ORDER = {
     "fisika": 4,
     "kimia": 5,
     "biologi": 6,
-    "matematika_tingkat_lanjut": 7,
 }
 
 SUBJECT_LABEL_EN = {
@@ -38,7 +36,6 @@ SUBJECT_LABEL_EN = {
     "fisika": "Physics",
     "kimia": "Chemistry",
     "biologi": "Biology",
-    "matematika_tingkat_lanjut": "Advanced Mathematics",
 }
 
 DOMAIN_LABEL_EN = {
