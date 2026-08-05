@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from difflib import SequenceMatcher
 import json
 import logging
+import os
 import re
 from typing import Any
 
@@ -17,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 PROMPT_VERSION = "wicara_5e_evidence_context_v4"
 PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
+DEFAULT_TUTOR_TIMEOUT_SECONDS = 20.0
 
 _ALLOWED_EVIDENCE_TAGS = {
     "challenge_accepted",
@@ -335,12 +338,15 @@ async def generate_tutor_response(
     }
 
     try:
-        ai_response: AIGenerationResponse = await ai_client.generate(
-            system_instruction=_SYSTEM_INSTRUCTION,
-            user_instruction=user_instruction,
-            params={
-                "response_format": {"type": "json_object"},
-            },
+        ai_response: AIGenerationResponse = await asyncio.wait_for(
+            ai_client.generate(
+                system_instruction=_SYSTEM_INSTRUCTION,
+                user_instruction=user_instruction,
+                params={
+                    "response_format": {"type": "json_object"},
+                },
+            ),
+            timeout=_tutor_timeout_seconds(),
         )
         audit.update(
             {
@@ -389,7 +395,7 @@ async def generate_tutor_response(
             explanation_card=parsed["explanation_card"],
         ), audit
 
-    except AIError as exc:
+    except (AIError, TimeoutError) as exc:
         logger.warning("AI tutor call failed, using deterministic fallback: %s", exc)
         audit["ai_source"] = "deterministic_fallback"
         audit["fallback_reason"] = str(exc)
@@ -398,6 +404,16 @@ async def generate_tutor_response(
             language_code=language_code,
             current_phase=phase,
         ), audit
+
+
+def _tutor_timeout_seconds() -> float:
+    raw_value = os.getenv("WICARA_WORKSPACE_TUTOR_TIMEOUT_SECONDS", "").strip()
+    if not raw_value:
+        return DEFAULT_TUTOR_TIMEOUT_SECONDS
+    try:
+        return max(1.0, float(raw_value))
+    except ValueError:
+        return DEFAULT_TUTOR_TIMEOUT_SECONDS
 
 
 def _fallback_text(event_type: str, *, language_code: str) -> str:

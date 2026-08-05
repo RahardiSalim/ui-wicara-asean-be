@@ -1,0 +1,49 @@
+{
+  "version": "golden-flow-v1",
+  "concept_subtypes": {
+    "derivative_rate_change_model.aturan_rantai": {
+      "id": {
+        "title": "Aturan rantai: fungsi luar × turunan fungsi dalam",
+        "summary": "Untuk y = f(g(x)), turunkan fungsi luar dengan g(x) tetap di dalamnya, lalu kalikan dengan turunan g(x).",
+        "steps": [
+          "Tandai fungsi dalam, misalnya u = g(x).",
+          "Turunkan fungsi luar terhadap u.",
+          "Kalikan dengan du/dx agar perubahan fungsi dalam ikut dihitung."
+        ],
+        "check": "Untuk y = sin(3x), fungsi dalamnya apa dan faktor turunan apa yang harus ikut dikalikan?"
+      },
+      "en": {
+        "title": "Chain rule: outer derivative × inner derivative",
+        "summary": "For y = f(g(x)), differentiate the outer function while keeping g(x) inside, then multiply by g'(x).",
+        "steps": [
+          "Name the inner function, for example u = g(x).",
+          "Differentiate the outer function with respect to u.",
+          "Multiply by du/dx so the inner function's change is included."
+        ],
+        "check": "For y = sin(3x), what is the inner function and which derivative factor must be multiplied?"
+      }
+    },
+    "derivative_application_model.sketsa_kurva_menggunakan_turunan": {
+      "id": {
+        "title": "Sketsa kurva dengan turunan",
+        "summary": "Gunakan turunan pertama untuk arah naik-turun dan turunan kedua untuk kekonkavan sebelum membuat sketsa.",
+        "steps": [
+          "Tentukan domain, titik potong, dan turunan pertama.",
+          "Cari titik kritis lalu buat tabel tanda f'(x) untuk interval naik dan turun.",
+          "Gunakan f''(x) bila perlu untuk cek kekonkavan dan titik belok, lalu gabungkan semua informasi ke sketsa."
+        ],
+        "check": "Jika f'(x) berubah dari positif ke negatif di x = a, apa yang terjadi pada kurva di x = a?"
+      },
+      "en": {
+        "title": "Curve sketching with derivatives",
+        "summary": "Use the first derivative for increasing/decreasing behavior and the second derivative for concavity before sketching.",
+        "steps": [
+          "Find the domain, intercepts, and first derivative.",
+          "Find critical points, then make an f'(x) sign chart for increasing and decreasing intervals.",
+          "Use f''(x) when needed for concavity and inflection points, then combine the evidence into a sketch."
+        ],
+        "check": "If f'(x) changes from positive to negative at x = a, what happens to the curve at x = a?"
+      }
+    }
+  }
+}
