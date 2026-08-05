@@ -387,6 +387,38 @@ def test_finalize_and_path_selection_create_track(client):
         assert session.scalar(select(TrackModule).where(TrackModule.track_id == goal.track.id)) is not None
 
 
+def test_target_hard_wrong_probes_prerequisite_before_finalizing(client):
+    _override_account(client)
+    learning_goal_id = _confirmed_goal_id(client)
+    start = client.post("/api/v1/pretests/start", json={"learning_goal_id": learning_goal_id})
+    session_id = start.json()["session_id"]
+    medium_question = start.json()["current_question"]
+    medium_correct = next(option for option in medium_question["options"] if option["label"] == "B")
+
+    hard_response = client.post(
+        f"/api/v1/pretests/{session_id}/answers",
+        json={"question_id": medium_question["id"], "selected_option_id": medium_correct["id"]},
+    )
+    hard_question = hard_response.json()["next_question"]
+    hard_wrong = next(option for option in hard_question["options"] if option["label"] != "B")
+
+    probe_response = client.post(
+        f"/api/v1/pretests/{session_id}/answers",
+        json={"question_id": hard_question["id"], "selected_option_id": hard_wrong["id"]},
+    )
+
+    assert probe_response.status_code == 200
+    payload = probe_response.json()
+    assert payload["next_action"] == {
+        "type": "next_question",
+        "concept_code": payload["next_question"]["concept_code"],
+        "difficulty": "medium",
+        "reason": "enter_prerequisite_node",
+    }
+    assert payload["next_question"]["concept_code"] != medium_question["concept_code"]
+    assert payload["diagnosis"] is None
+
+
 def test_assessment_dashboard_without_pretest_returns_start_state(client):
     _override_account(client)
     assert client.get("/api/v1/home").status_code == 200

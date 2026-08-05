@@ -195,9 +195,14 @@ class PretestDecisionEngine:
                 return state, _ask(target, "hard", "target_medium_correct")
             return state, _ask(target, "easy", "target_medium_wrong")
         if last_difficulty == "hard":
-            reason = "target_ready" if last_is_correct else "target_reinforcement"
-            state["stop_reason"] = reason
-            return state, {"type": "finalize", "reason": reason}
+            if last_is_correct:
+                state["stop_reason"] = "target_ready"
+                return state, {"type": "finalize", "reason": "target_ready"}
+            return self._ask_next_prerequisite(
+                state,
+                graph_scope=graph_scope,
+                fallback_reason="target_reinforcement",
+            )
         if last_difficulty == "easy":
             return self._ask_next_prerequisite(state, graph_scope=graph_scope, fallback_reason="target_basic_checked")
         state["stop_reason"] = "unsupported_target_difficulty"
