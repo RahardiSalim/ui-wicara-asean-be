@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -217,6 +218,26 @@ def test_pretest_start_is_idempotent_and_generates_fresh_target_node_set(client)
         stored_question = session.get(AssessmentQuestion, UUID(first.json()["current_question"]["id"]))
         assert stored_question is not None
         assert stored_question.metadata_json["non_reusable"] is True
+
+
+def test_pretest_start_falls_back_when_ai_is_unavailable(client, monkeypatch):
+    _override_account(client)
+    monkeypatch.delenv("WICARA_ASSESSMENT_DEV_FALLBACK_QUESTIONS")
+    monkeypatch.setattr(
+        "app.modules.pretests.generation_service.get_ai_settings",
+        lambda: SimpleNamespace(openrouter_api_key=""),
+    )
+
+    response = client.post(
+        "/api/v1/pretests/start",
+        json={"learning_goal_id": _confirmed_goal_id(client)},
+    )
+
+    assert response.status_code == 200
+    with _session_for_client(client) as session:
+        question = session.get(AssessmentQuestion, UUID(response.json()["current_question"]["id"]))
+        assert question is not None
+        assert question.generation_source == "fallback_generated"
 
 
 def test_answers_reuse_node_set_generate_prerequisite_set_and_reject_duplicate(client):

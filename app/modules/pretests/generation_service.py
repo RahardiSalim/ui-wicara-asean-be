@@ -572,14 +572,10 @@ class AdaptivePretestGenerationService:
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         if _allow_dev_fallback_questions():
             fallback_pack = self._fallback_pack(concept=concept, language=language)
-            fallback_questions = [
-                _dev_fallback_question_variant(
-                    fallback_pack[difficulty],
-                    variant_index=index,
-                    variant_count=_difficulty_occurrence_count(difficulties, difficulty),
-                )
-                for index, difficulty in enumerate(difficulties, start=1)
-            ]
+            fallback_questions = _fresh_fallback_questions(
+                fallback_pack=fallback_pack,
+                difficulties=difficulties,
+            )
             return fallback_questions, {
                 "generation_source": "dev_fallback_generated",
                 "llm_provider": "deterministic",
@@ -601,10 +597,21 @@ class AdaptivePretestGenerationService:
         )
         if ai_questions is not None:
             return ai_questions, ai_metadata
-        reason = ai_metadata.get("reason") if isinstance(ai_metadata, dict) else None
-        raise AssessmentQuestionGenerationError(
-            reason or "AI assessment question generation failed. Please retry."
+        fallback_pack = self._fallback_pack(concept=concept, language=language)
+        fallback_questions = _fresh_fallback_questions(
+            fallback_pack=fallback_pack,
+            difficulties=difficulties,
         )
+        return fallback_questions, {
+            "generation_source": "fallback_generated",
+            "llm_provider": "deterministic",
+            "llm_model": "template_v1",
+            "prompt_version": FRESH_QUESTION_PROMPT_VERSION,
+            "fallback_reason": "LLM generation is unavailable or failed validation after bounded retries.",
+            "llm_generation_attempt": ai_metadata,
+            "batch_size": len(difficulties),
+            "difficulty_sequence": difficulties,
+        }
 
     def _try_generate_fresh_questions_with_ai(
         self,
@@ -1127,7 +1134,7 @@ def _max_generation_attempts(*, assessment_type: str | None = None) -> int:
         default_attempts = 2
     else:
         raw_value = os.getenv("WICARA_PRETEST_LLM_MAX_ATTEMPTS", "").strip()
-        default_attempts = DEFAULT_PACK_GENERATION_MAX_ATTEMPTS
+        default_attempts = 1 if assessment_type == "pretest" else DEFAULT_PACK_GENERATION_MAX_ATTEMPTS
     if not raw_value:
         return default_attempts
     try:
@@ -1222,7 +1229,22 @@ def _difficulty_occurrence_count(difficulties: list[str], difficulty: str) -> in
     return sum(1 for item in difficulties if item == difficulty)
 
 
-def _dev_fallback_question_variant(
+def _fresh_fallback_questions(
+    *,
+    fallback_pack: dict[str, dict[str, Any]],
+    difficulties: list[str],
+) -> list[dict[str, Any]]:
+    return [
+        _fallback_question_variant(
+            fallback_pack[difficulty],
+            variant_index=index,
+            variant_count=_difficulty_occurrence_count(difficulties, difficulty),
+        )
+        for index, difficulty in enumerate(difficulties, start=1)
+    ]
+
+
+def _fallback_question_variant(
     question: dict[str, Any],
     *,
     variant_index: int,
@@ -1231,13 +1253,13 @@ def _dev_fallback_question_variant(
     if variant_count <= 1:
         return {
             **question,
-            "freshness_note": "Development fallback question; not reusable in production.",
+            "freshness_note": "Deterministic fallback question; not reusable in future assessments.",
             "misconception_tags": [],
         }
     return {
         **question,
-        "prompt": f"{question['prompt']} (Development variant {variant_index})",
-        "freshness_note": "Development fallback variant; not reusable in production.",
+        "prompt": f"{question['prompt']} (Variant {variant_index})",
+        "freshness_note": "Deterministic fallback variant; not reusable in future assessments.",
         "misconception_tags": [],
     }
 
