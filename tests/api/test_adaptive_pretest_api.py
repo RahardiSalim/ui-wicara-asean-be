@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from types import SimpleNamespace
 from uuid import UUID
@@ -226,6 +227,35 @@ def test_pretest_start_falls_back_when_ai_is_unavailable(client, monkeypatch):
     monkeypatch.setattr(
         "app.modules.pretests.generation_service.get_ai_settings",
         lambda: SimpleNamespace(openrouter_api_key=""),
+    )
+
+    response = client.post(
+        "/api/v1/pretests/start",
+        json={"learning_goal_id": _confirmed_goal_id(client)},
+    )
+
+    assert response.status_code == 200
+    with _session_for_client(client) as session:
+        question = session.get(AssessmentQuestion, UUID(response.json()["current_question"]["id"]))
+        assert question is not None
+        assert question.generation_source == "fallback_generated"
+
+
+def test_pretest_start_falls_back_after_ai_generation_timeout(client, monkeypatch):
+    _override_account(client)
+    monkeypatch.delenv("WICARA_ASSESSMENT_DEV_FALLBACK_QUESTIONS")
+    monkeypatch.setenv("WICARA_PRETEST_LLM_TIMEOUT_SECONDS", "1")
+    monkeypatch.setattr(
+        "app.modules.pretests.generation_service.get_ai_settings",
+        lambda: SimpleNamespace(openrouter_api_key="test-key", ai_request_timeout_seconds=30.0),
+    )
+
+    async def slow_generate(**_kwargs):
+        await asyncio.sleep(2)
+
+    monkeypatch.setattr(
+        "app.modules.pretests.generation_service.ai_client.generate",
+        slow_generate,
     )
 
     response = client.post(

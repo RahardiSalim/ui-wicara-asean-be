@@ -26,6 +26,7 @@ from app.modules.review.flagger import enqueue_flag
 PACK_PROMPT_VERSION = "adaptive_node_pack_v6_flexible_subject_tasks"
 FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v3_workspace_posttest"
 DEFAULT_PACK_GENERATION_MAX_ATTEMPTS = 4
+DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 20.0
 
 
 class AssessmentQuestionGenerationError(ValueError):
@@ -650,10 +651,16 @@ class AdaptivePretestGenerationService:
             )
             try:
                 response = asyncio.run(
-                    ai_client.generate(
-                        system_instruction=_fresh_question_system_instruction(),
-                        user_instruction=prompt,
-                        params={"temperature": 0.25, "response_format": {"type": "json_object"}},
+                    asyncio.wait_for(
+                        ai_client.generate(
+                            system_instruction=_fresh_question_system_instruction(),
+                            user_instruction=prompt,
+                            params={"temperature": 0.25, "response_format": {"type": "json_object"}},
+                        ),
+                        timeout=_fresh_generation_timeout_seconds(
+                            assessment_type=assessment_type,
+                            ai_request_timeout_seconds=settings.ai_request_timeout_seconds,
+                        ),
                     )
                 )
                 payload = json.loads(response.text)
@@ -1141,6 +1148,22 @@ def _max_generation_attempts(*, assessment_type: str | None = None) -> int:
         return max(1, min(8, int(raw_value)))
     except ValueError:
         return default_attempts
+
+
+def _fresh_generation_timeout_seconds(
+    *,
+    assessment_type: str,
+    ai_request_timeout_seconds: float,
+) -> float:
+    if assessment_type != "pretest":
+        return ai_request_timeout_seconds
+    raw_value = os.getenv("WICARA_PRETEST_LLM_TIMEOUT_SECONDS", "").strip()
+    if not raw_value:
+        return min(ai_request_timeout_seconds, DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS)
+    try:
+        return max(1.0, min(60.0, float(raw_value)))
+    except ValueError:
+        return min(ai_request_timeout_seconds, DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS)
 
 
 def _previous_question_summary(
