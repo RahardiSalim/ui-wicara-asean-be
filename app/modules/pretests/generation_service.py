@@ -1159,9 +1159,9 @@ def _fresh_generation_timeout_seconds(
         return ai_request_timeout_seconds
     raw_value = os.getenv("WICARA_PRETEST_LLM_TIMEOUT_SECONDS", "").strip()
     if not raw_value:
-        return min(ai_request_timeout_seconds, DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS)
+        return ai_request_timeout_seconds
     try:
-        return max(1.0, min(60.0, float(raw_value)))
+        return max(1.0, min(180.0, float(raw_value)))
     except ValueError:
         return min(ai_request_timeout_seconds, DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS)
 
