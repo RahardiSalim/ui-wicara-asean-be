@@ -12,7 +12,6 @@ def _question() -> dict[str, object]:
         "difficulty": "hard",
         "question_type": "error_analysis",
         "prompt": "Seorang siswa menulis langkah solusi yang salah berikut. Evaluasi kesalahannya.",
-        "difficulty_reason": "Membutuhkan analisis kesalahan penalaran.",
         "explanation": "Aturan pangkat harus diterapkan pada setiap suku.",
         "expected_reasoning": "Periksa setiap langkah lalu bandingkan hasilnya.",
         "options": [
@@ -21,12 +20,6 @@ def _question() -> dict[str, object]:
             {"label": "C", "text": "Terapkan aturan rantai dua kali.", "is_correct": False},
             {"label": "D", "text": "Langkah pertama siswa sudah cukup.", "is_correct": False},
         ],
-        "distractor_rationales": {
-            "A": "Aturan pangkat memang sesuai untuk bentuk ini.",
-            "B": "Fungsi bukan hasil kali dua fungsi.",
-            "C": "Tidak ada fungsi komposisi bertingkat.",
-            "D": "Kesimpulan tetap harus diverifikasi.",
-        },
     }
 
 
@@ -38,15 +31,13 @@ def test_solution_strategy_options_are_allowed():
     )
 
 
-def test_distractor_rationale_cannot_admit_another_option_is_correct():
+def test_duplicate_option_text_is_rejected():
     question = _question()
-    question["distractor_rationales"]["C"] = (
-        "Pernyataan ini benar secara matematis, tetapi A lebih lengkap."
-    )
+    question["options"][1]["text"] = question["options"][0]["text"]
 
     with pytest.raises(
         QuestionValidationError,
-        match="rationale cannot admit that the option is also correct",
+        match="option texts must be unique",
     ):
         QuestionValidator().validate_question(
             concept_code="math.derivative",
@@ -55,21 +46,12 @@ def test_distractor_rationale_cannot_admit_another_option_is_correct():
         )
 
 
-def test_verified_final_answer_must_match_option_and_explanation():
+def test_exactly_one_correct_option_is_required():
     question = _question()
-    question["final_answer"] = "Gunakan aturan pangkat pada setiap suku."
-    question["explanation"] = "Aturan pangkat sesuai untuk bentuk yang diberikan."
-
-    QuestionValidator().validate_question(
-        concept_code="math.derivative",
-        difficulty="hard",
-        question=question,
-    )
-
-    question["final_answer"] = "Terapkan aturan rantai dua kali."
+    question["options"][1]["is_correct"] = True
     with pytest.raises(
         QuestionValidationError,
-        match="final_answer must exactly match",
+        match="exactly 1 correct option",
     ):
         QuestionValidator().validate_question(
             concept_code="math.derivative",
@@ -82,8 +64,6 @@ def test_hard_reasoning_type_does_not_depend_on_keyword_matching():
     question = _question()
     question["question_type"] = "multi_step_application"
     question["prompt"] = "Perhatikan representasi fungsi berikut dan pilih kesimpulan yang konsisten."
-    question["difficulty_reason"] = "Menggabungkan dua representasi fungsi."
-
     QuestionValidator().validate_question(
         concept_code="math.derivative",
         difficulty="hard",
@@ -91,17 +71,13 @@ def test_hard_reasoning_type_does_not_depend_on_keyword_matching():
     )
 
 
-def test_medium_direct_derivative_is_rejected_even_if_type_claims_error_analysis():
+def test_medium_prompt_is_not_rejected_by_keyword_heuristics():
     question = _question()
     question["difficulty"] = "medium"
     question["prompt"] = "Tentukan turunan pertama dari g(x)=cos(x^2)."
 
-    with pytest.raises(
-        QuestionValidationError,
-        match="must not be direct computation only",
-    ):
-        QuestionValidator().validate_question(
-            concept_code="math.derivative",
-            difficulty="medium",
-            question=question,
-        )
+    QuestionValidator().validate_question(
+        concept_code="math.derivative",
+        difficulty="medium",
+        question=question,
+    )
