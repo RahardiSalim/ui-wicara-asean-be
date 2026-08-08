@@ -65,10 +65,6 @@ class QuestionValidator:
         question_type = str(question.get("question_type") or "").strip().lower()
         if question_type not in VALID_QUESTION_TYPES:
             raise QuestionValidationError("Generated question is missing or has unsupported question_type.")
-        if question_type == "error_analysis" and not _has_error_analysis_signal(prompt):
-            raise QuestionValidationError(
-                "Error-analysis questions must show a concrete learner solution or mistake."
-            )
         difficulty_reason = str(question.get("difficulty_reason") or "").strip()
         if not difficulty_reason:
             raise QuestionValidationError("Generated question is missing difficulty_reason.")
@@ -152,36 +148,6 @@ def _looks_like_vague_theory_check(prompt: str) -> bool:
     return any(fragment in normalized for fragment in banned_fragments)
 
 
-def _has_error_analysis_signal(prompt: str) -> bool:
-    normalized = " ".join(prompt.lower().split())
-    learner_markers = ("siswa", "murid", "learner", "student")
-    work_markers = (
-        "langkah",
-        "solusi",
-        "jawaban",
-        "pengerjaan",
-        "step",
-        "solution",
-        "answer",
-        "work",
-    )
-    error_markers = (
-        "salah",
-        "kesalahan",
-        "keliru",
-        "tidak tepat",
-        "incorrect",
-        "mistake",
-        "error",
-        "wrong",
-    )
-    return (
-        any(marker in normalized for marker in learner_markers)
-        and any(marker in normalized for marker in work_markers)
-        and any(marker in normalized for marker in error_markers)
-    )
-
-
 def _rationale_admits_option_is_correct(rationale: str) -> bool:
     normalized = " ".join(rationale.lower().split())
     admitted_correctness = (
@@ -214,6 +180,10 @@ def _looks_like_direct_computation_only(prompt: str, *, question_type: str) -> b
         "hitung",
         "berapa hasil",
         "tentukan hasil",
+        "tentukan turunan",
+        "turunan pertama dari",
+        "find the derivative",
+        "differentiate",
     )
     has_direct_marker = any(marker in normalized for marker in direct_markers)
     has_operation = bool(re.search(r"\d+\s*(?:\\times|x|×|\*|\+|-|:|/|\\div)\s*\d+", normalized))
