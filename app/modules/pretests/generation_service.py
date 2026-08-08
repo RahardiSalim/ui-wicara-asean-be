@@ -24,7 +24,7 @@ from app.modules.pretests.question_validator import QuestionValidator
 from app.modules.review.flagger import enqueue_flag
 
 PACK_PROMPT_VERSION = "adaptive_node_pack_v6_flexible_subject_tasks"
-FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v3_workspace_posttest"
+FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v4_curriculum_evidence"
 DEFAULT_PACK_GENERATION_MAX_ATTEMPTS = 4
 DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 20.0
 
@@ -889,6 +889,11 @@ def _fresh_question_prompt(
         language=language,
         title=concept_title,
     )
+    pedagogical_context = _concept_prompt_pedagogy(
+        concept,
+        language=language,
+        difficulties=difficulties,
+    )
     previous_question_text = "\n".join(f"- {item}" for item in previous_questions[-12:]) or "- none"
     difficulty_sequence = ", ".join(difficulties)
     retry_instruction = ""
@@ -912,8 +917,7 @@ Pretest-specific rules:
 - max_questions is only a backend safety cap; it is not a target question count.
 - Return exactly the number of question objects requested by the difficulty sequence.
 - If the difficulty sequence is easy, medium, hard, make the three questions meaningfully different.
-- The backend decision engine controls traversal: target medium correct leads to target hard, then the pretest finalizes immediately after that hard answer.
-- Prerequisite checks happen only after the learner misses the target medium question and then answers the target easy question.
+- The backend decision engine controls traversal. Do not assume or describe which generated question will be shown next.
 """.rstrip()
     if assessment_type == "posttest":
         assessment_specific_rules = """
@@ -939,6 +943,9 @@ Concept description: {concept_description}
 Node role: {node_role}
 Difficulty sequence, in exact output order: {difficulty_sequence}
 Question count: {len(difficulties)}
+
+Curriculum assessment contract:
+{pedagogical_context}
 
 Prerequisite context:
 {prerequisite_context or 'none'}
@@ -966,6 +973,10 @@ Freshness requirements:
 Question quality requirements:
 - Use concrete applied tasks, not vague theory checks.
 - You must make easy, medium, and hard questions meaningfully different by cognitive demand.
+- Assess the curriculum evidence and follow the guidance for each requested difficulty.
+- When appropriate, build plausible distractors from the listed misconceptions without teaching the misconception as correct.
+- Use a conditional prerequisite only when the task actually satisfies the condition stated in Prerequisite context.
+- Do not mention the curriculum graph, diagnosis, evidence labels, or prerequisite codes to the learner.
 - Exactly one correct option per question.
 - Provide 4 answer options.
 - Distractors must be plausible and reveal misconceptions.
@@ -1141,7 +1152,7 @@ def _max_generation_attempts(*, assessment_type: str | None = None) -> int:
         default_attempts = 2
     else:
         raw_value = os.getenv("WICARA_PRETEST_LLM_MAX_ATTEMPTS", "").strip()
-        default_attempts = 1 if assessment_type == "pretest" else DEFAULT_PACK_GENERATION_MAX_ATTEMPTS
+        default_attempts = 2 if assessment_type == "pretest" else DEFAULT_PACK_GENERATION_MAX_ATTEMPTS
     if not raw_value:
         return default_attempts
     try:
@@ -1246,6 +1257,49 @@ def _concept_prompt_description(
         or _metadata_text(metadata, "en_desc")
         or f"Understand and apply {title}."
     )
+
+
+def _concept_prompt_pedagogy(
+    concept: KnowledgeConcept,
+    *,
+    language: str,
+    difficulties: list[str],
+) -> str:
+    metadata = concept.metadata_json or {}
+    suffix = "id" if normalize_language_code(language) == "id" else "en"
+    evidence = metadata.get(f"assessment_evidence_{suffix}")
+    misconceptions = metadata.get(f"common_misconceptions_{suffix}")
+    guidance = metadata.get(f"question_generation_guidance_{suffix}")
+
+    evidence_lines = _prompt_list(evidence)
+    misconception_lines = _prompt_list(misconceptions)
+    guidance_lines: list[str] = []
+    if isinstance(guidance, dict):
+        for difficulty in dict.fromkeys(difficulties):
+            value = str(guidance.get(difficulty) or "").strip()
+            if value:
+                guidance_lines.append(f"- {difficulty}: {value}")
+
+    return "\n".join(
+        [
+            "Assessment evidence:",
+            *(evidence_lines or ["- none provided"]),
+            "Common misconceptions:",
+            *(misconception_lines or ["- none provided"]),
+            "Difficulty guidance:",
+            *(guidance_lines or ["- none provided"]),
+        ]
+    )
+
+
+def _prompt_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [
+        f"- {text}"
+        for item in value
+        if (text := str(item).strip())
+    ]
 
 
 def _difficulty_occurrence_count(difficulties: list[str], difficulty: str) -> int:

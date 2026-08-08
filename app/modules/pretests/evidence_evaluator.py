@@ -62,6 +62,11 @@ class PretestEvidenceEvaluator(AssessmentEvidenceEvaluator):
 
 def _prerequisite_candidates(graph_scope: dict[str, Any]) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
+    edges = [
+        edge
+        for edge in graph_scope.get("edges", [])
+        if isinstance(edge, dict)
+    ]
     for node in graph_scope.get("nodes", []):
         if not isinstance(node, dict) or node.get("role") != "prerequisite":
             continue
@@ -73,8 +78,21 @@ def _prerequisite_candidates(graph_scope: dict[str, Any]) -> list[dict[str, Any]
                 "concept_code": code,
                 "title": str(node.get("title") or "").strip(),
                 "description": str(node.get("description") or "").strip(),
+                "assessment_evidence": node.get("assessment_evidence") or [],
+                "common_misconceptions": node.get("common_misconceptions") or [],
                 "depth": int(node.get("depth") or 0),
                 "parent": str(node.get("parent") or "").strip() or None,
+                "relationships": [
+                    {
+                        "prerequisite_of": str(edge.get("from") or ""),
+                        "applicability": str(
+                            edge.get("applicability") or "required"
+                        ),
+                        "reason": str(edge.get("reason") or ""),
+                    }
+                    for edge in edges
+                    if str(edge.get("to") or "") == code
+                ],
             }
         )
     return candidates
@@ -150,6 +168,8 @@ Rules:
 - Use evidence_tags to describe observable reasoning evidence, not a topic-specific rule.
 - suspected_prerequisite_code must be null or exactly one concept_code from prerequisite_candidates.
 - Select a prerequisite only when the written evidence supports it. Do not infer a code from its name alone.
+- Select a conditional prerequisite only when both the question and the learner's written method satisfy its relationship condition.
+- Compare the written method with candidate misconceptions and assessment evidence when they are provided.
 - If evidence is insufficient, use method_valid=null and suspected_prerequisite_code=null.
 
 Return JSON only:

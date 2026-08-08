@@ -470,14 +470,19 @@ class AdaptivePretestService:
         concept: KnowledgeConcept,
         node_role: str,
     ) -> dict[str, AssessmentQuestion]:
+        language = _assessment_language(assessment, user=user)
         questions = self.generation_service.create_fresh_questions(
             session,
             assessment=assessment,
             concept=concept,
             difficulties=PRETEST_NODE_DIFFICULTIES,
             assessment_type="pretest",
-            language=_assessment_language(assessment, user=user),
+            language=language,
             node_role=node_role,
+            prerequisite_context=_pretest_prerequisite_context(
+                assessment.graph_scope_json or {},
+                concept_code=concept.code,
+            ),
         )
         by_difficulty = {question.difficulty_label.lower(): question for question in questions}
         missing = [difficulty for difficulty in PRETEST_NODE_DIFFICULTIES if difficulty not in by_difficulty]
@@ -734,9 +739,94 @@ def _localized_graph_scope(
                 language=language,
                 title=title,
             )
+            metadata = concept.metadata_json or {}
+            suffix = "id" if normalize_language_code(language) == "id" else "en"
+            node["assessment_evidence"] = metadata.get(
+                f"assessment_evidence_{suffix}", []
+            )
+            node["common_misconceptions"] = metadata.get(
+                f"common_misconceptions_{suffix}", []
+            )
         nodes.append(node)
     localized["nodes"] = nodes
+    edges: list[dict[str, Any]] = []
+    suffix = "id" if normalize_language_code(language) == "id" else "en"
+    for raw_edge in graph_scope.get("edges", []):
+        if not isinstance(raw_edge, dict):
+            continue
+        edge = {**raw_edge}
+        edge["reason"] = str(
+            edge.get(f"reason_{suffix}")
+            or edge.get("reason_id")
+            or edge.get("reason_en")
+            or ""
+        )
+        edges.append(edge)
+    localized["edges"] = edges
     return localized
+
+
+def _pretest_prerequisite_context(
+    graph_scope: dict[str, Any],
+    *,
+    concept_code: str,
+) -> str:
+    nodes = {
+        str(node.get("concept_code")): node
+        for node in graph_scope.get("nodes", [])
+        if isinstance(node, dict)
+    }
+    edges = [
+        edge
+        for edge in graph_scope.get("edges", [])
+        if isinstance(edge, dict)
+    ]
+    queue = [concept_code]
+    visited = {concept_code}
+    context_lines: list[str] = []
+    while queue:
+        parent_code = queue.pop(0)
+        for edge in edges:
+            if str(edge.get("from")) != parent_code:
+                continue
+            prerequisite_code = str(edge.get("to") or "").strip()
+            node = nodes.get(prerequisite_code)
+            if not prerequisite_code or node is None:
+                continue
+            applicability = str(edge.get("applicability") or "required")
+            title = str(node.get("title") or prerequisite_code).strip()
+            description = str(node.get("description") or "").strip()
+            reason = str(edge.get("reason") or "").strip()
+            misconceptions = node.get("common_misconceptions")
+            misconception_text = "; ".join(
+                str(item).strip()
+                for item in misconceptions
+                if str(item).strip()
+            ) if isinstance(misconceptions, list) else ""
+            context_lines.append(
+                " ".join(
+                    part
+                    for part in (
+                        f"- [{applicability}] {prerequisite_code} ({title}), prerequisite of {parent_code}.",
+                        f"Capability: {description}" if description else "",
+                        f"Relationship condition: {reason}" if reason else "",
+                        f"Typical misconceptions: {misconception_text}" if misconception_text else "",
+                    )
+                    if part
+                )
+            )
+            if prerequisite_code not in visited:
+                visited.add(prerequisite_code)
+                queue.append(prerequisite_code)
+    if not context_lines:
+        return "No prerequisite candidates are present in this graph scope."
+    return "\n".join(
+        [
+            "These are diagnostic candidates, not automatic requirements.",
+            "Conditional candidates may be used only when the generated task matches their stated condition.",
+            *context_lines,
+        ]
+    )
 
 
 def _localized_concept_title(concept: KnowledgeConcept, *, language: str) -> str:
