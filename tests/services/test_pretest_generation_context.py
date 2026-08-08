@@ -48,6 +48,9 @@ def test_fresh_prompt_uses_curriculum_evidence_misconceptions_and_guidance():
     assert "Menganggap f'(x)=0 selalu ekstrem." in prompt
     assert "- hard: Verifikasi kandidat titik belok." in prompt
     assert "- [conditional] chain.rule" in prompt
+    assert "be mutually exclusive" in prompt
+    assert "not merely less complete" in prompt
+    assert "admits another option is also correct" in prompt
     assert "finalizes immediately" not in prompt
     assert "Prerequisite checks happen only" not in prompt
 

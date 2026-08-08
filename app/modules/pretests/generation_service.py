@@ -24,7 +24,7 @@ from app.modules.pretests.question_validator import QuestionValidator, VALID_QUE
 from app.modules.review.flagger import enqueue_flag
 
 PACK_PROMPT_VERSION = "adaptive_node_pack_v6_flexible_subject_tasks"
-FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v5_diagnostic_focus"
+FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v6_unambiguous_options"
 DEFAULT_PACK_GENERATION_MAX_ATTEMPTS = 4
 DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 20.0
 
@@ -1015,8 +1015,11 @@ Question quality requirements:
 - Do not mention the curriculum graph, diagnosis, evidence labels, or prerequisite codes to the learner.
 - Exactly one correct option per question.
 - Provide 4 answer options.
+- All four options must answer the same specific task and be mutually exclusive.
+- Every distractor must be mathematically or factually false, not merely less complete than the correct option.
 - Distractors must be plausible and reveal misconceptions.
 - Provide distractor_rationales for A, B, C, and D.
+- Each distractor rationale must state concretely why that option is false. If a rationale admits another option is also correct, regenerate the question.
 - Options should be similar in length and style.
 - Do not use "all of the above" or "none of the above".
 - Do not make the correct answer obvious by wording length or detail.
