@@ -53,3 +53,28 @@ def test_distractor_rationale_cannot_admit_another_option_is_correct():
             difficulty="hard",
             question=question,
         )
+
+
+def test_verified_final_answer_must_match_option_and_explanation():
+    question = _question()
+    question["final_answer"] = "Gunakan aturan pangkat pada setiap suku."
+    question["explanation"] = (
+        "Aturan pangkat sesuai. Gunakan aturan pangkat pada setiap suku."
+    )
+
+    QuestionValidator().validate_question(
+        concept_code="math.derivative",
+        difficulty="hard",
+        question=question,
+    )
+
+    question["final_answer"] = "Terapkan aturan rantai dua kali."
+    with pytest.raises(
+        QuestionValidationError,
+        match="final_answer must exactly match",
+    ):
+        QuestionValidator().validate_question(
+            concept_code="math.derivative",
+            difficulty="hard",
+            question=question,
+        )

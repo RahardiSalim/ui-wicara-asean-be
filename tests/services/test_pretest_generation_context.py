@@ -12,6 +12,7 @@ from app.modules.pretests.generation_service import (
     _fresh_generation_max_tokens,
     _fresh_question_prompt,
     _fresh_question_response_format,
+    _fresh_question_type_choices,
     _max_generation_attempts,
 )
 from app.modules.pretests.graph_scope_builder import GraphScopeBuilder, direct_prerequisites
@@ -77,6 +78,26 @@ def test_fresh_generation_output_budget_scales_with_batch_size():
     assert _fresh_generation_max_tokens(question_count=1) == 3000
     assert _fresh_generation_max_tokens(question_count=2) == 5000
     assert _fresh_generation_max_tokens(question_count=3) == 7000
+
+
+def test_prerequisite_probe_schema_excludes_direct_computation():
+    types = _fresh_question_type_choices(
+        difficulties=["medium"],
+        node_role="prerequisite",
+    )
+    response_format = _fresh_question_response_format(
+        question_count=1,
+        question_types=types,
+    )
+    question_schema = response_format["json_schema"]["schema"]["properties"][
+        "questions"
+    ]["items"]
+
+    assert question_schema["properties"]["question_type"]["enum"] == [
+        "error_analysis",
+        "multi_step_application",
+    ]
+    assert "final_answer" in question_schema["required"]
 
 
 def test_conditional_prerequisite_is_context_and_evaluator_candidate_not_generic_probe():

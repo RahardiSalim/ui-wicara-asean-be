@@ -124,6 +124,24 @@ class QuestionValidator:
                 )
         if correct_count != 1:
             raise QuestionValidationError("Generated question must have exactly 1 correct option.")
+        final_answer = str(question.get("final_answer") or "").strip()
+        if final_answer:
+            correct_option_text = next(
+                str(option.get("text") or "").strip()
+                for option in options
+                if option.get("is_correct") is True
+            )
+            if _normalize_option_text(final_answer) != _normalize_option_text(
+                correct_option_text
+            ):
+                raise QuestionValidationError(
+                    "Generated final_answer must exactly match the correct option text."
+                )
+            explanation = _normalize_option_text(str(question.get("explanation") or ""))
+            if _normalize_option_text(final_answer) not in explanation:
+                raise QuestionValidationError(
+                    "Generated explanation must explicitly repeat the verified final answer."
+                )
 
 
 def _looks_like_vague_theory_check(prompt: str) -> bool:

@@ -24,7 +24,7 @@ from app.modules.pretests.question_validator import QuestionValidator, VALID_QUE
 from app.modules.review.flagger import enqueue_flag
 
 PACK_PROMPT_VERSION = "adaptive_node_pack_v6_flexible_subject_tasks"
-FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v6_unambiguous_options"
+FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v7_verified_answers"
 DEFAULT_PACK_GENERATION_MAX_ATTEMPTS = 4
 DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 20.0
 
@@ -678,7 +678,11 @@ class AdaptivePretestGenerationService:
                                 ),
                                 "provider": {"require_parameters": True},
                                 "response_format": _fresh_question_response_format(
-                                    question_count=len(difficulties)
+                                    question_count=len(difficulties),
+                                    question_types=_fresh_question_type_choices(
+                                        difficulties=difficulties,
+                                        node_role=node_role,
+                                    ),
                                 ),
                             },
                         ),
@@ -961,6 +965,18 @@ Pretest-specific rules:
 - If the difficulty sequence is easy, medium, hard, make the three questions meaningfully different.
 - The backend decision engine controls traversal. Do not assume or describe which generated question will be shown next.
 """.rstrip()
+    prerequisite_probe_rules = ""
+    if node_role == "prerequisite" and any(
+        difficulty in {"medium", "hard"} for difficulty in difficulties
+    ):
+        prerequisite_probe_rules = """
+
+Prerequisite-probe rules:
+- Use error_analysis or multi_step_application, as required by the response schema.
+- Do not ask only for the final derivative or another direct computation.
+- Present an incomplete or incorrect worked solution and ask for a concrete correction, or combine the prerequisite with another differentiation rule.
+- For chain-rule tasks, the learner must identify or restore the derivative of the inner function.
+""".rstrip()
     if assessment_type == "posttest":
         assessment_specific_rules = """
 
@@ -1032,6 +1048,8 @@ Question quality requirements:
 - Distractors must be plausible and reveal misconceptions.
 - Provide distractor_rationales for A, B, C, and D.
 - Each distractor rationale must state concretely why that option is false. If a rationale admits another option is also correct, regenerate the question.
+- Set final_answer to an exact character-for-character copy of the correct option text.
+- End the explanation by explicitly repeating that exact final_answer text.
 - Options should be similar in length and style.
 - Do not use "all of the above" or "none of the above".
 - Do not make the correct answer obvious by wording length or detail.
@@ -1046,6 +1064,7 @@ Difficulty rules:
 - Hard: multi-step reasoning, error analysis, strategy comparison, table interpretation, missing value/inverse reasoning, transfer, or misconception-heavy application.
 - Do not make difficulty differ only by using larger numbers.
 {assessment_specific_rules}
+{prerequisite_probe_rules}
 
 Before returning JSON, internally verify:
 - exactly one correct answer
@@ -1071,6 +1090,7 @@ Return JSON shaped exactly as:
         {{"id": "D", "text": "string"}}
       ],
       "correct_option_id": "A",
+      "final_answer": "exact copy of the correct option text",
       "diagnostic_prerequisite_code": null,
       "expected_reasoning": "string",
       "explanation": "string",
@@ -1134,6 +1154,7 @@ def _normalize_fresh_question_payload(
         "helper_text": str(payload.get("helper_text") or "").strip(),
         "options": options,
         "explanation": str(payload.get("explanation") or "").strip(),
+        "final_answer": str(payload.get("final_answer") or "").strip(),
         "expected_reasoning": str(payload.get("expected_reasoning") or "").strip(),
         "difficulty_reason": str(payload.get("difficulty_reason") or "").strip(),
         "distractor_rationales": (
@@ -1221,7 +1242,11 @@ class QuestionGenerationPayloadError(ValueError):
     pass
 
 
-def _fresh_question_response_format(*, question_count: int) -> dict[str, Any]:
+def _fresh_question_response_format(
+    *,
+    question_count: int,
+    question_types: set[str] | None = None,
+) -> dict[str, Any]:
     question_schema = {
         "type": "object",
         "additionalProperties": False,
@@ -1231,7 +1256,7 @@ def _fresh_question_response_format(*, question_count: int) -> dict[str, Any]:
             "stem": {"type": "string"},
             "difficulty": {"enum": ["easy", "medium", "hard"]},
             "question_type": {
-                "enum": sorted(VALID_QUESTION_TYPES)
+                "enum": sorted(question_types or VALID_QUESTION_TYPES)
             },
             "options": {
                 "type": "array",
@@ -1248,6 +1273,7 @@ def _fresh_question_response_format(*, question_count: int) -> dict[str, Any]:
                 },
             },
             "correct_option_id": {"enum": ["A", "B", "C", "D"]},
+            "final_answer": {"type": "string"},
             "diagnostic_prerequisite_code": {
                 "anyOf": [{"type": "string"}, {"type": "null"}]
             },
@@ -1276,6 +1302,7 @@ def _fresh_question_response_format(*, question_count: int) -> dict[str, Any]:
             "question_type",
             "options",
             "correct_option_id",
+            "final_answer",
             "diagnostic_prerequisite_code",
             "expected_reasoning",
             "explanation",
@@ -1347,6 +1374,18 @@ def _max_generation_attempts(*, assessment_type: str | None = None) -> int:
 
 def _fresh_generation_max_tokens(*, question_count: int) -> int:
     return 1000 + (2000 * max(1, question_count))
+
+
+def _fresh_question_type_choices(
+    *,
+    difficulties: list[str],
+    node_role: str,
+) -> set[str] | None:
+    if node_role == "prerequisite" and all(
+        difficulty in {"medium", "hard"} for difficulty in difficulties
+    ):
+        return {"error_analysis", "multi_step_application"}
+    return None
 
 
 def _fresh_generation_timeout_seconds(
