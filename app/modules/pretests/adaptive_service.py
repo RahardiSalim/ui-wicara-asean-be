@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 from uuid import UUID
 
@@ -458,7 +459,7 @@ class AdaptivePretestService:
         state["current_pack_id"] = None
         state["current_question_id"] = str(question.id)
         state["question_count"] = int(state.get("question_count", 0)) + 1
-        assessment.decision_state_json = state
+        assessment.decision_state_json = deepcopy(state)
         return question
 
     def _generate_pretest_node_questions(

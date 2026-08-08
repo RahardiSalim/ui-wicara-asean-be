@@ -292,6 +292,10 @@ def test_answers_reuse_node_set_generate_prerequisite_set_and_reject_duplicate(c
     assert answer.status_code == 200
     assert answer.json()["next_question"]["difficulty"] == "easy"
     assert answer.json()["next_question"]["pack_id"] is None
+    persisted = client.get(f"/api/v1/pretests/{payload['session_id']}")
+    assert persisted.status_code == 200
+    assert persisted.json()["question_count"] == 2
+    assert persisted.json()["current_question"]["id"] == answer.json()["next_question"]["id"]
     assert duplicate.status_code == 409
     assert duplicate.json()["detail"]["error"] == "QUESTION_ALREADY_ANSWERED"
 
