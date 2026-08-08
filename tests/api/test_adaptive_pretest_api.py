@@ -221,7 +221,7 @@ def test_pretest_start_is_idempotent_and_generates_fresh_target_node_set(client)
         assert stored_question.metadata_json["non_reusable"] is True
 
 
-def test_pretest_start_falls_back_when_ai_is_unavailable(client, monkeypatch):
+def test_pretest_start_returns_503_when_ai_is_unavailable(client, monkeypatch):
     _override_account(client)
     monkeypatch.delenv("WICARA_ASSESSMENT_DEV_FALLBACK_QUESTIONS")
     monkeypatch.setattr(
@@ -234,14 +234,11 @@ def test_pretest_start_falls_back_when_ai_is_unavailable(client, monkeypatch):
         json={"learning_goal_id": _confirmed_goal_id(client)},
     )
 
-    assert response.status_code == 200
-    with _session_for_client(client) as session:
-        question = session.get(AssessmentQuestion, UUID(response.json()["current_question"]["id"]))
-        assert question is not None
-        assert question.generation_source == "fallback_generated"
+    assert response.status_code == 503
+    assert "AI question generation requires" in response.json()["detail"]
 
 
-def test_pretest_start_falls_back_after_ai_generation_timeout(client, monkeypatch):
+def test_pretest_start_returns_503_after_ai_generation_timeout(client, monkeypatch):
     _override_account(client)
     monkeypatch.delenv("WICARA_ASSESSMENT_DEV_FALLBACK_QUESTIONS")
     monkeypatch.setenv("WICARA_PRETEST_LLM_TIMEOUT_SECONDS", "1")
@@ -263,11 +260,9 @@ def test_pretest_start_falls_back_after_ai_generation_timeout(client, monkeypatc
         json={"learning_goal_id": _confirmed_goal_id(client)},
     )
 
-    assert response.status_code == 200
-    with _session_for_client(client) as session:
-        question = session.get(AssessmentQuestion, UUID(response.json()["current_question"]["id"]))
-        assert question is not None
-        assert question.generation_source == "fallback_generated"
+    assert response.status_code == 503
+    assert "failed validation after bounded retries" in response.json()["detail"]
+    assert "attempt 2" in response.json()["detail"]
 
 
 def test_answers_reuse_node_set_generate_prerequisite_set_and_reject_duplicate(client):

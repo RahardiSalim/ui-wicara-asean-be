@@ -14,6 +14,7 @@ from app.modules.pretests.adaptive_service import (
     AdaptivePretestService,
     DuplicateQuestionAttempt,
 )
+from app.modules.pretests.generation_service import AssessmentQuestionGenerationError
 from app.modules.pretests.schemas import PretestStartRequest, PretestSubmitAnswerRequest
 
 router = APIRouter()
@@ -35,6 +36,11 @@ def start_pretest(
             max_questions=payload.max_questions,
             max_nodes_visited=payload.max_nodes_visited,
         )
+    except AssessmentQuestionGenerationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if result is None:
@@ -90,6 +96,11 @@ def submit_pretest_answer(
             canvas_asset_id=payload.canvas_asset_id,
             used_canvas=payload.used_canvas,
         )
+    except AssessmentQuestionGenerationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
     except DuplicateQuestionAttempt as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

@@ -10,6 +10,7 @@ from app.modules.pretests.adaptive_service import (
 from app.modules.pretests.evidence_evaluator import _prerequisite_candidates
 from app.modules.pretests.generation_service import (
     _fresh_question_prompt,
+    _fresh_question_response_format,
     _max_generation_attempts,
 )
 from app.modules.pretests.graph_scope_builder import GraphScopeBuilder, direct_prerequisites
@@ -51,10 +52,21 @@ def test_fresh_prompt_uses_curriculum_evidence_misconceptions_and_guidance():
     assert "Prerequisite checks happen only" not in prompt
 
 
-def test_pretest_generation_retries_once_before_fallback(monkeypatch):
+def test_pretest_generation_allows_two_attempts(monkeypatch):
     monkeypatch.delenv("WICARA_PRETEST_LLM_MAX_ATTEMPTS", raising=False)
 
     assert _max_generation_attempts(assessment_type="pretest") == 2
+
+
+def test_fresh_generation_uses_strict_batch_and_option_counts():
+    response_format = _fresh_question_response_format(question_count=3)
+    questions = response_format["json_schema"]["schema"]["properties"]["questions"]
+    options = questions["items"]["properties"]["options"]
+
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["strict"] is True
+    assert questions["minItems"] == questions["maxItems"] == 3
+    assert options["minItems"] == options["maxItems"] == 4
 
 
 def test_conditional_prerequisite_is_context_and_evaluator_candidate_not_generic_probe():

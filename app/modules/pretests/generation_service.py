@@ -20,7 +20,7 @@ from app.modules.learning.models import (
     AssessmentQuestionPack,
     AssessmentSession,
 )
-from app.modules.pretests.question_validator import QuestionValidator
+from app.modules.pretests.question_validator import QuestionValidator, VALID_QUESTION_TYPES
 from app.modules.review.flagger import enqueue_flag
 
 PACK_PROMPT_VERSION = "adaptive_node_pack_v6_flexible_subject_tasks"
@@ -608,6 +608,10 @@ class AdaptivePretestGenerationService:
         )
         if ai_questions is not None:
             return ai_questions, ai_metadata
+        if assessment_type == "pretest":
+            raise AssessmentQuestionGenerationError(
+                _fresh_generation_failure_message(ai_metadata)
+            )
         fallback_pack = self._fallback_pack(concept=concept, language=language)
         fallback_questions = _fresh_fallback_questions(
             fallback_pack=fallback_pack,
@@ -667,7 +671,14 @@ class AdaptivePretestGenerationService:
                         ai_client.generate(
                             system_instruction=_fresh_question_system_instruction(),
                             user_instruction=prompt,
-                            params={"temperature": 0.25, "response_format": {"type": "json_object"}},
+                            params={
+                                "temperature": 0.2,
+                                "max_tokens": 2200,
+                                "provider": {"require_parameters": True},
+                                "response_format": _fresh_question_response_format(
+                                    question_count=len(difficulties)
+                                ),
+                            },
                         ),
                         timeout=_fresh_generation_timeout_seconds(
                             assessment_type=assessment_type,
@@ -1193,6 +1204,101 @@ def _diagnostic_focus_prompt(diagnostic_focus: dict[str, str] | None) -> str:
 
 class QuestionGenerationPayloadError(ValueError):
     pass
+
+
+def _fresh_question_response_format(*, question_count: int) -> dict[str, Any]:
+    question_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "language": {"type": "string"},
+            "concept_code": {"type": "string"},
+            "stem": {"type": "string"},
+            "difficulty": {"enum": ["easy", "medium", "hard"]},
+            "question_type": {
+                "enum": sorted(VALID_QUESTION_TYPES)
+            },
+            "options": {
+                "type": "array",
+                "minItems": 4,
+                "maxItems": 4,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "id": {"enum": ["A", "B", "C", "D"]},
+                        "text": {"type": "string"},
+                    },
+                    "required": ["id", "text"],
+                },
+            },
+            "correct_option_id": {"enum": ["A", "B", "C", "D"]},
+            "diagnostic_prerequisite_code": {
+                "anyOf": [{"type": "string"}, {"type": "null"}]
+            },
+            "expected_reasoning": {"type": "string"},
+            "explanation": {"type": "string"},
+            "misconception_tags": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "distractor_rationales": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    label: {"type": "string"} for label in ("A", "B", "C", "D")
+                },
+                "required": ["A", "B", "C", "D"],
+            },
+            "difficulty_reason": {"type": "string"},
+            "freshness_note": {"type": "string"},
+        },
+        "required": [
+            "language",
+            "concept_code",
+            "stem",
+            "difficulty",
+            "question_type",
+            "options",
+            "correct_option_id",
+            "diagnostic_prerequisite_code",
+            "expected_reasoning",
+            "explanation",
+            "misconception_tags",
+            "distractor_rationales",
+            "difficulty_reason",
+            "freshness_note",
+        ],
+    }
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "adaptive_pretest_question_batch",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "minItems": question_count,
+                        "maxItems": question_count,
+                        "items": question_schema,
+                    }
+                },
+                "required": ["questions"],
+            },
+        },
+    }
+
+
+def _fresh_generation_failure_message(metadata: dict[str, Any]) -> str:
+    reason = str(metadata.get("reason") or "AI pretest question generation failed.")
+    errors = metadata.get("validation_errors")
+    if not isinstance(errors, list) or not errors:
+        detail = str(metadata.get("reason") or "generation unavailable")
+        return f"{reason} Detail: {detail}"
+    return f"{reason} Validation: {' | '.join(str(error) for error in errors[-4:])}"
 
 
 def _correct_label(payload: dict[str, Any]) -> str:
