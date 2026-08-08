@@ -24,7 +24,7 @@ from app.modules.pretests.question_validator import QuestionValidator
 from app.modules.review.flagger import enqueue_flag
 
 PACK_PROMPT_VERSION = "adaptive_node_pack_v6_flexible_subject_tasks"
-FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v4_curriculum_evidence"
+FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v5_diagnostic_focus"
 DEFAULT_PACK_GENERATION_MAX_ATTEMPTS = 4
 DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 20.0
 
@@ -173,6 +173,7 @@ class AdaptivePretestGenerationService:
         language: str | None = None,
         node_role: str = "goal",
         prerequisite_context: str = "",
+        diagnostic_focus: dict[str, str] | None = None,
         diagnosis_context: str = "",
         step_label: str | None = None,
         topic: str | None = None,
@@ -186,6 +187,7 @@ class AdaptivePretestGenerationService:
             language=language,
             node_role=node_role,
             prerequisite_context=prerequisite_context,
+            diagnostic_focus=diagnostic_focus,
             diagnosis_context=diagnosis_context,
             step_label=step_label,
             topic=topic,
@@ -203,6 +205,7 @@ class AdaptivePretestGenerationService:
         language: str | None = None,
         node_role: str = "goal",
         prerequisite_context: str = "",
+        diagnostic_focus: dict[str, str] | None = None,
         diagnosis_context: str = "",
         step_label: str | None = None,
         topic: str | None = None,
@@ -222,6 +225,7 @@ class AdaptivePretestGenerationService:
             language=learner_language,
             node_role=node_role,
             prerequisite_context=prerequisite_context,
+            diagnostic_focus=diagnostic_focus,
             diagnosis_context=diagnosis_context,
             previous_questions=previous_questions,
         )
@@ -252,6 +256,7 @@ class AdaptivePretestGenerationService:
                     "batch_index": index,
                     "batch_size": len(normalized_difficulties),
                     "difficulty_sequence": normalized_difficulties,
+                    "diagnostic_focus": diagnostic_focus or {},
                 },
                 assessment_type=assessment_type,
                 step_label=step_label or (
@@ -306,6 +311,9 @@ class AdaptivePretestGenerationService:
                 "distractor_rationales": payload.get("distractor_rationales", {}),
                 "freshness_note": payload.get("freshness_note", ""),
                 "misconception_tags": payload.get("misconception_tags", []),
+                "diagnostic_prerequisite_code": payload.get(
+                    "diagnostic_prerequisite_code"
+                ),
                 "non_reusable": True,
             },
             generation_source=str(metadata.get("generation_source") or "llm_generated"),
@@ -568,6 +576,7 @@ class AdaptivePretestGenerationService:
         language: str,
         node_role: str,
         prerequisite_context: str,
+        diagnostic_focus: dict[str, str] | None,
         diagnosis_context: str,
         previous_questions: list[str],
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -593,6 +602,7 @@ class AdaptivePretestGenerationService:
             language=language,
             node_role=node_role,
             prerequisite_context=prerequisite_context,
+            diagnostic_focus=diagnostic_focus,
             diagnosis_context=diagnosis_context,
             previous_questions=previous_questions,
         )
@@ -623,6 +633,7 @@ class AdaptivePretestGenerationService:
         language: str,
         node_role: str,
         prerequisite_context: str,
+        diagnostic_focus: dict[str, str] | None,
         diagnosis_context: str,
         previous_questions: list[str],
     ) -> tuple[list[dict[str, Any]] | None, dict[str, Any]]:
@@ -645,6 +656,7 @@ class AdaptivePretestGenerationService:
                 language=language,
                 node_role=node_role,
                 prerequisite_context=prerequisite_context,
+                diagnostic_focus=diagnostic_focus,
                 diagnosis_context=diagnosis_context,
                 previous_questions=previous_questions,
                 previous_errors=validation_errors,
@@ -681,6 +693,10 @@ class AdaptivePretestGenerationService:
                         difficulty=difficulty,
                         question=question,
                     )
+                _validate_diagnostic_focus(
+                    normalized_questions,
+                    diagnostic_focus=diagnostic_focus,
+                )
                 _validate_unique_question_prompts(normalized_questions)
                 return normalized_questions, {
                     "generation_source": "llm_generated",
@@ -691,6 +707,7 @@ class AdaptivePretestGenerationService:
                     "previous_validation_errors": validation_errors,
                     "batch_size": len(difficulties),
                     "difficulty_sequence": difficulties,
+                    "diagnostic_focus": diagnostic_focus or {},
                 }
             except Exception as exc:
                 validation_errors.append(f"attempt {attempt}: {exc}")
@@ -879,6 +896,7 @@ def _fresh_question_prompt(
     language: str,
     node_role: str,
     prerequisite_context: str,
+    diagnostic_focus: dict[str, str] | None,
     diagnosis_context: str,
     previous_questions: list[str],
     previous_errors: list[str] | None = None,
@@ -896,6 +914,7 @@ def _fresh_question_prompt(
     )
     previous_question_text = "\n".join(f"- {item}" for item in previous_questions[-12:]) or "- none"
     difficulty_sequence = ", ".join(difficulties)
+    diagnostic_focus_text = _diagnostic_focus_prompt(diagnostic_focus)
     retry_instruction = ""
     if previous_errors:
         compact_errors = "\n".join(f"- {error}" for error in previous_errors[-6:])
@@ -950,6 +969,9 @@ Curriculum assessment contract:
 Prerequisite context:
 {prerequisite_context or 'none'}
 
+Hard-question diagnostic focus:
+{diagnostic_focus_text}
+
 Diagnosis context:
 {diagnosis_context or 'none'}
 
@@ -976,6 +998,9 @@ Question quality requirements:
 - Assess the curriculum evidence and follow the guidance for each requested difficulty.
 - When appropriate, build plausible distractors from the listed misconceptions without teaching the misconception as correct.
 - Use a conditional prerequisite only when the task actually satisfies the condition stated in Prerequisite context.
+- If a hard-question diagnostic focus is provided, the hard question must genuinely require that capability and activate one of its stated conditions.
+- A focused hard question must set diagnostic_prerequisite_code to the exact selected concept code. All other questions must set it to null.
+- The selected answer alone must not be enough to prove mastery of the diagnostic focus; expected_reasoning must expose the learner's method.
 - Do not mention the curriculum graph, diagnosis, evidence labels, or prerequisite codes to the learner.
 - Exactly one correct option per question.
 - Provide 4 answer options.
@@ -1020,6 +1045,7 @@ Return JSON shaped exactly as:
         {{"id": "D", "text": "string"}}
       ],
       "correct_option_id": "A",
+      "diagnostic_prerequisite_code": null,
       "expected_reasoning": "string",
       "explanation": "string",
       "misconception_tags": ["string"],
@@ -1091,6 +1117,10 @@ def _normalize_fresh_question_payload(
         ),
         "freshness_note": str(payload.get("freshness_note") or "").strip(),
         "misconception_tags": payload.get("misconception_tags") if isinstance(payload.get("misconception_tags"), list) else [],
+        "diagnostic_prerequisite_code": (
+            str(payload.get("diagnostic_prerequisite_code") or "").strip()
+            or None
+        ),
         "rubric": payload.get("rubric") if isinstance(payload.get("rubric"), dict) else {
             "correct_answer_score": 1.0,
             "reasoning_score_available": True,
@@ -1126,6 +1156,39 @@ def _validate_unique_question_prompts(questions: list[dict[str, Any]]) -> None:
         if normalized in seen:
             raise QuestionGenerationPayloadError("Generated questions must not duplicate prompts in the same batch.")
         seen.add(normalized)
+
+
+def _validate_diagnostic_focus(
+    questions: list[dict[str, Any]],
+    *,
+    diagnostic_focus: dict[str, str] | None,
+) -> None:
+    expected_code = str((diagnostic_focus or {}).get("concept_code") or "").strip()
+    for question in questions:
+        actual_code = str(question.get("diagnostic_prerequisite_code") or "").strip()
+        difficulty = str(question.get("difficulty") or "").strip()
+        if expected_code and difficulty == "hard" and actual_code != expected_code:
+            raise QuestionGenerationPayloadError(
+                "Hard question must use the selected diagnostic_prerequisite_code."
+            )
+        if difficulty != "hard" and actual_code:
+            raise QuestionGenerationPayloadError(
+                "Only hard questions may set diagnostic_prerequisite_code."
+            )
+
+
+def _diagnostic_focus_prompt(diagnostic_focus: dict[str, str] | None) -> str:
+    if not diagnostic_focus:
+        return "none"
+    return "\n".join(
+        [
+            f"- Selected prerequisite code: {diagnostic_focus['concept_code']}",
+            f"- Capability: {diagnostic_focus.get('title') or diagnostic_focus['concept_code']}",
+            f"- Description: {diagnostic_focus.get('capability') or 'none'}",
+            f"- Activation conditions: {diagnostic_focus.get('condition') or 'none'}",
+            f"- Misconceptions to expose through written reasoning: {diagnostic_focus.get('misconceptions') or 'none'}",
+        ]
+    )
 
 
 class QuestionGenerationPayloadError(ValueError):

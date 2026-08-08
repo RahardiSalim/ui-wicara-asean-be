@@ -4,6 +4,7 @@ from app.modules.curriculum.models import KnowledgeConcept
 from app.modules.curriculum.seed import seed_curriculum
 from app.modules.pretests.adaptive_service import (
     _localized_graph_scope,
+    _pretest_diagnostic_focus,
     _pretest_prerequisite_context,
 )
 from app.modules.pretests.evidence_evaluator import _prerequisite_candidates
@@ -37,6 +38,7 @@ def test_fresh_prompt_uses_curriculum_evidence_misconceptions_and_guidance():
         language="Indonesian",
         node_role="goal",
         prerequisite_context="- [conditional] chain.rule",
+        diagnostic_focus=None,
         diagnosis_context="",
         previous_questions=[],
     )
@@ -148,6 +150,11 @@ def test_revised_golden_scope_exposes_chain_rule_without_generic_chain_probe(db_
         graph_scope,
         language="id",
     )
+    diagnostic_focus = _pretest_diagnostic_focus(
+        localized_scope,
+        concept_code=target.code,
+        node_role="goal",
+    )
     queue_codes = {
         item["concept_code"]
         for item in GraphScopeBuilder.build_probe_queue(localized_scope)
@@ -155,10 +162,50 @@ def test_revised_golden_scope_exposes_chain_rule_without_generic_chain_probe(db_
     context = _pretest_prerequisite_context(
         localized_scope,
         concept_code=target.code,
+        diagnostic_focus=diagnostic_focus,
     )
 
+    assert diagnostic_focus is not None
+    assert diagnostic_focus["concept_code"] == (
+        "km_f_matematika_tingkat_lanjut_aturan_rantai"
+    )
     assert "km_f_matematika_tingkat_lanjut_turunan_secara_aljabar" in queue_codes
     assert "km_f_matematika_tingkat_lanjut_aturan_rantai" not in queue_codes
-    assert "[conditional] km_f_matematika_tingkat_lanjut_aturan_rantai" in context
+    assert (
+        "[selected hidden diagnostic] "
+        "km_f_matematika_tingkat_lanjut_aturan_rantai"
+    ) in context
     assert "argumen sinus, kosinus, atau tangen" in context
     assert "Hanya menurunkan fungsi luar" in context
+
+
+def test_goal_prompt_requires_hard_question_to_use_selected_diagnostic_focus():
+    concept = KnowledgeConcept(
+        code="curve.sketch",
+        title="Curve sketch",
+        en_desc="Analyze curve behavior using derivatives.",
+        metadata_json={},
+    )
+    focus = {
+        "concept_code": "chain.rule",
+        "title": "Chain rule",
+        "capability": "Differentiate composite functions.",
+        "condition": "Use when the inner argument is a function.",
+        "misconceptions": "Forgetting the inner derivative.",
+    }
+
+    prompt = _fresh_question_prompt(
+        concept=concept,
+        difficulties=["easy", "medium", "hard"],
+        assessment_type="pretest",
+        language="English",
+        node_role="goal",
+        prerequisite_context="- [conditional] chain.rule",
+        diagnostic_focus=focus,
+        diagnosis_context="",
+        previous_questions=[],
+    )
+
+    assert "Selected prerequisite code: chain.rule" in prompt
+    assert "hard question must genuinely require that capability" in prompt
+    assert '"diagnostic_prerequisite_code": null' in prompt
