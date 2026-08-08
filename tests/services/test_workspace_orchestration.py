@@ -1,6 +1,5 @@
 from app.modules.workspaces.schemas import TutorResponseRead
 from app.modules.workspaces.service import (
-    _attach_curated_explanation_card,
     _ensure_phase_metadata,
     _phase_is_ready,
     _record_phase_evidence,
@@ -141,29 +140,3 @@ def test_external_tutor_context_excludes_raw_reason_and_attempt_ids():
     assert safe["diagnosis"]["diagnostic_signals"] == ["misconception_detected"]
     assert "raw learner reasoning" not in serialized
     assert "sensitive-attempt-id" not in serialized
-
-
-def test_explain_card_is_curated_and_requires_learner_explanation():
-    class Workspace:
-        metadata_json = {
-            "active_concept_subtype": "derivative_rate_change_model.aturan_rantai"
-        }
-
-    response = _response(tags=["learner_explanation"])
-    curated = _attach_curated_explanation_card(
-        tutor_response=response,
-        workspace=Workspace(),
-        current_phase="explain",
-        language="id",
-    )
-    assert curated.explanation_card is not None
-    assert curated.explanation_card["source"] == "curated_curriculum"
-    assert "fungsi luar" in curated.explanation_card["title"]
-
-    blocked = _attach_curated_explanation_card(
-        tutor_response=_response(tags=["micro_check_correct"]),
-        workspace=Workspace(),
-        current_phase="explain",
-        language="id",
-    )
-    assert blocked.explanation_card is None

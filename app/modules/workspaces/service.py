@@ -20,7 +20,6 @@ from app.modules.learning.service import media_artifact_to_schema, queue_animati
 from app.modules.posttests.service import AdaptivePosttestService
 from app.modules.workspaces.mastery import WorkspaceMasteryService
 from app.modules.workspaces.models import WorkspaceEvent, WorkspaceSession
-from app.modules.workspaces.curated_content import explanation_card_for
 from app.modules.workspaces.schemas import (
     TutorResponseRead,
     WorkspaceEventCreateResponse,
@@ -389,13 +388,6 @@ async def append_workspace_event(
         current_phase=current_phase,
         learner_language=_preferred_language(user),
     )
-    if tutor_response is not None:
-        tutor_response = _attach_curated_explanation_card(
-            tutor_response=tutor_response,
-            workspace=workspace,
-            current_phase=current_phase,
-            language=_preferred_language(user),
-        )
     learner_metadata = _sanitize_learner_metadata(metadata)
     event_metadata = {**learner_metadata, "ai_audit": ai_audit}
     evidence_verified = bool(
@@ -1350,11 +1342,6 @@ def _apply_workspace_context(
                 else str(metadata.get("active_concept_type") or "").strip().lower()
             )
             or "general_steam",
-            "active_concept_subtype": (
-                str((concept.metadata_json or {}).get("concept_subtype") or "").strip().lower()
-                if concept is not None
-                else str(metadata.get("active_concept_subtype") or "").strip().lower()
-            ),
             "active_template_id": (
                 str(
                     (concept.metadata_json or {}).get("template_id")
@@ -1397,23 +1384,6 @@ def _apply_workspace_context(
     workspace.metadata_json = {
         key: value for key, value in metadata.items() if value is not None
     }
-
-
-def _attach_curated_explanation_card(
-    *,
-    tutor_response: TutorResponseRead,
-    workspace: WorkspaceSession,
-    current_phase: str,
-    language: str,
-) -> TutorResponseRead:
-    """Only the Explain stage may publish curriculum-reviewed explanation cards."""
-    if current_phase != "explain":
-        return tutor_response.model_copy(update={"explanation_card": None})
-    if "learner_explanation" not in tutor_response.evidence_tags:
-        return tutor_response.model_copy(update={"explanation_card": None})
-    concept_subtype = str((workspace.metadata_json or {}).get("active_concept_subtype") or "")
-    card = explanation_card_for(concept_subtype=concept_subtype, language=language)
-    return tutor_response.model_copy(update={"explanation_card": card})
 
 
 def _posttest_trigger_payload(workspace: WorkspaceSession) -> dict[str, Any] | None:
