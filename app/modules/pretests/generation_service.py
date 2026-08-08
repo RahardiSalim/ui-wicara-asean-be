@@ -673,7 +673,9 @@ class AdaptivePretestGenerationService:
                             user_instruction=prompt,
                             params={
                                 "temperature": 0.2,
-                                "max_tokens": 2200,
+                                "max_tokens": _fresh_generation_max_tokens(
+                                    question_count=len(difficulties)
+                                ),
                                 "provider": {"require_parameters": True},
                                 "response_format": _fresh_question_response_format(
                                     question_count=len(difficulties)
@@ -686,7 +688,17 @@ class AdaptivePretestGenerationService:
                         ),
                     )
                 )
-                payload = json.loads(response.text)
+                try:
+                    payload = json.loads(response.text)
+                except json.JSONDecodeError as exc:
+                    output_tokens = (
+                        response.usage.output_tokens if response.usage is not None else None
+                    )
+                    raise ValueError(
+                        "Invalid JSON response "
+                        f"(finish_reason={response.finish_reason or 'unknown'}, "
+                        f"output_tokens={output_tokens or 'unknown'}): {exc}"
+                    ) from exc
                 questions = _extract_fresh_questions_payload(payload)
                 if len(questions) != len(difficulties):
                     validation_errors.append(
@@ -1331,6 +1343,10 @@ def _max_generation_attempts(*, assessment_type: str | None = None) -> int:
         return max(1, min(8, int(raw_value)))
     except ValueError:
         return default_attempts
+
+
+def _fresh_generation_max_tokens(*, question_count: int) -> int:
+    return 1000 + (2000 * max(1, question_count))
 
 
 def _fresh_generation_timeout_seconds(

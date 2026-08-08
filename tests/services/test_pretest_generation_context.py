@@ -9,6 +9,7 @@ from app.modules.pretests.adaptive_service import (
 )
 from app.modules.pretests.evidence_evaluator import _prerequisite_candidates
 from app.modules.pretests.generation_service import (
+    _fresh_generation_max_tokens,
     _fresh_question_prompt,
     _fresh_question_response_format,
     _max_generation_attempts,
@@ -70,6 +71,12 @@ def test_fresh_generation_uses_strict_batch_and_option_counts():
     assert response_format["json_schema"]["strict"] is True
     assert questions["minItems"] == questions["maxItems"] == 3
     assert options["minItems"] == options["maxItems"] == 4
+
+
+def test_fresh_generation_output_budget_scales_with_batch_size():
+    assert _fresh_generation_max_tokens(question_count=1) == 3000
+    assert _fresh_generation_max_tokens(question_count=2) == 5000
+    assert _fresh_generation_max_tokens(question_count=3) == 7000
 
 
 def test_conditional_prerequisite_is_context_and_evaluator_candidate_not_generic_probe():
