@@ -83,12 +83,6 @@ class QuestionValidator:
             raise QuestionValidationError("Medium/hard questions must not be direct computation only.")
         if difficulty == "hard" and question_type not in HARD_QUESTION_TYPES:
             raise QuestionValidationError("Hard questions must require deeper reasoning, not basic recognition.")
-        if difficulty == "hard" and question_type != "error_analysis" and not _has_multi_step_reasoning_signal(
-            prompt=prompt,
-            expected_reasoning=str(question.get("expected_reasoning") or ""),
-            difficulty_reason=difficulty_reason,
-        ):
-            raise QuestionValidationError("Hard questions need multi-step, transfer, table, strategy, or misconception reasoning.")
 
         options = question.get("options")
         if not isinstance(options, list) or len(options) != 4:
@@ -247,41 +241,3 @@ def _looks_like_direct_computation_only(prompt: str, *, question_type: str) -> b
         "kesalahan",
     )
     return has_direct_marker and has_operation and not any(term in normalized for term in contextual_terms)
-
-
-def _has_multi_step_reasoning_signal(
-    *,
-    prompt: str,
-    expected_reasoning: str,
-    difficulty_reason: str,
-) -> bool:
-    combined = f"{prompt} {expected_reasoning} {difficulty_reason}".lower()
-    signals = (
-        "multi-step",
-        "two-step",
-        "3",
-        "lebih dari satu",
-        "beberapa langkah",
-        "langkah",
-        "first",
-        "then",
-        "next",
-        "kemudian",
-        "lalu",
-        "setelah",
-        "error analysis",
-        "misconception",
-        "miskonsepsi",
-        "strategy",
-        "strategi",
-        "table",
-        "tabel",
-        "compare",
-        "bandingkan",
-        "missing value",
-        "nilai yang hilang",
-        "inverse",
-        "kebalikan",
-        "transfer",
-    )
-    return any(signal in combined for signal in signals)

@@ -76,3 +76,16 @@ def test_verified_final_answer_must_match_option_and_explanation():
             difficulty="hard",
             question=question,
         )
+
+
+def test_hard_reasoning_type_does_not_depend_on_keyword_matching():
+    question = _question()
+    question["question_type"] = "multi_step_application"
+    question["prompt"] = "Perhatikan representasi fungsi berikut dan pilih kesimpulan yang konsisten."
+    question["difficulty_reason"] = "Menggabungkan dua representasi fungsi."
+
+    QuestionValidator().validate_question(
+        concept_code="math.derivative",
+        difficulty="hard",
+        question=question,
+    )
