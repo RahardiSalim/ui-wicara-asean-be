@@ -60,6 +60,7 @@ def seed_curriculum(
         subject.metadata_json = subject_data.metadata
         subjects_by_code[subject.code] = subject
 
+    session.flush()
     _deactivate_legacy_subject_aliases(session, subjects_by_code)
     session.flush()
 
@@ -143,10 +144,31 @@ def _deactivate_legacy_subject_aliases(
         if legacy_subject is None:
             continue
 
+        canonical_subject = subjects_by_code[canonical_code]
+        for legacy_concept in session.scalars(
+            select(KnowledgeConcept).where(
+                KnowledgeConcept.subject_id == legacy_subject.id
+            )
+        ):
+            existing = session.scalar(
+                select(KnowledgeConcept).where(
+                    KnowledgeConcept.subject_id == canonical_subject.id,
+                    KnowledgeConcept.code == legacy_concept.code,
+                )
+            )
+            if existing is None:
+                legacy_concept.subject_id = canonical_subject.id
+            else:
+                legacy_concept.metadata_json = {
+                    **(legacy_concept.metadata_json or {}),
+                    "stale_seed": True,
+                    "stale_reason": "duplicate_from_legacy_subject_alias",
+                }
+
         legacy_subject.is_active = False
         legacy_subject.metadata_json = {
             **(legacy_subject.metadata_json or {}),
-            "superseded_by": canonical_subject_code(alias),
+            "superseded_by": canonical_subject.code,
         }
 
 

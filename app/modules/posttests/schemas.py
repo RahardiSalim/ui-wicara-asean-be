@@ -115,8 +115,25 @@ class PosttestAnswerResponse(BaseModel):
     completed: bool = False
 
 
+class PosttestProgressionRead(BaseModel):
+    passed: bool
+    track_id: UUID | None = None
+    track_status: str | None = None
+    track_progress_percent: int | None = None
+    module_id: UUID | None = None
+    module_status: str | None = None
+    next_module_id: UUID | None = None
+    next_module_status: str | None = None
+    workspace_session_id: UUID | None = None
+    workspace_status: str | None = None
+    goal_status: str | None = None
+    remediation_phase: str | None = None
+    remediation_reason: str | None = None
+
+
 class PosttestFinalizeResponse(BaseModel):
     session_id: UUID
     status: str
     node_results: list[PosttestNodeResultRead]
     retake_required_concepts: list[str]
+    progression: PosttestProgressionRead | None = None

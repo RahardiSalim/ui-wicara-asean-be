@@ -113,7 +113,7 @@ def _apply_deferred_evidence_analysis(
     state: dict[str, Any],
     language: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    rows = _deferred_evidence_rows(session, assessment=assessment)
+    rows = _evidence_rows(session, assessment=assessment)
     if not rows:
         return state, {
             "evidence_available": False,
@@ -121,16 +121,25 @@ def _apply_deferred_evidence_analysis(
             "analysis_mode": "none",
         }
 
-    ai_results = _batch_evaluate_evidence_with_ai(rows=rows, language=language)
-    analysis_mode = "batched_ai" if ai_results else "batched_heuristic"
+    deferred_rows = [row for row in rows if row["evidence_deferred"]]
     updated_state = {**state}
-    for row in rows:
-        result = (ai_results or {}).get(row["attempt_id"])
-        if result is None:
-            result = _heuristic_evidence_result(row=row, language=language)
-        result["analysis_mode"] = analysis_mode
-        _persist_evidence_result(row=row, result=result)
-        _merge_state_attempt(updated_state, attempt_id=row["attempt_id"], result=result)
+    if deferred_rows:
+        ai_results = _batch_evaluate_evidence_with_ai(rows=deferred_rows, language=language)
+        deferred_mode = "batched_ai" if ai_results else "batched_heuristic"
+        for row in deferred_rows:
+            result = (ai_results or {}).get(row["attempt_id"])
+            if result is None:
+                result = _heuristic_evidence_result(row=row, language=language)
+            result["analysis_mode"] = deferred_mode
+            _persist_evidence_result(row=row, result=result)
+            _merge_state_attempt(updated_state, attempt_id=row["attempt_id"], result=result)
+        analysis_mode = (
+            f"upfront_and_{deferred_mode}"
+            if len(deferred_rows) != len(rows)
+            else deferred_mode
+        )
+    else:
+        analysis_mode = "upfront_adaptive_routing"
 
     return updated_state, {
         "evidence_available": True,
@@ -139,7 +148,7 @@ def _apply_deferred_evidence_analysis(
     }
 
 
-def _deferred_evidence_rows(
+def _evidence_rows(
     session: Session,
     *,
     assessment: AssessmentSession,
@@ -157,17 +166,6 @@ def _deferred_evidence_rows(
         has_reasoning = bool((attempt.typed_reasoning or "").strip())
         has_canvas = bool(attempt.used_canvas or attempt.canvas_asset_id is not None)
         if not has_reasoning and not has_canvas:
-            continue
-        if metadata.get("evidence_deferred") is False and metadata.get("evidence_analysis_mode") not in {
-            "deferred_pretest_finalize",
-            "batched_ai",
-            "batched_heuristic",
-        }:
-            continue
-        if metadata.get("evidence_deferred") is False and metadata.get("evidence_analysis_mode") in {
-            "batched_ai",
-            "batched_heuristic",
-        }:
             continue
         question = session.get(AssessmentQuestion, attempt.question_id)
         selected_option = (
@@ -189,6 +187,7 @@ def _deferred_evidence_rows(
                 "is_correct": bool(attempt.is_correct),
                 "answer_score": 1.0 if attempt.is_correct else 0.0,
                 "canvas_status": _canvas_status(attempt, metadata),
+                "evidence_deferred": metadata.get("evidence_deferred") is not False,
             }
         )
     return rows
@@ -534,6 +533,7 @@ def _diagnosis_nodes(
                 "title": node.get("title"),
                 "role": node.get("role"),
                 "depth": node.get("depth"),
+                "parent": node.get("parent"),
                 "status": status,
                 "mastery_score": mastery,
                 "confidence": _node_confidence(attempts),
@@ -620,6 +620,11 @@ def _evidence_summary(attempts: object) -> dict[str, Any]:
             "answered_difficulties": [],
             "careless_mistake_possible": False,
             "misconception_detected": False,
+            "source_attempt_ids": [],
+            "evidence_tags": [],
+            "method_reasons": [],
+            "suspected_prerequisite_codes": [],
+            "method_invalid_detected": False,
         }
     rows = [item for item in attempts if isinstance(item, dict)]
     reasoning_rows = [
@@ -643,6 +648,28 @@ def _evidence_summary(attempts: object) -> dict[str, Any]:
         for item in rows
         if str(item.get("diagnostic_signal") or "").strip()
     ]
+    source_attempt_ids = [
+        str(item.get("attempt_id"))
+        for item in rows
+        if str(item.get("attempt_id") or "").strip()
+    ]
+    evidence_tags = [
+        str(tag)
+        for item in rows
+        if isinstance(item.get("evidence_tags"), list)
+        for tag in item["evidence_tags"]
+        if str(tag).strip()
+    ]
+    method_reasons = [
+        str(item.get("method_reason"))
+        for item in rows
+        if str(item.get("method_reason") or "").strip()
+    ]
+    suspected_codes = [
+        str(item.get("suspected_prerequisite_code"))
+        for item in rows
+        if str(item.get("suspected_prerequisite_code") or "").strip()
+    ]
     reasoning_avg = (
         round(sum(reasoning_values) / len(reasoning_values), 4)
         if reasoning_values
@@ -661,6 +688,11 @@ def _evidence_summary(attempts: object) -> dict[str, Any]:
         "answered_difficulties": list(dict.fromkeys(str(item.get("difficulty")) for item in rows)),
         "careless_mistake_possible": "possible_careless_mistake" in signals,
         "misconception_detected": bool({"misconception", "misconception_detected"} & set(signals)),
+        "source_attempt_ids": list(dict.fromkeys(source_attempt_ids)),
+        "evidence_tags": list(dict.fromkeys(evidence_tags)),
+        "method_reasons": list(dict.fromkeys(method_reasons)),
+        "suspected_prerequisite_codes": list(dict.fromkeys(suspected_codes)),
+        "method_invalid_detected": any(item.get("method_valid") is False for item in rows),
     }
 
 

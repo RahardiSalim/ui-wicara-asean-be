@@ -235,12 +235,21 @@ class AdaptivePretestService:
             if asset is None or asset.user_id != user.id:
                 raise LookupError("Canvas asset was not found.")
 
-        evaluation = _mcq_only_evaluation(
+        evaluation = self.evidence_evaluator.evaluate(
+            session,
+            question=question,
             selected_option=option,
             typed_reasoning=typed_reasoning,
             canvas_asset_id=canvas_asset_id,
             used_canvas=used_canvas,
+            graph_scope=assessment.graph_scope_json or {},
         )
+        evaluation = _validated_method_evaluation(
+            evaluation,
+            graph_scope=assessment.graph_scope_json or {},
+        )
+        evaluation["is_correct"] = bool(option.is_correct)
+        evaluation["answer_score"] = 1.0 if option.is_correct else 0.0
         attempt = AssessmentAttempt(
             session_id=assessment.id,
             question_id=question.id,
@@ -262,6 +271,11 @@ class AdaptivePretestService:
                 "diagnostic_signal": evaluation["diagnostic_signal"],
                 "reasoning_signal": evaluation["reasoning_signal"],
                 "reasoning_feedback": evaluation["reasoning_feedback"],
+                "method_valid": evaluation["method_valid"],
+                "evidence_tags": evaluation["evidence_tags"],
+                "suspected_prerequisite_code": evaluation["suspected_prerequisite_code"],
+                "method_reason": evaluation["method_reason"],
+                "method_evaluation_source": evaluation["method_evaluation_source"],
             },
             evaluation_metadata_json={
                 "canvas_status": evaluation["canvas_status"],
@@ -269,12 +283,28 @@ class AdaptivePretestService:
                 "reasoning_signal": evaluation["reasoning_signal"],
                 "reasoning_feedback": evaluation["reasoning_feedback"],
                 "reasoning_evaluation_source": evaluation["reasoning_evaluation_source"],
-                "evidence_deferred": bool(typed_reasoning.strip() or used_canvas or canvas_asset_id is not None),
-                "evidence_analysis_mode": "deferred_pretest_finalize",
+                "method_valid": evaluation["method_valid"],
+                "evidence_tags": evaluation["evidence_tags"],
+                "suspected_prerequisite_code": evaluation["suspected_prerequisite_code"],
+                "rejected_suspected_prerequisite_code": evaluation.get(
+                    "rejected_suspected_prerequisite_code"
+                ),
+                "method_reason": evaluation["method_reason"],
+                "method_evaluation_source": evaluation["method_evaluation_source"],
+                "evidence_deferred": False,
+                "evidence_analysis_mode": "upfront_adaptive_routing",
             },
         )
         session.add(attempt)
         session.flush()
+        attempt.evaluated_result = {
+            **(attempt.evaluated_result or {}),
+            "source_attempt_id": str(attempt.id),
+        }
+        attempt.evaluation_metadata_json = {
+            **(attempt.evaluation_metadata_json or {}),
+            "source_attempt_id": str(attempt.id),
+        }
 
         enqueue_flag(
             artifact_type="evaluation",
@@ -282,6 +312,9 @@ class AdaptivePretestService:
             confidence=attempt.reasoning_score,
             signals={
                 "diagnostic_signal": attempt.diagnostic_signal,
+                "method_valid": evaluation["method_valid"],
+                "evidence_tags": evaluation["evidence_tags"],
+                "suspected_prerequisite_code": evaluation["suspected_prerequisite_code"],
                 "structured_parse_ok": evaluation.get("reasoning_evaluation_source")
                 != "parse_error",
             },
@@ -302,7 +335,12 @@ class AdaptivePretestService:
             diagnostic_signal=str(evaluation["diagnostic_signal"]),
             reasoning_signal=str(evaluation["reasoning_signal"]),
             attempt_id=str(attempt.id),
-            evidence_deferred=bool(typed_reasoning.strip() or used_canvas or canvas_asset_id is not None),
+            evidence_deferred=False,
+            method_valid=evaluation["method_valid"],
+            evidence_tags=evaluation["evidence_tags"],
+            suspected_prerequisite_code=evaluation["suspected_prerequisite_code"],
+            method_reason=evaluation["method_reason"],
+            method_evaluation_source=evaluation["method_evaluation_source"],
         )
         state, next_action = self.decision_engine.decide(
             state,
@@ -310,6 +348,11 @@ class AdaptivePretestService:
             last_difficulty=question.difficulty_label.lower(),
             last_is_correct=bool(evaluation["is_correct"]),
             graph_scope=assessment.graph_scope_json or {},
+            method_valid=evaluation["method_valid"],
+            suspected_prerequisite_code=evaluation["suspected_prerequisite_code"],
+            evidence_tags=evaluation["evidence_tags"],
+            method_reason=evaluation["method_reason"],
+            source_attempt_id=str(attempt.id),
         )
         assessment.decision_state_json = state
 
@@ -582,37 +625,58 @@ def _evaluation_to_read(evaluation: dict[str, Any]) -> PretestEvaluationRead:
         confidence=float(evaluation["confidence"]),
         diagnostic_signal=str(evaluation["diagnostic_signal"]),
         canvas_status=evaluation["canvas_status"],
+        method_valid=evaluation.get("method_valid"),
+        evidence_tags=list(evaluation.get("evidence_tags") or []),
+        suspected_prerequisite_code=evaluation.get("suspected_prerequisite_code"),
+        method_reason=str(evaluation.get("method_reason") or ""),
+        method_evaluation_source=str(evaluation.get("method_evaluation_source") or ""),
     )
 
 
-def _mcq_only_evaluation(
+def _validated_method_evaluation(
+    evaluation: dict[str, Any],
     *,
-    selected_option: AssessmentOption,
-    typed_reasoning: str,
-    canvas_asset_id: UUID | None,
-    used_canvas: bool,
+    graph_scope: dict[str, Any],
 ) -> dict[str, Any]:
-    is_correct = bool(selected_option.is_correct)
-    answer_score = 1.0 if is_correct else 0.0
-    has_evidence = bool(typed_reasoning.strip() or used_canvas or canvas_asset_id is not None)
-    canvas_status = None
-    if canvas_asset_id is not None:
-        canvas_status = "stored_not_evaluated"
-    elif used_canvas:
-        canvas_status = "client_canvas_not_uploaded"
-    return {
-        "is_correct": is_correct,
-        "answer_score": answer_score,
-        "reasoning_score": None,
-        "canvas_score": None,
-        "canvas_status": canvas_status,
-        "evidence_score": answer_score,
-        "diagnostic_signal": "evidence_pending" if has_evidence else ("correct_mcq_only" if is_correct else "concept_gap_likely"),
-        "reasoning_signal": "deferred" if typed_reasoning.strip() else "not_provided",
-        "reasoning_feedback": "",
-        "reasoning_evaluation_source": "deferred_pretest_finalize" if has_evidence else "none",
-        "confidence": 0.0,
+    normalized = dict(evaluation)
+    method_valid = normalized.get("method_valid")
+    if not isinstance(method_valid, bool):
+        method_valid = None
+    raw_tags = normalized.get("evidence_tags")
+    tags = (
+        [str(tag).strip()[:64] for tag in raw_tags[:16] if str(tag).strip()]
+        if isinstance(raw_tags, list)
+        else []
+    )
+    allowed_codes = {
+        str(node.get("concept_code"))
+        for node in graph_scope.get("nodes", [])
+        if isinstance(node, dict)
+        and node.get("role") == "prerequisite"
+        and str(node.get("concept_code") or "").strip()
     }
+    raw_code = str(normalized.get("suspected_prerequisite_code") or "").strip()
+    suspected_code = raw_code if method_valid is False and raw_code in allowed_codes else None
+    if raw_code and raw_code not in allowed_codes:
+        tags.append("suspected_prerequisite_rejected_out_of_scope")
+        normalized["rejected_suspected_prerequisite_code"] = raw_code
+    elif raw_code and method_valid is not False:
+        tags.append("suspected_prerequisite_ignored_without_invalid_method")
+        normalized["rejected_suspected_prerequisite_code"] = raw_code
+    normalized.update(
+        {
+            "method_valid": method_valid,
+            "evidence_tags": list(dict.fromkeys(tags)),
+            "suspected_prerequisite_code": suspected_code,
+            "method_reason": str(normalized.get("method_reason") or "").strip()[:500],
+            "method_evaluation_source": str(
+                normalized.get("method_evaluation_source")
+                or normalized.get("reasoning_evaluation_source")
+                or "none"
+            )[:160],
+        }
+    )
+    return normalized
 
 
 def _concept_by_code(session: Session, concept_code: str) -> KnowledgeConcept | None:

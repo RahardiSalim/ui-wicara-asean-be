@@ -13,6 +13,7 @@ from app.modules.accounts.models import UserAccount
 from app.modules.assessments.metrics import AssessmentEvidenceEvaluator, PASS_PERCENT
 from app.modules.curriculum.kurikulum_merdeka import translate_curriculum_label_to_english
 from app.modules.curriculum.models import KnowledgeConcept
+from app.modules.evidence.models import ImageAsset
 from app.modules.learning.models import (
     AssessmentAttempt,
     AssessmentQuestion,
@@ -28,6 +29,7 @@ from app.modules.posttests.schemas import (
     PosttestEvaluationRead,
     PosttestFinalizeResponse,
     PosttestNodeResultRead,
+    PosttestProgressionRead,
     PosttestQuestionRead,
     PosttestSessionRead,
 )
@@ -98,9 +100,15 @@ class AdaptivePosttestService:
             user=user,
             goal_id=goal.id,
             workspace_session_id=workspace.id if workspace is not None else None,
+            module_id=context.get("module_id"),
         )
         if existing is not None:
             return self.read(session, user=user, session_id=existing.id)
+        if workspace is not None and not _workspace_allows_posttest(workspace):
+            raise ValueError(
+                "Posttest is not eligible for this workspace. "
+                "Complete the Evaluate evidence requirements first."
+            )
 
         language = _preferred_language(user)
         target_title = _localized_concept_title(target, language=language)
@@ -131,6 +139,8 @@ class AdaptivePosttestService:
                 "posttest_source": posttest_source,
                 "workspace_session_id": str(workspace.id) if workspace is not None else None,
                 "learning_goal_id": str(goal.id),
+                "track_id": str(context["track_id"]) if context.get("track_id") is not None else None,
+                "module_id": str(context["module_id"]) if context.get("module_id") is not None else None,
                 "target_concept_id": str(target.id),
                 "target_concept_code": target.code,
                 "target_concept_title": target_title,
@@ -268,18 +278,26 @@ class AdaptivePosttestService:
         option = next((item for item in question.options if item.id == selected_option_id), None)
         if option is None:
             raise LookupError("Selected option was not found for this question.")
+        if canvas_asset_id is not None:
+            asset = session.get(ImageAsset, canvas_asset_id)
+            if asset is None or asset.user_id != user.id:
+                raise LookupError("Canvas asset was not found.")
 
         evaluation = _mcq_only_posttest_evaluation(selected_option=option)
+        if canvas_asset_id is not None:
+            evaluation["canvas_status"] = "stored_not_evaluated"
+        elif used_canvas:
+            evaluation["canvas_status"] = "client_canvas_not_uploaded"
         is_correct = bool(evaluation["is_correct"])
         attempt = AssessmentAttempt(
             session_id=assessment.id,
             question_id=question.id,
             selected_option_id=option.id,
-            canvas_asset_id=None,
+            canvas_asset_id=canvas_asset_id,
             confidence=confidence,
-            explanation_text="",
-            typed_reasoning="",
-            used_canvas=False,
+            explanation_text=typed_reasoning.strip(),
+            typed_reasoning=typed_reasoning.strip(),
+            used_canvas=used_canvas or canvas_asset_id is not None,
             score=float(evaluation["answer_score"]),
             is_correct=is_correct,
             answer_score=float(evaluation["answer_score"]),
@@ -303,7 +321,12 @@ class AdaptivePosttestService:
                 "reasoning_signal": evaluation["reasoning_signal"],
                 "reasoning_feedback": evaluation["reasoning_feedback"],
                 "reasoning_evaluation_source": evaluation["reasoning_evaluation_source"],
-                "ignored_reasoning_or_canvas": bool(typed_reasoning.strip() or used_canvas or canvas_asset_id is not None),
+                "written_evidence_status": (
+                    "stored_not_evaluated" if typed_reasoning.strip() else "not_provided"
+                ),
+                "diagnostic_evidence_only": bool(
+                    typed_reasoning.strip() or used_canvas or canvas_asset_id is not None
+                ),
             },
         )
         session.add(attempt)
@@ -391,7 +414,7 @@ class AdaptivePosttestService:
         now_iso = now.isoformat()
         already_finalized = bool((assessment.metadata_json or {}).get("posttest_finalized_at"))
         target_concept = session.get(KnowledgeConcept, assessment.target_concept_id) if assessment.target_concept_id else None
-        if target_concept is not None and official_result["official_pass"]:
+        if target_concept is not None:
             concept_state = session.scalar(
                 select(LearnerConceptState).where(
                     LearnerConceptState.user_id == user.id,
@@ -409,7 +432,6 @@ class AdaptivePosttestService:
                 )
                 session.add(concept_state)
             scaled_mastery = _clamp01(float(official_result["official_scaled_score"]) / 10.0)
-            concept_state.status = "mastered"
             concept_state.mastery_score = scaled_mastery
             concept_state.confidence_score = scaled_mastery
             if not already_finalized:
@@ -417,11 +439,24 @@ class AdaptivePosttestService:
                     official_result["answered_count"]
                 )
             concept_state.last_evaluated_at = now
-            concept_state.next_review_at = now + timedelta(days=7)
+            if official_result["official_pass"]:
+                concept_state.status = "mastered"
+                concept_state.next_review_at = now + timedelta(days=7)
+            else:
+                concept_state.status = "review_due"
+                concept_state.next_review_at = now
 
         assessment.status = "completed"
         assessment.completed_at = assessment.completed_at or now
         assessment.decision_state_json = {**state, "node_results": node_results}
+        progression = _apply_posttest_progression(
+            session,
+            user=user,
+            assessment=assessment,
+            passed=bool(official_result["official_pass"]),
+            node_result=target_payload,
+            now=now,
+        )
         assessment.metadata_json = {
             **(assessment.metadata_json or {}),
             "posttest_finalized_at": now_iso,
@@ -432,13 +467,8 @@ class AdaptivePosttestService:
                 metadata=assessment.metadata_json or {},
                 node_result=target_payload,
             ),
+            "progression": progression.model_dump(mode="json"),
         }
-
-        if assessment.learning_goal_id is not None and official_result["official_pass"]:
-            goal = session.get(LearningGoal, assessment.learning_goal_id)
-            if goal is not None and goal.status == "in_progress":
-                goal.status = "completed"
-                goal.completed_at = now
 
         session.commit()
         node_reads = _node_results_read(state)
@@ -447,6 +477,7 @@ class AdaptivePosttestService:
             status=assessment.status,
             node_results=node_reads,
             retake_required_concepts=[item.concept_code for item in node_reads if item.retake_required],
+            progression=progression,
         )
 
 
@@ -473,7 +504,12 @@ def _resolve_posttest_context(
             return None
         # The exact workspace session is authoritative; track/module/goal request fields
         # are legacy hints and may be stale in clients that resume from workspace UI.
-        target = _target_concept_for_goal_or_workspace(session, goal=goal, workspace=workspace)
+        target = _target_concept_for_goal_or_workspace(
+            session,
+            goal=goal,
+            workspace=workspace,
+            module_id=workspace.module_id,
+        )
         if target is None:
             raise ValueError("Posttest target concept was not found.")
         return {
@@ -501,7 +537,12 @@ def _resolve_posttest_context(
         track_id=resolved_track_id,
         module_id=resolved_module_id,
     )
-    target = _target_concept_for_goal_or_workspace(session, goal=goal, workspace=workspace)
+    target = _target_concept_for_goal_or_workspace(
+        session,
+        goal=goal,
+        workspace=workspace,
+        module_id=resolved_module_id,
+    )
     if target is None:
         raise ValueError("Posttest target concept was not found.")
     return {
@@ -512,6 +553,14 @@ def _resolve_posttest_context(
         "workspace": workspace,
         "posttest_source": "latest_workspace_for_goal" if workspace is not None else "learning_goal_fallback",
     }
+
+
+def _workspace_allows_posttest(workspace: WorkspaceSession) -> bool:
+    metadata = workspace.metadata_json or {}
+    if bool(metadata.get("posttest_eligible", False)):
+        return True
+    trigger = metadata.get("posttest_trigger")
+    return isinstance(trigger, dict) and str(trigger.get("status") or "") == "ready"
 
 
 def _resolve_goal_context(
@@ -610,16 +659,292 @@ def _target_concept_for_goal_or_workspace(
     *,
     goal: LearningGoal,
     workspace: WorkspaceSession | None,
+    module_id: UUID | None,
 ) -> KnowledgeConcept | None:
-    if goal.target_concept_id is not None:
-        concept = session.get(KnowledgeConcept, goal.target_concept_id)
-        if concept is not None:
-            return concept
-    if workspace is not None:
-        module = session.get(TrackModule, workspace.module_id)
+    scoped_module_id = workspace.module_id if workspace is not None else module_id
+    if scoped_module_id is not None:
+        module = session.get(TrackModule, scoped_module_id)
         if module is not None and module.concept_id is not None:
-            return session.get(KnowledgeConcept, module.concept_id)
+            concept = session.get(KnowledgeConcept, module.concept_id)
+            if concept is not None:
+                return concept
+    if goal.target_concept_id is not None:
+        return session.get(KnowledgeConcept, goal.target_concept_id)
     return None
+
+
+def _apply_posttest_progression(
+    session: Session,
+    *,
+    user: UserAccount,
+    assessment: AssessmentSession,
+    passed: bool,
+    node_result: dict[str, Any],
+    now: datetime,
+) -> PosttestProgressionRead:
+    metadata = assessment.metadata_json or {}
+    workspace_id = _uuid_value(metadata.get("workspace_session_id"))
+    workspace = (
+        _load_workspace(session, user=user, workspace_id=workspace_id)
+        if workspace_id is not None
+        else None
+    )
+
+    module_id = workspace.module_id if workspace is not None else _uuid_value(metadata.get("module_id"))
+    track_id = assessment.track_id or _uuid_value(metadata.get("track_id"))
+    if track_id is None and module_id is not None:
+        scoped_module = session.scalar(
+            select(TrackModule)
+            .join(LearningTrack, TrackModule.track_id == LearningTrack.id)
+            .where(TrackModule.id == module_id, LearningTrack.user_id == user.id)
+        )
+        track_id = scoped_module.track_id if scoped_module is not None else None
+
+    track = (
+        session.scalar(
+            select(LearningTrack)
+            .where(LearningTrack.id == track_id, LearningTrack.user_id == user.id)
+            .options(selectinload(LearningTrack.modules))
+        )
+        if track_id is not None
+        else None
+    )
+    modules = sorted(track.modules, key=lambda item: item.sort_order) if track is not None else []
+    module = next((item for item in modules if item.id == module_id), None)
+    if module is None and module_id is None and assessment.target_concept_id is not None:
+        matching_modules = [
+            item for item in modules if item.concept_id == assessment.target_concept_id
+        ]
+        if len(matching_modules) == 1:
+            module = matching_modules[0]
+            module_id = module.id
+    next_module = _next_track_module(modules, module=module)
+
+    if module is not None:
+        module.status = "completed" if passed else "active"
+        if passed:
+            if next_module is not None and next_module.status == "locked":
+                next_module.status = "ready"
+        elif next_module is not None and next_module.status == "ready":
+            next_module.status = "locked"
+
+    goal = (
+        session.get(LearningGoal, assessment.learning_goal_id)
+        if assessment.learning_goal_id is not None
+        else (session.get(LearningGoal, track.learning_goal_id) if track is not None else None)
+    )
+    all_modules_completed = bool(modules) and all(item.status == "completed" for item in modules)
+    target_module_completed = _target_module_completed(goal=goal, modules=modules)
+    learning_goal_completed = all_modules_completed and target_module_completed
+
+    if track is not None:
+        completed_count = sum(1 for item in modules if item.status == "completed")
+        track.progress_percent = int(round((completed_count / max(1, len(modules))) * 100))
+        track.status = "completed" if learning_goal_completed else "active"
+
+    if goal is not None and goal.status not in {"archived", "cancelled"}:
+        if learning_goal_completed:
+            goal.status = "completed"
+            goal.completed_at = goal.completed_at or now
+        else:
+            goal.status = "in_progress"
+            goal.completed_at = None
+
+    remediation_phase: str | None = None
+    remediation_reason: str | None = None
+    if workspace is not None:
+        workspace_metadata = dict(workspace.metadata_json or {})
+        workspace_metadata["posttest_eligible"] = False
+        workspace_metadata["phase_transition_pending"] = False
+        workspace_metadata["posttest_outcome"] = {
+            "assessment_session_id": str(assessment.id),
+            "passed": passed,
+            "finalized_at": now.isoformat(),
+        }
+        if passed:
+            workspace.status = "completed"
+            workspace_metadata = _update_posttest_trigger(
+                workspace_metadata,
+                status="completed",
+                passed=True,
+            )
+        else:
+            workspace.status = "active"
+            remediation_phase, remediation_reason = _remediation_destination(node_result)
+            workspace_metadata = _route_workspace_to_remediation(
+                workspace_metadata,
+                phase=remediation_phase,
+                reason=remediation_reason,
+                assessment_id=assessment.id,
+                now=now,
+                node_result=node_result,
+            )
+            workspace_metadata = _update_posttest_trigger(
+                workspace_metadata,
+                status="needs_remediation",
+                passed=False,
+            )
+        workspace.metadata_json = workspace_metadata
+        workspace.updated_at = now
+
+    progression = PosttestProgressionRead(
+        passed=passed,
+        track_id=track.id if track is not None else track_id,
+        track_status=track.status if track is not None else None,
+        track_progress_percent=track.progress_percent if track is not None else None,
+        module_id=module.id if module is not None else module_id,
+        module_status=module.status if module is not None else None,
+        next_module_id=next_module.id if next_module is not None else None,
+        next_module_status=next_module.status if next_module is not None else None,
+        workspace_session_id=workspace.id if workspace is not None else workspace_id,
+        workspace_status=workspace.status if workspace is not None else None,
+        goal_status=goal.status if goal is not None else None,
+        remediation_phase=remediation_phase,
+        remediation_reason=remediation_reason,
+    )
+    if workspace is not None:
+        workspace.metadata_json = {
+            **dict(workspace.metadata_json or {}),
+            "posttest_progression": progression.model_dump(mode="json"),
+        }
+    return progression
+
+
+def _next_track_module(
+    modules: list[TrackModule],
+    *,
+    module: TrackModule | None,
+) -> TrackModule | None:
+    if module is None:
+        return None
+    for index, candidate in enumerate(modules):
+        if candidate.id == module.id and index + 1 < len(modules):
+            return modules[index + 1]
+    return None
+
+
+def _target_module_completed(
+    *,
+    goal: LearningGoal | None,
+    modules: list[TrackModule],
+) -> bool:
+    if goal is None or goal.target_concept_id is None:
+        return False
+    return any(
+        module.concept_id == goal.target_concept_id and module.status == "completed"
+        for module in modules
+    )
+
+
+def _remediation_destination(node_result: dict[str, Any]) -> tuple[str, str]:
+    attempts = node_result.get("attempts") if isinstance(node_result.get("attempts"), list) else []
+    signals: list[str] = []
+    for attempt in attempts:
+        if not isinstance(attempt, dict):
+            continue
+        for key in ("diagnostic_signal", "reasoning_signal", "misconception_status"):
+            value = str(attempt.get(key) or "").strip().lower()
+            if value:
+                signals.append(value)
+        evidence_tags = attempt.get("evidence_tags")
+        if isinstance(evidence_tags, list):
+            signals.extend(str(tag).strip().lower() for tag in evidence_tags if str(tag).strip())
+
+    misconception_tokens = (
+        "misconception",
+        "wrong_method",
+        "invalid_method",
+        "method_invalid",
+        "omitted_inner",
+        "still_active",
+    )
+    if any(token in signal for signal in signals for token in misconception_tokens):
+        return "explore", "posttest_misconception_still_active"
+    return "elaborate", "posttest_transfer_needs_practice"
+
+
+def _route_workspace_to_remediation(
+    metadata: dict[str, Any],
+    *,
+    phase: str,
+    reason: str,
+    assessment_id: UUID,
+    now: datetime,
+    node_result: dict[str, Any],
+) -> dict[str, Any]:
+    routed = dict(metadata)
+    now_iso = now.isoformat()
+    history = [dict(item) for item in routed.get("phase_history", []) if isinstance(item, dict)]
+    if not history or str(history[-1].get("phase") or "") != phase:
+        if history:
+            history[-1]["exited_at"] = history[-1].get("exited_at") or now_iso
+        history.append(
+            {
+                "phase": phase,
+                "entered_at": now_iso,
+                "exited_at": None,
+                "turn_count": 0,
+            }
+        )
+    else:
+        history[-1]["exited_at"] = None
+    visited = [str(item) for item in routed.get("visited_5e_phases", []) if str(item)]
+    if phase not in visited:
+        visited.append(phase)
+    routed.update(
+        {
+            "current_phase": phase,
+            "phase_history": history,
+            "visited_5e_phases": visited,
+            "posttest_remediation": {
+                "assessment_session_id": str(assessment_id),
+                "phase": phase,
+                "reason": reason,
+                "weak_question_types": _weak_question_types(node_result),
+                "routed_at": now_iso,
+            },
+        }
+    )
+    return routed
+
+
+def _update_posttest_trigger(
+    metadata: dict[str, Any],
+    *,
+    status: str,
+    passed: bool,
+) -> dict[str, Any]:
+    updated = dict(metadata)
+    trigger = updated.get("posttest_trigger")
+    if isinstance(trigger, dict):
+        updated["posttest_trigger"] = {
+            **trigger,
+            "status": status,
+            "passed": passed,
+        }
+    return updated
+
+
+def _weak_question_types(node_result: dict[str, Any]) -> list[str]:
+    attempts = node_result.get("attempts") if isinstance(node_result.get("attempts"), list) else []
+    return list(
+        dict.fromkeys(
+            str(item.get("question_type") or "").strip()
+            for item in attempts
+            if isinstance(item, dict)
+            and item.get("is_correct") is False
+            and str(item.get("question_type") or "").strip()
+        )
+    )
+
+
+def _uuid_value(value: object) -> UUID | None:
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _workspace_learning_summary(
@@ -844,6 +1169,7 @@ def _active_posttest_for_goal(
     user: UserAccount,
     goal_id: UUID,
     workspace_session_id: UUID | None,
+    module_id: UUID | None,
 ) -> AssessmentSession | None:
     statement = (
         select(AssessmentSession)
@@ -857,9 +1183,16 @@ def _active_posttest_for_goal(
         .order_by(AssessmentSession.created_at.desc())
     )
     for assessment in session.scalars(statement):
-        if workspace_session_id is None:
-            return assessment
-        if str((assessment.metadata_json or {}).get("workspace_session_id") or "") == str(workspace_session_id):
+        metadata = assessment.metadata_json or {}
+        if workspace_session_id is not None:
+            if str(metadata.get("workspace_session_id") or "") == str(workspace_session_id):
+                return assessment
+            continue
+        if module_id is not None:
+            if str(metadata.get("module_id") or "") == str(module_id):
+                return assessment
+            continue
+        if workspace_session_id is None and module_id is None:
             return assessment
     return None
 

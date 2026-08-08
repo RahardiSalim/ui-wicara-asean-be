@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -32,7 +34,7 @@ def _allow_dev_assessment_generation_fallback(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("WICARA_ASSESSMENT_DEV_FALLBACK_QUESTIONS", "1")
 
 
-def test_resolve_does_not_create_goal_and_confirm_enforces_target_lock(client):
+def test_resolve_is_read_only_and_confirm_allows_repeated_targets(client):
     _override_account(client)
 
     resolve_response = client.post(
@@ -76,11 +78,22 @@ def test_resolve_does_not_create_goal_and_confirm_enforces_target_lock(client):
         json={"raw_query": "belajar perkalian lagi", "subject_code": "math"},
     )
     assert third.status_code == 200
-    conflict = client.post(
+    repeated_target = client.post(
         f"/api/v1/learning-goals/resolve/{third.json()['resolution_id']}/confirm"
     )
-    assert conflict.status_code == 409
-    assert conflict.json()["detail"]["error"] == "ACTIVE_LEARNING_GOAL_EXISTS"
+    assert repeated_target.status_code == 200
+
+    with _session_for_client(client) as session:
+        active_goals = list(
+            session.scalars(
+                select(LearningGoal).where(
+                    LearningGoal.user_id == ACCOUNT_ID,
+                    LearningGoal.status == "confirmed",
+                )
+            )
+        )
+        assert len(active_goals) == 3
+        assert len({goal.target_concept_id for goal in active_goals}) == 2
 
 
 def test_resolve_tolerates_null_llm_confidence(client, monkeypatch):
@@ -179,7 +192,7 @@ def test_resolve_allows_foundational_node_for_higher_grade_user(client):
     assert "fondasi" in payload["suggested_concept"]["level_note"]
 
 
-def test_pretest_start_is_idempotent_and_generates_fresh_target_question(client):
+def test_pretest_start_is_idempotent_and_generates_fresh_target_node_set(client):
     _override_account(client)
     learning_goal_id = _confirmed_goal_id(client)
 
@@ -201,14 +214,63 @@ def test_pretest_start_is_idempotent_and_generates_fresh_target_question(client)
     with _session_for_client(client) as session:
         questions = first.json()["decision_state"]["generated_questions"]
         target_code = first.json()["target_concept"]["concept_code"]
-        assert set(questions[target_code]) == {"medium"}
+        assert set(questions[target_code]) == {"easy", "medium", "hard"}
         assert questions[target_code]["medium"] == first.json()["current_question"]["id"]
         stored_question = session.get(AssessmentQuestion, UUID(first.json()["current_question"]["id"]))
         assert stored_question is not None
         assert stored_question.metadata_json["non_reusable"] is True
 
 
-def test_answers_generate_fresh_next_questions_and_reject_duplicate(client):
+def test_pretest_start_falls_back_when_ai_is_unavailable(client, monkeypatch):
+    _override_account(client)
+    monkeypatch.delenv("WICARA_ASSESSMENT_DEV_FALLBACK_QUESTIONS")
+    monkeypatch.setattr(
+        "app.modules.pretests.generation_service.get_ai_settings",
+        lambda: SimpleNamespace(openrouter_api_key=""),
+    )
+
+    response = client.post(
+        "/api/v1/pretests/start",
+        json={"learning_goal_id": _confirmed_goal_id(client)},
+    )
+
+    assert response.status_code == 200
+    with _session_for_client(client) as session:
+        question = session.get(AssessmentQuestion, UUID(response.json()["current_question"]["id"]))
+        assert question is not None
+        assert question.generation_source == "fallback_generated"
+
+
+def test_pretest_start_falls_back_after_ai_generation_timeout(client, monkeypatch):
+    _override_account(client)
+    monkeypatch.delenv("WICARA_ASSESSMENT_DEV_FALLBACK_QUESTIONS")
+    monkeypatch.setenv("WICARA_PRETEST_LLM_TIMEOUT_SECONDS", "1")
+    monkeypatch.setattr(
+        "app.modules.pretests.generation_service.get_ai_settings",
+        lambda: SimpleNamespace(openrouter_api_key="test-key", ai_request_timeout_seconds=30.0),
+    )
+
+    async def slow_generate(**_kwargs):
+        await asyncio.sleep(2)
+
+    monkeypatch.setattr(
+        "app.modules.pretests.generation_service.ai_client.generate",
+        slow_generate,
+    )
+
+    response = client.post(
+        "/api/v1/pretests/start",
+        json={"learning_goal_id": _confirmed_goal_id(client)},
+    )
+
+    assert response.status_code == 200
+    with _session_for_client(client) as session:
+        question = session.get(AssessmentQuestion, UUID(response.json()["current_question"]["id"]))
+        assert question is not None
+        assert question.generation_source == "fallback_generated"
+
+
+def test_answers_reuse_node_set_generate_prerequisite_set_and_reject_duplicate(client):
     _override_account(client)
     learning_goal_id = _confirmed_goal_id(client)
     start = client.post("/api/v1/pretests/start", json={"learning_goal_id": learning_goal_id})
@@ -255,8 +317,19 @@ def test_answers_generate_fresh_next_questions_and_reject_duplicate(client):
 
     with _session_for_client(client) as session:
         questions = list(session.scalars(select(AssessmentQuestion).where(AssessmentQuestion.session_id == UUID(payload["session_id"]))))
-        assert len(questions) == 3
+        assert len(questions) == 6
         assert all(question.metadata_json.get("non_reusable") is True for question in questions)
+        difficulties_by_concept: dict[str, set[str]] = {}
+        for stored_question in questions:
+            concept_code = str(stored_question.metadata_json["concept_code"])
+            difficulties_by_concept.setdefault(concept_code, set()).add(
+                stored_question.difficulty_label.lower()
+            )
+        assert len(difficulties_by_concept) == 2
+        assert all(
+            difficulties == {"easy", "medium", "hard"}
+            for difficulties in difficulties_by_concept.values()
+        )
 
 
 def test_finalize_and_path_selection_create_track(client):
@@ -314,6 +387,38 @@ def test_finalize_and_path_selection_create_track(client):
         assert session.scalar(select(TrackModule).where(TrackModule.track_id == goal.track.id)) is not None
 
 
+def test_target_hard_wrong_probes_prerequisite_before_finalizing(client):
+    _override_account(client)
+    learning_goal_id = _confirmed_goal_id(client)
+    start = client.post("/api/v1/pretests/start", json={"learning_goal_id": learning_goal_id})
+    session_id = start.json()["session_id"]
+    medium_question = start.json()["current_question"]
+    medium_correct = next(option for option in medium_question["options"] if option["label"] == "B")
+
+    hard_response = client.post(
+        f"/api/v1/pretests/{session_id}/answers",
+        json={"question_id": medium_question["id"], "selected_option_id": medium_correct["id"]},
+    )
+    hard_question = hard_response.json()["next_question"]
+    hard_wrong = next(option for option in hard_question["options"] if option["label"] != "B")
+
+    probe_response = client.post(
+        f"/api/v1/pretests/{session_id}/answers",
+        json={"question_id": hard_question["id"], "selected_option_id": hard_wrong["id"]},
+    )
+
+    assert probe_response.status_code == 200
+    payload = probe_response.json()
+    assert payload["next_action"] == {
+        "type": "next_question",
+        "concept_code": payload["next_question"]["concept_code"],
+        "difficulty": "medium",
+        "reason": "enter_prerequisite_node",
+    }
+    assert payload["next_question"]["concept_code"] != medium_question["concept_code"]
+    assert payload["diagnosis"] is None
+
+
 def test_assessment_dashboard_without_pretest_returns_start_state(client):
     _override_account(client)
     assert client.get("/api/v1/home").status_code == 200
@@ -366,7 +471,7 @@ def test_cancel_abandons_active_pretest_and_releases_lock(client):
     assert confirm.status_code == 200
 
 
-def test_posttest_six_of_ten_does_not_pass_even_with_strong_reasoning(client, monkeypatch):
+def test_posttest_six_of_ten_does_not_pass_with_unverified_written_evidence(client, monkeypatch):
     monkeypatch.setenv("WICARA_PRETEST_LLM_EVALUATION", "0")
     _override_account(client)
     learning_goal_id, concept_id, concept_code = _goal_with_posttest_node(client)
@@ -397,7 +502,7 @@ def test_posttest_six_of_ten_does_not_pass_even_with_strong_reasoning(client, mo
     assert last["completed"] is True
     assert last["is_correct"] is False
     assert last["evaluation"]["is_correct"] is False
-    assert last["evaluation"]["diagnostic_signal"] == "possible_careless_mistake"
+    assert last["evaluation"]["diagnostic_signal"] == "concept_gap_likely"
     assert last["node_result"]["answer_percent"] == 60
     assert last["node_result"]["passed"] is False
 

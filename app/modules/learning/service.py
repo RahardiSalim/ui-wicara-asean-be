@@ -795,8 +795,10 @@ def update_track_module_state(
     status: str,
 ) -> TrackModuleStateUpdateResponse | None:
     normalized_status = status.strip().lower()
-    if normalized_status not in {"locked", "ready", "active", "completed"}:
-        raise ValueError("Module status must be locked, ready, active, or completed.")
+    if normalized_status != "active":
+        raise ValueError(
+            "Learners may only activate an eligible module; completion is assessment-owned."
+        )
     track = session.scalar(
         select(LearningTrack)
         .where(LearningTrack.id == track_id, LearningTrack.user_id == user.id)
@@ -807,21 +809,12 @@ def update_track_module_state(
     module = next((item for item in track.modules if item.id == module_id), None)
     if module is None:
         return None
-    module.status = normalized_status
-    if normalized_status == "active":
-        track.status = "active"
-    if normalized_status == "completed":
-        modules = sorted(track.modules, key=lambda item: item.sort_order)
-        completed_count = len([item for item in modules if item.status == "completed"])
-        track.progress_percent = int(round((completed_count / max(1, len(modules))) * 100))
-        next_module = next(
-            (item for item in modules if item.sort_order > module.sort_order and item.status == "locked"),
-            None,
-        )
-        if next_module is not None:
-            next_module.status = "ready"
-        if completed_count == len(modules):
-            track.status = "completed"
+    if module.status == "locked":
+        raise ValueError("Locked modules cannot be activated before prerequisites pass.")
+    if module.status == "completed":
+        raise ValueError("Completed modules cannot be mutated through learner state API.")
+    module.status = "active"
+    track.status = "active"
     session.commit()
     session.refresh(track)
     return TrackModuleStateUpdateResponse(track=track_to_schema(track))

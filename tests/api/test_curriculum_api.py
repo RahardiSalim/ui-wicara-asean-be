@@ -23,6 +23,8 @@ def test_get_subjects_returns_seeded_subject_catalog(client, seeded_curriculum):
     payload = response.json()
     assert [subject["code"] for subject in payload["items"]] == [
         "matematika",
+        "ipas",
+        "ipa",
         "fisika",
         "kimia",
         "biologi",
@@ -71,7 +73,7 @@ def test_get_knowledge_map_returns_mobile_ready_kurikulum_graph(client, seeded_c
     payload = response.json()
 
     assert payload["subject"]["code"] == "matematika"
-    assert payload["graph"]["title"] == "Kurikulum Merdeka Matematika Knowledge Map"
+    assert payload["graph"]["title"] == "Peta Pengetahuan Matematika"
     assert payload["graph"]["top_down"] is True
     assert payload["groups"][0] == {"label": "Fase A / Aljabar", "x": 28.0}
 
@@ -110,17 +112,48 @@ def test_get_knowledge_map_localizes_english_graph_fields(client, seeded_curricu
     nodes_by_id = {node["id"]: node for node in payload["nodes"]}
 
     assert payload["subject"]["name"] == "Mathematics"
-    assert payload["graph"]["title"] == "Kurikulum Merdeka Mathematics Knowledge Map"
+    assert payload["graph"]["title"] == "Mathematics Knowledge Map"
     assert payload["groups"][0] == {"label": "Phase A / Algebra", "x": 28.0}
     assert nodes_by_id["km_d_matematika_bilangan_bulat"]["label"] == "Integers"
     assert (
         nodes_by_id["km_d_matematika_bilangan_bulat"]["description"]
-        == "Build understanding of Integers within Numbers for Phase D / SMP/MTs / grades 7-9."
+        == "Build understanding of Integers within Numbers."
     )
     assert nodes_by_id["km_d_matematika_bilangan_desimal"]["label"] == (
         "Decimal numbers"
     )
     assert nodes_by_id["km_d_matematika_bilangan_bulat"]["metadata"]["locale"] == "en"
+
+
+def test_unified_math_graph_exposes_chain_rule_route_in_english(
+    client,
+    seeded_curriculum,
+):
+    response = client.get(
+        "/api/v1/knowledge-map"
+        "?subject=matematika&locale=en"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    nodes = {node["id"]: node for node in payload["nodes"]}
+    edges = {(edge["from"], edge["to"]) for edge in payload["edges"]}
+
+    algebraic = "km_f_matematika_tingkat_lanjut_turunan_secara_aljabar"
+    chain_rule = "km_f_matematika_tingkat_lanjut_aturan_rantai"
+    trig = "km_f_matematika_tingkat_lanjut_turunan_fungsi_trigonometri"
+    curve_sketch = (
+        "km_f_matematika_tingkat_lanjut_sketsa_kurva_menggunakan_turunan"
+    )
+
+    assert payload["subject"]["name"] == "Mathematics"
+    assert payload["graph"]["title"] == "Mathematics Knowledge Map"
+    assert nodes[chain_rule]["label"] == "Chain rule"
+    assert nodes[trig]["label"] == "Derivatives of trigonometric functions"
+    assert nodes[curve_sketch]["label"] == "Curve sketching using derivatives"
+    assert (algebraic, chain_rule) in edges
+    assert (chain_rule, trig) in edges
+    assert (trig, curve_sketch) in edges
 
 
 def test_get_knowledge_map_rejects_unsupported_locale(client, seeded_curriculum):
@@ -131,6 +164,18 @@ def test_get_knowledge_map_rejects_unsupported_locale(client, seeded_curriculum)
 
 def test_get_knowledge_map_supports_math_alias(client, seeded_curriculum):
     response = client.get("/api/v1/knowledge-map?subject=math")
+
+    assert response.status_code == 200
+    assert response.json()["subject"]["code"] == "matematika"
+
+
+def test_get_knowledge_map_supports_legacy_advanced_math_alias(
+    client,
+    seeded_curriculum,
+):
+    response = client.get(
+        "/api/v1/knowledge-map?subject=matematika_tingkat_lanjut"
+    )
 
     assert response.status_code == 200
     assert response.json()["subject"]["code"] == "matematika"

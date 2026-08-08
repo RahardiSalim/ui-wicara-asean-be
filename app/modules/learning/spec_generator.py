@@ -364,6 +364,21 @@ def _build_context_snapshot(
             latest_learner_text = turn["text"]
             break
 
+    learning_context = metadata.get("learning_context")
+    learning_context = learning_context if isinstance(learning_context, dict) else {}
+    current_module = learning_context.get("current_module")
+    current_module = current_module if isinstance(current_module, dict) else {}
+    original_target = learning_context.get("original_target")
+    original_target = original_target if isinstance(original_target, dict) else {}
+    diagnosis = learning_context.get("diagnosis")
+    diagnosis = diagnosis if isinstance(diagnosis, dict) else {}
+    diagnosis_evidence = diagnosis.get("evidence")
+    diagnosis_evidence = (
+        diagnosis_evidence if isinstance(diagnosis_evidence, dict) else {}
+    )
+    evidence_summary = diagnosis_evidence.get("summary")
+    evidence_summary = evidence_summary if isinstance(evidence_summary, dict) else {}
+
     return {
         "workspace_id": str(workspace.id),
         "current_topic": (workspace.current_topic or "").strip(),
@@ -373,6 +388,29 @@ def _build_context_snapshot(
         "active_template_id": _jsonable(metadata.get("active_template_id")),
         "active_prerequisites": _jsonable(metadata.get("active_prerequisites")),
         "context_source": _jsonable(metadata.get("context_source")),
+        "current_phase": _jsonable(metadata.get("current_phase")),
+        "hint_level": _jsonable(metadata.get("hint_level")),
+        "module_role": _jsonable(current_module.get("role")),
+        "current_module": {
+            "concept_code": _jsonable(current_module.get("concept_code")),
+            "title": _jsonable(current_module.get("title")),
+        },
+        "original_target": {
+            "concept_code": _jsonable(original_target.get("concept_code")),
+            "title": _jsonable(original_target.get("title")),
+        },
+        "learning_objective": _jsonable(
+            metadata.get("session_goal_concept_description")
+        ),
+        "diagnosis_evidence": {
+            "status": _jsonable(diagnosis_evidence.get("status")),
+            "diagnostic_signals": _jsonable(
+                evidence_summary.get("diagnostic_signals", [])
+            ),
+            "misconception_detected": bool(
+                evidence_summary.get("misconception_detected", False)
+            ),
+        },
         "latest_learner_text": latest_learner_text,
         "recent_turns": recent_turns,
     }

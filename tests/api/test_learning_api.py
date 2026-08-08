@@ -273,7 +273,7 @@ def test_daily_evaluation_preserves_answered_session_when_latest_track_changes(c
     assert preserved_response.json()["session_id"] == first_payload["session_id"]
 
 
-def test_weekly_report_returns_richer_learning_report_payload(client):
+def test_weekly_report_returns_explicit_no_data_payload_for_fresh_user(client):
     _override_account(client)
 
     response = client.get("/api/v1/reports/weekly/latest")
@@ -283,12 +283,9 @@ def test_weekly_report_returns_richer_learning_report_payload(client):
     assert payload["range_label"]
     assert payload["range_start"]
     assert payload["range_end"]
-    assert payload["source"] in {
-        "seeded_mvp",
-        "derived_from_mastery_state",
-        "derived_from_range_assessments_and_mastery",
-        "derived_from_range_assessments_no_baseline",
-    }
+    assert payload["status"] == "no_data"
+    assert payload["source"] == "no_assessment_or_mastery_data"
+    assert payload["score"] == 0
     assert [item["label"] for item in payload["performance_groups"]] == [
         "Overall",
         "Application",
@@ -296,21 +293,13 @@ def test_weekly_report_returns_richer_learning_report_payload(client):
     ]
     assert payload["gap_metrics"]["fixed"]["delta_label"]
     assert payload["gap_metrics"]["remaining"]["delta_label"]
-    assert payload["unlocked_this_week"]["count"] >= 1
-    assert payload["upcoming_recommendations"][0]["action_type"] == "review"
-    assert payload["consistency_summary"]["title"] == "Consistency is compounding."
-    assert payload["data_quality"]["coverage_status"] in {
-        "seeded_baseline",
-        "partial_history",
-        "evidence_backed",
-    }
-    assert payload["data_quality"]["confidence_label"] in {"low", "medium", "high"}
-    assert payload["effort_impact"]["efficiency_label"] in {
-        "no_signal",
-        "steady",
-        "high_leverage",
-        "needs_focus",
-    }
+    assert payload["unlocked_this_week"] == {"count": 0, "concepts": []}
+    assert payload["upcoming_recommendations"] == []
+    assert payload["consistency_summary"]["title"] == "No activity in selected range."
+    assert payload["consistency_summary"]["signal"] == "no_activity"
+    assert payload["data_quality"]["coverage_status"] == "no_data"
+    assert payload["data_quality"]["confidence_label"] == "low"
+    assert payload["effort_impact"]["efficiency_label"] == "no_signal"
     assert len(payload["weekly_timeline"]) == 4
     assert set(payload["weekly_narrative"]) == {"improved", "stagnant", "focus"}
     assert isinstance(payload["concept_movers"], list)
