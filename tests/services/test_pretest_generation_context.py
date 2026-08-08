@@ -54,6 +54,9 @@ def test_fresh_prompt_uses_curriculum_evidence_misconceptions_and_guidance():
     assert "- hard: Verifikasi kandidat titik belok." in prompt
     assert '"concept_code": "chain.rule"' in prompt
     assert "Build skill_trace from the actual steps" in prompt
+    assert "A concept_code may appear at most once" in prompt
+    assert "Incorrect — duplicate concept_code entries" in prompt
+    assert "Correct — merge all steps belonging to that concept" in prompt
     assert "be mutually exclusive" in prompt
     assert "not merely less complete" in prompt
     assert "admits another option is also correct" in prompt

@@ -1029,6 +1029,9 @@ Question quality requirements:
 - Build skill_trace from the actual steps required by the specific generated question.
 - Use only exact concept_code values from Allowed solution-skill catalog.
 - Include a skill only when the expected solution genuinely uses it; never add a skill merely to force adaptive routing.
+- A concept_code may appear at most once within one question's skill_trace.
+- If several solution steps use the same concept, merge those steps into one observable criterion for that concept_code.
+- Never create separate skill_trace entries for the same concept_code merely because their criterion text differs.
 - Order skill_trace by the causal order of the expected solution steps.
 - Each criterion must state observable evidence that distinguishes correct use of that skill from a nearby misconception.
 - The selected answer alone must not be enough to diagnose a skill gap; expected_reasoning must expose the learner's method.
@@ -1050,6 +1053,17 @@ Question quality requirements:
 - Use age-appropriate, curriculum-appropriate language.
 - Use Markdown and LaTeX when useful.
 - Every question must explain why its difficulty label is appropriate in difficulty_reason.
+
+skill_trace uniqueness example for the current target:
+Incorrect — duplicate concept_code entries even though the criteria differ:
+[
+  {{"concept_code": "{concept.code}", "criterion": "Determine the critical points."}},
+  {{"concept_code": "{concept.code}", "criterion": "Determine the increasing intervals."}}
+]
+Correct — merge all steps belonging to that concept into one entry:
+[
+  {{"concept_code": "{concept.code}", "criterion": "Determine the critical points and use derivative signs to identify the increasing intervals."}}
+]
 
 Difficulty rules:
 - Easy: direct recognition or basic one-step application.
