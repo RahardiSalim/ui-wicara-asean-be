@@ -111,12 +111,17 @@ class QuestionValidator:
             if normalized_option_text in option_texts:
                 raise QuestionValidationError("Generated option texts must be unique.")
             option_texts.add(normalized_option_text)
-            if question_type != "strategy_comparison" and _looks_like_meta_strategy_option(option_text):
-                raise QuestionValidationError("Generated options must be concrete answers, not test-taking strategies.")
             if option.get("is_correct") is True:
                 correct_count += 1
-            if not str(rationales.get(label) or "").strip():
+            rationale = str(rationales.get(label) or "").strip()
+            if not rationale:
                 raise QuestionValidationError("Generated distractor_rationales must cover every option label.")
+            if option.get("is_correct") is not True and _rationale_admits_option_is_correct(
+                rationale
+            ):
+                raise QuestionValidationError(
+                    "Every distractor must be false; its rationale cannot admit that the option is also correct."
+                )
         if correct_count != 1:
             raise QuestionValidationError("Generated question must have exactly 1 correct option.")
 
@@ -136,27 +141,21 @@ def _looks_like_vague_theory_check(prompt: str) -> bool:
     return any(fragment in normalized for fragment in banned_fragments)
 
 
-def _looks_like_meta_strategy_option(option_text: str) -> bool:
-    normalized = option_text.lower()
-    banned_fragments = (
-        "menebak dari kata kunci",
-        "pilih data relevan",
-        "rumus paling panjang",
-        "abaikan satuan",
-        "guess from keywords",
-        "choose relevant data",
-        "longest formula",
-        "ignore units",
-        "strategi terbaik",
-        "langkah pertama",
-        "gunakan aturan",
-        "terapkan aturan",
-        "memilih rumus",
-        "pilih rumus",
-        "apply the rule",
-        "select the formula",
+def _rationale_admits_option_is_correct(rationale: str) -> bool:
+    normalized = " ".join(rationale.lower().split())
+    admitted_correctness = (
+        "pernyataan ini benar",
+        "opsi ini benar",
+        "jawaban ini benar",
+        "benar secara matematis",
+        "juga benar",
+        "this statement is correct",
+        "this option is correct",
+        "this answer is correct",
+        "mathematically correct",
+        "also correct",
     )
-    return any(fragment in normalized for fragment in banned_fragments)
+    return any(fragment in normalized for fragment in admitted_correctness)
 
 
 def _normalize_option_text(option_text: str) -> str:
