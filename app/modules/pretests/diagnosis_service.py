@@ -66,9 +66,9 @@ class PretestDiagnosisService:
             recommended_path=recommended_path,
             stop_reason=stop_reason,
             language=language,
-            official_percent=official["pure_answer_percent"],
         )
         target_mastery_estimate_percent = round(float((target or {}).get("mastery_score") or 0.0) * 100, 2)
+        diagnostic_pass = _diagnostic_pass(nodes)
         diagnosis = {
             "language": language,
             "summary": _summary(target=target, recommended_path=recommended_path, language=language),
@@ -81,12 +81,15 @@ class PretestDiagnosisService:
             "pure_answer_total": official["answered_count"],
             "pure_answer_percent": official["pure_answer_percent"],
             "official_scaled_score": official["official_scaled_score"],
-            "official_pass": official["official_pass"],
-            "official_metric_source": "official_mcq",
+            "answer_only_pass": official["official_pass"],
+            "answer_metric_source": "official_mcq",
+            "diagnostic_pass": diagnostic_pass,
+            "official_pass": diagnostic_pass,
+            "official_metric_source": "adaptive_pretest_diagnosis",
             "target_mastery_estimate_percent": target_mastery_estimate_percent,
             "adaptive_mastery_estimate_percent": analysis["adaptive_mastery_estimate_percent"],
-            "confidence_percent": 0,
-            "overall_mastery_percent": round(official["pure_answer_percent"]),
+            "confidence_percent": round(float((target or {}).get("confidence") or 0.0) * 100),
+            "overall_mastery_percent": analysis["adaptive_mastery_estimate_percent"],
             "recommended_path": recommended_path,
             "path_options": PATH_OPTIONS,
             "evidence_available": evidence_report["evidence_available"],
@@ -546,13 +549,16 @@ def _diagnosis_nodes(
                 "pure_answer_total": metric_summary["answered_count"],
                 "pure_answer_percent": metric_summary["pure_answer_percent"],
                 "official_scaled_score": metric_summary["official_scaled_score"],
-                "official_pass": metric_summary["official_pass"],
+                "answer_only_pass": metric_summary["official_pass"],
+                "diagnostic_pass": status == "ready",
+                "official_pass": status == "ready",
                 "answer_percent": metric_summary["answer_percent"],
                 "evidence_percent": metric_summary["evidence_percent"],
                 "score_percent": metric_summary["score_percent"],
                 "mastery_estimate_percent": metric_summary["mastery_estimate_percent"],
                 "confidence_percent": metric_summary["confidence_percent"],
-                "metric_source": "official_mcq",
+                "metric_source": "adaptive_pretest_diagnosis",
+                "answer_metric_source": "official_mcq",
                 "diagnostic_metric_source": "adaptive_pretest_diagnosis",
             }
         )
@@ -648,6 +654,11 @@ def _evidence_summary(attempts: object) -> dict[str, Any]:
         for item in rows
         if str(item.get("diagnostic_signal") or "").strip()
     ]
+    reasoning_signals = [
+        str(item.get("reasoning_signal") or "")
+        for item in rows
+        if str(item.get("reasoning_signal") or "").strip()
+    ]
     source_attempt_ids = [
         str(item.get("attempt_id"))
         for item in rows
@@ -687,7 +698,10 @@ def _evidence_summary(attempts: object) -> dict[str, Any]:
         "diagnostic_signals": list(dict.fromkeys(signals)),
         "answered_difficulties": list(dict.fromkeys(str(item.get("difficulty")) for item in rows)),
         "careless_mistake_possible": "possible_careless_mistake" in signals,
-        "misconception_detected": bool({"misconception", "misconception_detected"} & set(signals)),
+        "misconception_detected": bool(
+            {"misconception", "misconception_detected"}
+            & (set(signals) | set(reasoning_signals))
+        ),
         "source_attempt_ids": list(dict.fromkeys(source_attempt_ids)),
         "evidence_tags": list(dict.fromkeys(evidence_tags)),
         "method_reasons": list(dict.fromkeys(method_reasons)),
@@ -758,6 +772,18 @@ def _official_summary(nodes: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _diagnostic_pass(nodes: list[dict[str, Any]]) -> bool:
+    target = next((node for node in nodes if node.get("role") == "target"), None)
+    if not target or target.get("status") != "ready":
+        return False
+    blocking_statuses = {"gap", "fragile", "partial", "probably_gap"}
+    return not any(
+        node.get("role") == "prerequisite"
+        and node.get("status") in blocking_statuses
+        for node in nodes
+    )
+
+
 def _attempt_score_value(item: dict[str, Any], *, key: str, fallback: float) -> float:
     try:
         return max(0.0, min(1.0, float(item.get(key, fallback))))
@@ -801,7 +827,6 @@ def _analysis_report(
     recommended_path: str,
     stop_reason: str,
     language: str,
-    official_percent: float,
 ) -> dict[str, Any]:
     is_id = normalize_language_code(language) == "id"
     tested_nodes = [node for node in nodes if node.get("status") != "not_tested"]
@@ -868,13 +893,14 @@ def _analysis_report(
         float(node.get("mastery_score") or 0.0)
         for node in tested_nodes
     ]
+    adaptive_mastery_percent = round(
+        (sum(mastery_values) / max(1, len(mastery_values))) * 100
+    )
     return {
         "target_status": target.get("status") if target else "unknown",
         "stop_reason": stop_reason,
-        "overall_mastery_percent": round(float(official_percent or 0.0)),
-        "adaptive_mastery_estimate_percent": round(
-            (sum(mastery_values) / max(1, len(mastery_values))) * 100
-        ),
+        "overall_mastery_percent": adaptive_mastery_percent,
+        "adaptive_mastery_estimate_percent": adaptive_mastery_percent,
         "strengths": strengths,
         "gaps": gaps,
         "evidence_notes": evidence_notes,

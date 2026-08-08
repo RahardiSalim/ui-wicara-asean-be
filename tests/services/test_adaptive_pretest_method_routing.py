@@ -145,7 +145,11 @@ def test_correct_mcq_with_invalid_method_routes_to_synthetic_graph_prerequisite(
     assert finalized is not None
     diagnosis = finalized.diagnosis
     assert diagnosis["pure_answer_percent"] == 100.0
-    assert diagnosis["official_metric_source"] == "official_mcq"
+    assert diagnosis["answer_only_pass"] is True
+    assert diagnosis["diagnostic_pass"] is False
+    assert diagnosis["official_pass"] is False
+    assert diagnosis["official_metric_source"] == "adaptive_pretest_diagnosis"
+    assert diagnosis["overall_mastery_percent"] < 100
     assert diagnosis["recommended_path"] == "target_from_basics"
     assert diagnosis["evidence_available"] is True
     assert diagnosis["evidence_analysis_mode"] == "upfront_adaptive_routing"
@@ -158,6 +162,7 @@ def test_correct_mcq_with_invalid_method_routes_to_synthetic_graph_prerequisite(
         "unsupported_transformation"
     ]
     assert target["evidence_summary"]["method_invalid_detected"] is True
+    assert target["evidence_summary"]["misconception_detected"] is True
 
 
 def test_out_of_scope_suspect_is_rejected_before_graph_routing(db_session):
