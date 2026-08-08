@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_session
 from app.modules.accounts.dependencies import get_current_account
 from app.modules.accounts.models import UserAccount
 from app.modules.evidence.canvas_upload_service import CanvasUploadService
+from app.modules.evidence.canvas_upload_service import MAX_EVIDENCE_IMAGE_BYTES
 from app.modules.evidence.schemas import ImageAssetCreateRequest
 
 router = APIRouter()
@@ -20,3 +21,26 @@ def create_image_asset(
     user: UserAccount = Depends(get_current_account),
 ):
     return service.create_image_asset(session, user=user, payload=payload)
+
+
+@router.post("/evidence/image-assets/upload")
+async def upload_image_asset(
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+    user: UserAccount = Depends(get_current_account),
+):
+    content = await file.read(MAX_EVIDENCE_IMAGE_BYTES + 1)
+    try:
+        return service.create_uploaded_image_asset(
+            session,
+            user=user,
+            content=content,
+            mime_type=file.content_type or "application/octet-stream",
+        )
+    except ValueError as exc:
+        code = (
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            if len(content) > MAX_EVIDENCE_IMAGE_BYTES
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=code, detail=str(exc)) from exc

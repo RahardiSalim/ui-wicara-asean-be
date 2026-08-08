@@ -445,12 +445,19 @@ def _merge_state_attempt(
 def _evidence_diagnostic_summary(*, rows: list[dict[str, Any]], language: str) -> str:
     reasoning_count = sum(1 for row in rows if str(row.get("typed_reasoning") or "").strip())
     canvas_count = sum(1 for row in rows if row.get("canvas_status"))
+    vision_count = sum(
+        1 for row in rows if row.get("canvas_status") == "vision_evaluated"
+    )
     if normalize_language_code(language) == "id":
+        if vision_count:
+            return f"{vision_count} foto/coretan dianalisis sebagai langkah pengerjaan; {reasoning_count} penjelasan tertulis dianalisis."
         if reasoning_count and canvas_count:
             return f"{reasoning_count} penjelasan langkah dianalisis; {canvas_count} canvas disimpan tetapi tidak memengaruhi skor resmi."
         if reasoning_count:
             return f"{reasoning_count} penjelasan langkah dianalisis sebagai insight diagnostik."
         return f"{canvas_count} canvas disimpan tetapi belum dianalisis visual dan tidak memengaruhi skor resmi."
+    if vision_count:
+        return f"{vision_count} work images were vision-evaluated as solution steps; {reasoning_count} written explanations were analyzed."
     if reasoning_count and canvas_count:
         return f"{reasoning_count} written explanations were analyzed; {canvas_count} canvas submissions were stored but did not affect the official score."
     if reasoning_count:
@@ -692,6 +699,11 @@ def _evidence_summary(attempts: object) -> dict[str, Any]:
         "has_evidence": bool(reasoning_rows or canvas_rows),
         "reasoning_count": len(reasoning_rows),
         "canvas_count": len(canvas_rows),
+        "vision_canvas_count": sum(
+            1
+            for item in canvas_rows
+            if item.get("canvas_status") == "vision_evaluated"
+        ),
         "avg_evidence_score": round(sum(evidence_values) / max(1, len(evidence_values)), 4),
         "avg_reasoning_score": reasoning_avg,
         "reasoning_quality": _reasoning_quality(reasoning_avg),
@@ -869,6 +881,12 @@ def _analysis_report(
                 f"{title}: jawaban MCQ salah, tapi reasoning cukup kuat; mungkin careless."
                 if is_id
                 else f"{title}: the MCQ answer was wrong, but the reasoning was fairly strong; this may be a careless choice."
+            )
+        elif summary.get("vision_canvas_count"):
+            evidence_notes.append(
+                f"{title}: foto/coretan dianalisis sebagai langkah pengerjaan oleh vision model."
+                if is_id
+                else f"{title}: the work image was analyzed as solution steps by the vision model."
             )
         elif summary.get("reasoning_quality") == "not_provided":
             evidence_notes.append(
