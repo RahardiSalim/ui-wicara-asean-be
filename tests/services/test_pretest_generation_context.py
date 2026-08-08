@@ -53,6 +53,8 @@ def test_fresh_prompt_uses_curriculum_evidence_misconceptions_and_guidance():
     assert "be mutually exclusive" in prompt
     assert "not merely less complete" in prompt
     assert "admits another option is also correct" in prompt
+    assert "same answer dimension" in prompt
+    assert "missing factor" in prompt
     assert "finalizes immediately" not in prompt
     assert "Prerequisite checks happen only" not in prompt
 

@@ -24,7 +24,7 @@ from app.modules.pretests.question_validator import QuestionValidator, VALID_QUE
 from app.modules.review.flagger import enqueue_flag
 
 PACK_PROMPT_VERSION = "adaptive_node_pack_v6_flexible_subject_tasks"
-FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v7_verified_answers"
+FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v8_aligned_options"
 DEFAULT_PACK_GENERATION_MAX_ATTEMPTS = 4
 DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 20.0
 
@@ -1044,6 +1044,7 @@ Question quality requirements:
 - Exactly one correct option per question.
 - Provide 4 answer options.
 - All four options must answer the same specific task and be mutually exclusive.
+- Keep the stem and every option in the same answer dimension: if the stem asks for a missing factor, options must be factors only; if options are complete corrected results, the stem must ask for the complete corrected result.
 - Every distractor must be mathematically or factually false, not merely less complete than the correct option.
 - Distractors must be plausible and reveal misconceptions.
 - Provide distractor_rationales for A, B, C, and D.
