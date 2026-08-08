@@ -65,6 +65,10 @@ class QuestionValidator:
         question_type = str(question.get("question_type") or "").strip().lower()
         if question_type not in VALID_QUESTION_TYPES:
             raise QuestionValidationError("Generated question is missing or has unsupported question_type.")
+        if question_type == "error_analysis" and not _has_error_analysis_signal(prompt):
+            raise QuestionValidationError(
+                "Error-analysis questions must show a concrete learner solution or mistake."
+            )
         difficulty_reason = str(question.get("difficulty_reason") or "").strip()
         if not difficulty_reason:
             raise QuestionValidationError("Generated question is missing difficulty_reason.")
@@ -137,11 +141,6 @@ class QuestionValidator:
                 raise QuestionValidationError(
                     "Generated final_answer must exactly match the correct option text."
                 )
-            explanation = _normalize_option_text(str(question.get("explanation") or ""))
-            if _normalize_option_text(final_answer) not in explanation:
-                raise QuestionValidationError(
-                    "Generated explanation must explicitly repeat the verified final answer."
-                )
 
 
 def _looks_like_vague_theory_check(prompt: str) -> bool:
@@ -157,6 +156,36 @@ def _looks_like_vague_theory_check(prompt: str) -> bool:
         "jelaskan konsep",
     )
     return any(fragment in normalized for fragment in banned_fragments)
+
+
+def _has_error_analysis_signal(prompt: str) -> bool:
+    normalized = " ".join(prompt.lower().split())
+    learner_markers = ("siswa", "murid", "learner", "student")
+    work_markers = (
+        "langkah",
+        "solusi",
+        "jawaban",
+        "pengerjaan",
+        "step",
+        "solution",
+        "answer",
+        "work",
+    )
+    error_markers = (
+        "salah",
+        "kesalahan",
+        "keliru",
+        "tidak tepat",
+        "incorrect",
+        "mistake",
+        "error",
+        "wrong",
+    )
+    return (
+        any(marker in normalized for marker in learner_markers)
+        and any(marker in normalized for marker in work_markers)
+        and any(marker in normalized for marker in error_markers)
+    )
 
 
 def _rationale_admits_option_is_correct(rationale: str) -> bool:

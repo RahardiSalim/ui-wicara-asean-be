@@ -95,7 +95,6 @@ def test_prerequisite_probe_schema_excludes_direct_computation():
 
     assert question_schema["properties"]["question_type"]["enum"] == [
         "error_analysis",
-        "multi_step_application",
     ]
     assert "final_answer" in question_schema["required"]
 

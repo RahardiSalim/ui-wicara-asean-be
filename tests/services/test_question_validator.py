@@ -11,7 +11,7 @@ def _question() -> dict[str, object]:
         "concept_code": "math.derivative",
         "difficulty": "hard",
         "question_type": "error_analysis",
-        "prompt": "Seorang siswa menerapkan aturan turunan berikut. Evaluasi kesalahannya.",
+        "prompt": "Seorang siswa menulis langkah solusi yang salah berikut. Evaluasi kesalahannya.",
         "difficulty_reason": "Membutuhkan analisis kesalahan penalaran.",
         "explanation": "Aturan pangkat harus diterapkan pada setiap suku.",
         "expected_reasoning": "Periksa setiap langkah lalu bandingkan hasilnya.",
@@ -58,9 +58,7 @@ def test_distractor_rationale_cannot_admit_another_option_is_correct():
 def test_verified_final_answer_must_match_option_and_explanation():
     question = _question()
     question["final_answer"] = "Gunakan aturan pangkat pada setiap suku."
-    question["explanation"] = (
-        "Aturan pangkat sesuai. Gunakan aturan pangkat pada setiap suku."
-    )
+    question["explanation"] = "Aturan pangkat sesuai untuk bentuk yang diberikan."
 
     QuestionValidator().validate_question(
         concept_code="math.derivative",

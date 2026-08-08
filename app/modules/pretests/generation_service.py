@@ -972,9 +972,9 @@ Pretest-specific rules:
         prerequisite_probe_rules = """
 
 Prerequisite-probe rules:
-- Use error_analysis or multi_step_application, as required by the response schema.
+- Use error_analysis, as required by the response schema.
 - Do not ask only for the final derivative or another direct computation.
-- Present an incomplete or incorrect worked solution and ask for a concrete correction, or combine the prerequisite with another differentiation rule.
+- The stem must show a concrete learner's incomplete or incorrect worked solution and ask for a concrete correction.
 - For chain-rule tasks, the learner must identify or restore the derivative of the inner function.
 """.rstrip()
     if assessment_type == "posttest":
@@ -1049,7 +1049,7 @@ Question quality requirements:
 - Provide distractor_rationales for A, B, C, and D.
 - Each distractor rationale must state concretely why that option is false. If a rationale admits another option is also correct, regenerate the question.
 - Set final_answer to an exact character-for-character copy of the correct option text.
-- End the explanation by explicitly repeating that exact final_answer text.
+- Solve the problem independently before choosing correct_option_id, then make sure the explanation's mathematical conclusion agrees with final_answer.
 - Options should be similar in length and style.
 - Do not use "all of the above" or "none of the above".
 - Do not make the correct answer obvious by wording length or detail.
@@ -1384,7 +1384,7 @@ def _fresh_question_type_choices(
     if node_role == "prerequisite" and all(
         difficulty in {"medium", "hard"} for difficulty in difficulties
     ):
-        return {"error_analysis", "multi_step_application"}
+        return {"error_analysis"}
     return None
 
 
