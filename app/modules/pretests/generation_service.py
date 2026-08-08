@@ -24,7 +24,7 @@ from app.modules.pretests.question_validator import QuestionValidator, VALID_QUE
 from app.modules.review.flagger import enqueue_flag
 
 PACK_PROMPT_VERSION = "adaptive_node_pack_v6_flexible_subject_tasks"
-FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v9_skill_trace"
+FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v10_minimal_contract"
 DEFAULT_PACK_GENERATION_MAX_ATTEMPTS = 4
 DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 20.0
 
@@ -300,13 +300,9 @@ class AdaptivePretestGenerationService:
                 "correct_option_key": _correct_label(payload),
                 "explanation": payload["explanation"],
                 "learner_language": metadata.get("learner_language", "en"),
-                "language": payload.get("language") or metadata.get("learner_language", "en"),
+                "language": metadata.get("learner_language", "en"),
                 "node_role": metadata.get("node_role", ""),
                 "question_type": payload.get("question_type", ""),
-                "difficulty_reason": payload.get("difficulty_reason", ""),
-                "distractor_rationales": payload.get("distractor_rationales", {}),
-                "freshness_note": payload.get("freshness_note", ""),
-                "misconception_tags": payload.get("misconception_tags", []),
                 "skill_trace": payload.get("skill_trace", []),
                 "non_reusable": True,
             },
@@ -727,6 +723,15 @@ class AdaptivePretestGenerationService:
                     "difficulty_sequence": difficulties,
                     "skill_candidates": skill_candidates or [],
                 }
+            except TimeoutError:
+                timeout_seconds = _fresh_generation_timeout_seconds(
+                    assessment_type=assessment_type,
+                    ai_request_timeout_seconds=settings.ai_request_timeout_seconds,
+                )
+                validation_errors.append(
+                    f"attempt {attempt}: generation timed out after {timeout_seconds:g} seconds."
+                )
+                break
             except Exception as exc:
                 validation_errors.append(f"attempt {attempt}: {exc}")
         return None, {
@@ -869,8 +874,6 @@ Each question object must contain:
 - options: exactly 4 options with label, text, is_correct
 - explanation
 - expected_reasoning
-- difficulty_reason
-- distractor_rationales for every option label
 - rubric
 
 Exactly one option must be correct per question.
@@ -1042,17 +1045,13 @@ Question quality requirements:
 - Keep the stem and every option in the same answer dimension: if the stem asks for a missing factor, options must be factors only; if options are complete corrected results, the stem must ask for the complete corrected result.
 - Every distractor must be mathematically or factually false, not merely less complete than the correct option.
 - Distractors must be plausible and reveal misconceptions.
-- Provide distractor_rationales for A, B, C, and D.
-- Each distractor rationale must state concretely why that option is false. If a rationale admits another option is also correct, regenerate the question.
-- Set final_answer to an exact character-for-character copy of the correct option text.
-- Solve the problem independently before choosing correct_option_id, then make sure the explanation's mathematical conclusion agrees with final_answer.
+- Solve the problem independently before choosing correct_option_id, then make sure the explanation agrees with the selected correct option.
 - Options should be similar in length and style.
 - Do not use "all of the above" or "none of the above".
 - Do not make the correct answer obvious by wording length or detail.
 - Avoid trick questions and ambiguous wording.
 - Use age-appropriate, curriculum-appropriate language.
 - Use Markdown and LaTeX when useful.
-- Every question must explain why its difficulty label is appropriate in difficulty_reason.
 
 skill_trace uniqueness example for the current target:
 Incorrect — duplicate concept_code entries even though the criteria differ:
@@ -1077,7 +1076,7 @@ Before returning JSON, internally verify:
 - exactly one correct answer
 - no duplicate questions
 - requested language is followed
-- each question difficulty matches the requested sequence
+- questions are ordered according to the requested difficulty sequence
 - output schema is valid
 - every skill_trace is non-empty and contains only skills genuinely used by that question
 
@@ -1086,10 +1085,7 @@ Return JSON shaped exactly as:
 {{
   "questions": [
     {{
-      "language": "id | en",
-      "concept_code": "{concept.code}",
       "stem": "string",
-      "difficulty": "easy | medium | hard",
       "question_type": "direct_computation | concept_recognition | word_problem | equation_representation | error_analysis | missing_value | strategy_comparison | table_interpretation | multi_step_application | concept_application",
       "options": [
         {{"id": "A", "text": "string"}},
@@ -1098,16 +1094,11 @@ Return JSON shaped exactly as:
         {{"id": "D", "text": "string"}}
       ],
       "correct_option_id": "A",
-      "final_answer": "exact copy of the correct option text",
       "skill_trace": [
         {{"concept_code": "exact code from the allowed catalog", "criterion": "observable solution-step criterion"}}
       ],
       "expected_reasoning": "string",
-      "explanation": "string",
-      "misconception_tags": ["string"],
-      "distractor_rationales": {{"A": "string", "B": "string", "C": "string", "D": "string"}},
-      "difficulty_reason": "string",
-      "freshness_note": "short note explaining how this differs from prior session questions"
+      "explanation": "string"
     }}
   ]
 }}
@@ -1157,23 +1148,13 @@ def _normalize_fresh_question_payload(
         )
     return {
         "concept_code": concept_code,
-        "difficulty": str(payload.get("difficulty") or difficulty).strip().lower(),
-        "language": str(payload.get("language") or "").strip().lower(),
+        "difficulty": difficulty,
         "question_type": str(payload.get("question_type") or "concept_application").strip().lower(),
         "prompt": str(payload.get("prompt") or payload.get("stem") or "").strip(),
         "helper_text": str(payload.get("helper_text") or "").strip(),
         "options": options,
         "explanation": str(payload.get("explanation") or "").strip(),
-        "final_answer": str(payload.get("final_answer") or "").strip(),
         "expected_reasoning": str(payload.get("expected_reasoning") or "").strip(),
-        "difficulty_reason": str(payload.get("difficulty_reason") or "").strip(),
-        "distractor_rationales": (
-            payload.get("distractor_rationales")
-            if isinstance(payload.get("distractor_rationales"), dict)
-            else {}
-        ),
-        "freshness_note": str(payload.get("freshness_note") or "").strip(),
-        "misconception_tags": payload.get("misconception_tags") if isinstance(payload.get("misconception_tags"), list) else [],
         "skill_trace": _normalize_skill_trace(payload.get("skill_trace")),
         "rubric": payload.get("rubric") if isinstance(payload.get("rubric"), dict) else {
             "correct_answer_score": 1.0,
@@ -1215,17 +1196,24 @@ def _validate_unique_question_prompts(questions: list[dict[str, Any]]) -> None:
 def _normalize_skill_trace(value: object) -> list[dict[str, str]]:
     if not isinstance(value, list):
         return []
-    trace: list[dict[str, str]] = []
+    trace_by_code: dict[str, dict[str, str]] = {}
     for item in value:
         if not isinstance(item, dict):
             continue
-        trace.append(
-            {
-                "concept_code": str(item.get("concept_code") or "").strip(),
-                "criterion": str(item.get("criterion") or "").strip(),
+        code = str(item.get("concept_code") or "").strip()
+        criterion = str(item.get("criterion") or "").strip()
+        existing = trace_by_code.get(code)
+        if existing is None:
+            trace_by_code[code] = {
+                "concept_code": code,
+                "criterion": criterion,
             }
-        )
-    return trace
+            continue
+        if criterion and criterion not in existing["criterion"]:
+            existing["criterion"] = " ".join(
+                part for part in (existing["criterion"], criterion) if part
+            )
+    return list(trace_by_code.values())
 
 
 def _validate_skill_traces(
@@ -1300,10 +1288,7 @@ def _fresh_question_response_format(
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "language": {"type": "string"},
-            "concept_code": {"type": "string"},
             "stem": {"type": "string"},
-            "difficulty": {"enum": ["easy", "medium", "hard"]},
             "question_type": {
                 "enum": sorted(question_types or VALID_QUESTION_TYPES)
             },
@@ -1322,7 +1307,6 @@ def _fresh_question_response_format(
                 },
             },
             "correct_option_id": {"enum": ["A", "B", "C", "D"]},
-            "final_answer": {"type": "string"},
             "skill_trace": {
                 "type": "array",
                 "minItems": 1,
@@ -1339,37 +1323,15 @@ def _fresh_question_response_format(
             },
             "expected_reasoning": {"type": "string"},
             "explanation": {"type": "string"},
-            "misconception_tags": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
-            "distractor_rationales": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    label: {"type": "string"} for label in ("A", "B", "C", "D")
-                },
-                "required": ["A", "B", "C", "D"],
-            },
-            "difficulty_reason": {"type": "string"},
-            "freshness_note": {"type": "string"},
         },
         "required": [
-            "language",
-            "concept_code",
             "stem",
-            "difficulty",
             "question_type",
             "options",
             "correct_option_id",
-            "final_answer",
             "skill_trace",
             "expected_reasoning",
             "explanation",
-            "misconception_tags",
-            "distractor_rationales",
-            "difficulty_reason",
-            "freshness_note",
         ],
     }
     return {

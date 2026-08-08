@@ -262,10 +262,11 @@ def test_pretest_start_returns_503_after_ai_generation_timeout(client, monkeypat
 
     assert response.status_code == 503
     assert "failed validation after bounded retries" in response.json()["detail"]
-    assert "attempt 2" in response.json()["detail"]
+    assert "attempt 1: generation timed out after 1 seconds" in response.json()["detail"]
+    assert "attempt 2" not in response.json()["detail"]
 
 
-def test_answers_reuse_node_set_generate_prerequisite_set_and_reject_duplicate(client):
+def test_answers_reuse_target_set_reject_duplicate_and_do_not_blindly_traverse(client):
     _override_account(client)
     learning_goal_id = _confirmed_goal_id(client)
     start = client.post("/api/v1/pretests/start", json={"learning_goal_id": learning_goal_id})
@@ -310,13 +311,16 @@ def test_answers_reuse_node_set_generate_prerequisite_set_and_reject_duplicate(c
     )
 
     assert prereq_answer.status_code == 200
-    next_question = prereq_answer.json()["next_question"]
-    assert next_question["difficulty"] == "medium"
-    assert next_question["concept_code"] != question["concept_code"]
+    assert prereq_answer.json()["next_question"] is None
+    assert prereq_answer.json()["next_action"] == {
+        "type": "finalize",
+        "reason": "target_gap_confirmed",
+    }
+    assert prereq_answer.json()["diagnosis"] is not None
 
     with _session_for_client(client) as session:
         questions = list(session.scalars(select(AssessmentQuestion).where(AssessmentQuestion.session_id == UUID(payload["session_id"]))))
-        assert len(questions) == 6
+        assert len(questions) == 3
         assert all(question.metadata_json.get("non_reusable") is True for question in questions)
         difficulties_by_concept: dict[str, set[str]] = {}
         for stored_question in questions:
@@ -324,7 +328,7 @@ def test_answers_reuse_node_set_generate_prerequisite_set_and_reject_duplicate(c
             difficulties_by_concept.setdefault(concept_code, set()).add(
                 stored_question.difficulty_label.lower()
             )
-        assert len(difficulties_by_concept) == 2
+        assert len(difficulties_by_concept) == 1
         assert all(
             difficulties == {"easy", "medium", "hard"}
             for difficulties in difficulties_by_concept.values()

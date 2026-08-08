@@ -12,6 +12,7 @@ from app.modules.pretests.generation_service import (
     _fresh_question_response_format,
     _fresh_question_type_choices,
     _max_generation_attempts,
+    _normalize_skill_trace,
 )
 from app.modules.pretests.graph_scope_builder import GraphScopeBuilder
 
@@ -59,7 +60,7 @@ def test_fresh_prompt_uses_curriculum_evidence_misconceptions_and_guidance():
     assert "Correct — merge all steps belonging to that concept" in prompt
     assert "be mutually exclusive" in prompt
     assert "not merely less complete" in prompt
-    assert "admits another option is also correct" in prompt
+    assert "distractor_rationales" not in prompt
     assert "same answer dimension" in prompt
     assert "missing factor" in prompt
     assert "finalizes immediately" not in prompt
@@ -83,6 +84,25 @@ def test_fresh_generation_uses_strict_batch_and_option_counts():
     assert options["minItems"] == options["maxItems"] == 4
     skill_trace = questions["items"]["properties"]["skill_trace"]
     assert skill_trace["minItems"] == 1
+    assert questions["items"]["required"] == [
+        "stem",
+        "question_type",
+        "options",
+        "correct_option_id",
+        "skill_trace",
+        "expected_reasoning",
+        "explanation",
+    ]
+    assert {
+        "language",
+        "concept_code",
+        "difficulty",
+        "final_answer",
+        "misconception_tags",
+        "distractor_rationales",
+        "difficulty_reason",
+        "freshness_note",
+    }.isdisjoint(questions["items"]["properties"])
 
 
 def test_fresh_generation_output_budget_scales_with_batch_size():
@@ -107,7 +127,28 @@ def test_prerequisite_probe_schema_excludes_direct_computation():
     assert question_schema["properties"]["question_type"]["enum"] == [
         "error_analysis",
     ]
-    assert "final_answer" in question_schema["required"]
+    assert "correct_option_id" in question_schema["required"]
+
+
+def test_duplicate_skill_trace_entries_are_merged_by_concept_code():
+    trace = _normalize_skill_trace(
+        [
+            {"concept_code": "curve.sketch", "criterion": "Find critical points."},
+            {"concept_code": "curve.sketch", "criterion": "Classify the points."},
+            {"concept_code": "chain.rule", "criterion": "Include the inner derivative."},
+        ]
+    )
+
+    assert trace == [
+        {
+            "concept_code": "curve.sketch",
+            "criterion": "Find critical points. Classify the points.",
+        },
+        {
+            "concept_code": "chain.rule",
+            "criterion": "Include the inner derivative.",
+        },
+    ]
 
 
 def test_skill_candidates_include_reachable_nodes_without_auto_selecting_one():
