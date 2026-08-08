@@ -64,9 +64,6 @@ class GraphScopeBuilder:
                         "edge_type": edge.edge_type,
                         "weight": float(edge.weight or 1.0),
                         "depth": next_depth,
-                        "applicability": str(
-                            edge_metadata.get("applicability") or "required"
-                        ),
                         "reason_id": str(edge_metadata.get("reason_id") or ""),
                         "reason_en": str(edge_metadata.get("reason_en") or ""),
                     }
@@ -84,76 +81,6 @@ class GraphScopeBuilder:
             "nodes": nodes,
             "edges": edges,
         }
-
-    @staticmethod
-    def build_probe_queue(graph_scope: dict[str, object]) -> list[dict[str, object]]:
-        nodes = graph_scope.get("nodes", [])
-        edges = graph_scope.get("edges", [])
-        edge_items = edges if isinstance(edges, list) else []
-        queue: list[dict[str, object]] = []
-        for node in nodes if isinstance(nodes, list) else []:
-            if not isinstance(node, dict) or node.get("role") != "prerequisite":
-                continue
-            depth = int(node.get("depth", 1))
-            node_edges = [
-                edge
-                for edge in edge_items
-                if isinstance(edge, dict)
-                and str(edge.get("to")) == str(node.get("concept_code"))
-                and str(edge.get("applicability") or "required") != "conditional"
-            ]
-            if not node_edges:
-                continue
-            edge = max(node_edges, key=lambda item: float(item.get("weight", 1.0)))
-            edge_weight = float(edge.get("weight", 1.0))
-            queue.append(
-                {
-                    "concept_code": node["concept_code"],
-                    "concept_id": node["concept_id"],
-                    "depth": depth,
-                    "priority": round(edge_weight - (depth * 0.2), 4),
-                    "parent": node.get("parent"),
-                }
-            )
-        queue.sort(key=lambda item: (-float(item["priority"]), int(item["depth"]), str(item["concept_code"])))
-        return queue
-
-
-def direct_prerequisites(
-    graph_scope: dict[str, object],
-    *,
-    concept_code: str,
-) -> list[dict[str, object]]:
-    nodes = {
-        str(node.get("concept_code")): node
-        for node in graph_scope.get("nodes", [])
-        if isinstance(node, dict)
-    }
-    prereqs: list[dict[str, object]] = []
-    for edge in graph_scope.get("edges", []):
-        if (
-            not isinstance(edge, dict)
-            or edge.get("from") != concept_code
-            or str(edge.get("applicability") or "required") == "conditional"
-        ):
-            continue
-        node = nodes.get(str(edge.get("to")))
-        if node is None:
-            continue
-        depth = int(node.get("depth", 1))
-        weight = float(edge.get("weight", 1.0))
-        prereqs.append(
-            {
-                "concept_code": node["concept_code"],
-                "concept_id": node["concept_id"],
-                "depth": depth,
-                "priority": round(weight - (depth * 0.2) + 0.35, 4),
-                "parent": concept_code,
-            }
-        )
-    prereqs.sort(key=lambda item: (-float(item["priority"]), int(item["depth"]), str(item["concept_code"])))
-    return prereqs
-
 
 def _node_payload(
     concept: KnowledgeConcept,

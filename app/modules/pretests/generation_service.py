@@ -24,7 +24,7 @@ from app.modules.pretests.question_validator import QuestionValidator, VALID_QUE
 from app.modules.review.flagger import enqueue_flag
 
 PACK_PROMPT_VERSION = "adaptive_node_pack_v6_flexible_subject_tasks"
-FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v8_aligned_options"
+FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v9_skill_trace"
 DEFAULT_PACK_GENERATION_MAX_ATTEMPTS = 4
 DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 20.0
 
@@ -172,8 +172,7 @@ class AdaptivePretestGenerationService:
         assessment_type: str,
         language: str | None = None,
         node_role: str = "goal",
-        prerequisite_context: str = "",
-        diagnostic_focus: dict[str, str] | None = None,
+        skill_candidates: list[dict[str, Any]] | None = None,
         diagnosis_context: str = "",
         step_label: str | None = None,
         topic: str | None = None,
@@ -186,8 +185,7 @@ class AdaptivePretestGenerationService:
             assessment_type=assessment_type,
             language=language,
             node_role=node_role,
-            prerequisite_context=prerequisite_context,
-            diagnostic_focus=diagnostic_focus,
+            skill_candidates=skill_candidates,
             diagnosis_context=diagnosis_context,
             step_label=step_label,
             topic=topic,
@@ -204,8 +202,7 @@ class AdaptivePretestGenerationService:
         assessment_type: str,
         language: str | None = None,
         node_role: str = "goal",
-        prerequisite_context: str = "",
-        diagnostic_focus: dict[str, str] | None = None,
+        skill_candidates: list[dict[str, Any]] | None = None,
         diagnosis_context: str = "",
         step_label: str | None = None,
         topic: str | None = None,
@@ -224,8 +221,7 @@ class AdaptivePretestGenerationService:
             assessment_type=assessment_type,
             language=learner_language,
             node_role=node_role,
-            prerequisite_context=prerequisite_context,
-            diagnostic_focus=diagnostic_focus,
+            skill_candidates=skill_candidates,
             diagnosis_context=diagnosis_context,
             previous_questions=previous_questions,
         )
@@ -256,7 +252,7 @@ class AdaptivePretestGenerationService:
                     "batch_index": index,
                     "batch_size": len(normalized_difficulties),
                     "difficulty_sequence": normalized_difficulties,
-                    "diagnostic_focus": diagnostic_focus or {},
+                    "skill_candidates": skill_candidates or [],
                 },
                 assessment_type=assessment_type,
                 step_label=step_label or (
@@ -311,9 +307,7 @@ class AdaptivePretestGenerationService:
                 "distractor_rationales": payload.get("distractor_rationales", {}),
                 "freshness_note": payload.get("freshness_note", ""),
                 "misconception_tags": payload.get("misconception_tags", []),
-                "diagnostic_prerequisite_code": payload.get(
-                    "diagnostic_prerequisite_code"
-                ),
+                "skill_trace": payload.get("skill_trace", []),
                 "non_reusable": True,
             },
             generation_source=str(metadata.get("generation_source") or "llm_generated"),
@@ -575,8 +569,7 @@ class AdaptivePretestGenerationService:
         assessment_type: str,
         language: str,
         node_role: str,
-        prerequisite_context: str,
-        diagnostic_focus: dict[str, str] | None,
+        skill_candidates: list[dict[str, Any]] | None,
         diagnosis_context: str,
         previous_questions: list[str],
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -601,8 +594,7 @@ class AdaptivePretestGenerationService:
             assessment_type=assessment_type,
             language=language,
             node_role=node_role,
-            prerequisite_context=prerequisite_context,
-            diagnostic_focus=diagnostic_focus,
+            skill_candidates=skill_candidates,
             diagnosis_context=diagnosis_context,
             previous_questions=previous_questions,
         )
@@ -636,8 +628,7 @@ class AdaptivePretestGenerationService:
         assessment_type: str,
         language: str,
         node_role: str,
-        prerequisite_context: str,
-        diagnostic_focus: dict[str, str] | None,
+        skill_candidates: list[dict[str, Any]] | None,
         diagnosis_context: str,
         previous_questions: list[str],
     ) -> tuple[list[dict[str, Any]] | None, dict[str, Any]]:
@@ -659,8 +650,7 @@ class AdaptivePretestGenerationService:
                 assessment_type=assessment_type,
                 language=language,
                 node_role=node_role,
-                prerequisite_context=prerequisite_context,
-                diagnostic_focus=diagnostic_focus,
+                skill_candidates=skill_candidates,
                 diagnosis_context=diagnosis_context,
                 previous_questions=previous_questions,
                 previous_errors=validation_errors,
@@ -720,9 +710,10 @@ class AdaptivePretestGenerationService:
                         difficulty=difficulty,
                         question=question,
                     )
-                _validate_diagnostic_focus(
+                _validate_skill_traces(
                     normalized_questions,
-                    diagnostic_focus=diagnostic_focus,
+                    concept_code=concept.code,
+                    skill_candidates=skill_candidates,
                 )
                 _validate_unique_question_prompts(normalized_questions)
                 return normalized_questions, {
@@ -734,7 +725,7 @@ class AdaptivePretestGenerationService:
                     "previous_validation_errors": validation_errors,
                     "batch_size": len(difficulties),
                     "difficulty_sequence": difficulties,
-                    "diagnostic_focus": diagnostic_focus or {},
+                    "skill_candidates": skill_candidates or [],
                 }
             except Exception as exc:
                 validation_errors.append(f"attempt {attempt}: {exc}")
@@ -922,8 +913,7 @@ def _fresh_question_prompt(
     assessment_type: str,
     language: str,
     node_role: str,
-    prerequisite_context: str,
-    diagnostic_focus: dict[str, str] | None,
+    skill_candidates: list[dict[str, Any]] | None,
     diagnosis_context: str,
     previous_questions: list[str],
     previous_errors: list[str] | None = None,
@@ -941,7 +931,10 @@ def _fresh_question_prompt(
     )
     previous_question_text = "\n".join(f"- {item}" for item in previous_questions[-12:]) or "- none"
     difficulty_sequence = ", ".join(difficulties)
-    diagnostic_focus_text = _diagnostic_focus_prompt(diagnostic_focus)
+    skill_catalog = _solution_skill_catalog(
+        concept=concept,
+        skill_candidates=skill_candidates,
+    )
     retry_instruction = ""
     if previous_errors:
         compact_errors = "\n".join(f"- {error}" for error in previous_errors[-6:])
@@ -1005,11 +998,8 @@ Question count: {len(difficulties)}
 Curriculum assessment contract:
 {pedagogical_context}
 
-Prerequisite context:
-{prerequisite_context or 'none'}
-
-Hard-question diagnostic focus:
-{diagnostic_focus_text}
+Allowed solution-skill catalog:
+{json.dumps(skill_catalog, ensure_ascii=False)}
 
 Diagnosis context:
 {diagnosis_context or 'none'}
@@ -1036,10 +1026,12 @@ Question quality requirements:
 - You must make easy, medium, and hard questions meaningfully different by cognitive demand.
 - Assess the curriculum evidence and follow the guidance for each requested difficulty.
 - When appropriate, build plausible distractors from the listed misconceptions without teaching the misconception as correct.
-- Use a conditional prerequisite only when the task actually satisfies the condition stated in Prerequisite context.
-- If a hard-question diagnostic focus is provided, the hard question must genuinely require that capability and activate one of its stated conditions.
-- A focused hard question must set diagnostic_prerequisite_code to the exact selected concept code. All other questions must set it to null.
-- The selected answer alone must not be enough to prove mastery of the diagnostic focus; expected_reasoning must expose the learner's method.
+- Build skill_trace from the actual steps required by the specific generated question.
+- Use only exact concept_code values from Allowed solution-skill catalog.
+- Include a skill only when the expected solution genuinely uses it; never add a skill merely to force adaptive routing.
+- Order skill_trace by the causal order of the expected solution steps.
+- Each criterion must state observable evidence that distinguishes correct use of that skill from a nearby misconception.
+- The selected answer alone must not be enough to diagnose a skill gap; expected_reasoning must expose the learner's method.
 - Do not mention the curriculum graph, diagnosis, evidence labels, or prerequisite codes to the learner.
 - Exactly one correct option per question.
 - Provide 4 answer options.
@@ -1073,6 +1065,7 @@ Before returning JSON, internally verify:
 - requested language is followed
 - each question difficulty matches the requested sequence
 - output schema is valid
+- every skill_trace is non-empty and contains only skills genuinely used by that question
 
 Return exactly {len(difficulties)} question objects in the same order as the requested difficulty sequence.
 Return JSON shaped exactly as:
@@ -1092,7 +1085,9 @@ Return JSON shaped exactly as:
       ],
       "correct_option_id": "A",
       "final_answer": "exact copy of the correct option text",
-      "diagnostic_prerequisite_code": null,
+      "skill_trace": [
+        {{"concept_code": "exact code from the allowed catalog", "criterion": "observable solution-step criterion"}}
+      ],
       "expected_reasoning": "string",
       "explanation": "string",
       "misconception_tags": ["string"],
@@ -1165,10 +1160,7 @@ def _normalize_fresh_question_payload(
         ),
         "freshness_note": str(payload.get("freshness_note") or "").strip(),
         "misconception_tags": payload.get("misconception_tags") if isinstance(payload.get("misconception_tags"), list) else [],
-        "diagnostic_prerequisite_code": (
-            str(payload.get("diagnostic_prerequisite_code") or "").strip()
-            or None
-        ),
+        "skill_trace": _normalize_skill_trace(payload.get("skill_trace")),
         "rubric": payload.get("rubric") if isinstance(payload.get("rubric"), dict) else {
             "correct_answer_score": 1.0,
             "reasoning_score_available": True,
@@ -1206,37 +1198,79 @@ def _validate_unique_question_prompts(questions: list[dict[str, Any]]) -> None:
         seen.add(normalized)
 
 
-def _validate_diagnostic_focus(
+def _normalize_skill_trace(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    trace: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        trace.append(
+            {
+                "concept_code": str(item.get("concept_code") or "").strip(),
+                "criterion": str(item.get("criterion") or "").strip(),
+            }
+        )
+    return trace
+
+
+def _validate_skill_traces(
     questions: list[dict[str, Any]],
     *,
-    diagnostic_focus: dict[str, str] | None,
+    concept_code: str,
+    skill_candidates: list[dict[str, Any]] | None,
 ) -> None:
-    expected_code = str((diagnostic_focus or {}).get("concept_code") or "").strip()
-    for question in questions:
-        actual_code = str(question.get("diagnostic_prerequisite_code") or "").strip()
-        difficulty = str(question.get("difficulty") or "").strip()
-        if expected_code and difficulty == "hard" and actual_code != expected_code:
-            raise QuestionGenerationPayloadError(
-                "Hard question must use the selected diagnostic_prerequisite_code."
-            )
-        if difficulty != "hard" and actual_code:
-            raise QuestionGenerationPayloadError(
-                "Only hard questions may set diagnostic_prerequisite_code."
-            )
-
-
-def _diagnostic_focus_prompt(diagnostic_focus: dict[str, str] | None) -> str:
-    if not diagnostic_focus:
-        return "none"
-    return "\n".join(
-        [
-            f"- Selected prerequisite code: {diagnostic_focus['concept_code']}",
-            f"- Capability: {diagnostic_focus.get('title') or diagnostic_focus['concept_code']}",
-            f"- Description: {diagnostic_focus.get('capability') or 'none'}",
-            f"- Activation conditions: {diagnostic_focus.get('condition') or 'none'}",
-            f"- Misconceptions to expose through written reasoning: {diagnostic_focus.get('misconceptions') or 'none'}",
-        ]
+    allowed_codes = {concept_code}
+    allowed_codes.update(
+        str(candidate.get("concept_code") or "").strip()
+        for candidate in skill_candidates or []
+        if str(candidate.get("concept_code") or "").strip()
     )
+    for question in questions:
+        trace = question.get("skill_trace")
+        if not isinstance(trace, list) or not trace:
+            raise QuestionGenerationPayloadError(
+                "Generated question must provide a non-empty skill_trace."
+            )
+        seen: set[str] = set()
+        for step in trace:
+            code = str(step.get("concept_code") or "").strip()
+            criterion = str(step.get("criterion") or "").strip()
+            if code not in allowed_codes:
+                raise QuestionGenerationPayloadError(
+                    f"skill_trace concept_code is outside the allowed catalog: {code or 'empty'}."
+                )
+            if code in seen:
+                raise QuestionGenerationPayloadError(
+                    f"skill_trace concept_code must be unique within a question: {code}."
+                )
+            if not criterion:
+                raise QuestionGenerationPayloadError(
+                    f"skill_trace criterion is missing for {code}."
+                )
+            seen.add(code)
+
+
+def _solution_skill_catalog(
+    *,
+    concept: KnowledgeConcept,
+    skill_candidates: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    catalog = [
+        {
+            "concept_code": concept.code,
+            "title": concept.title,
+            "description": concept.description,
+        }
+    ]
+    seen = {concept.code}
+    for candidate in skill_candidates or []:
+        code = str(candidate.get("concept_code") or "").strip()
+        if not code or code in seen:
+            continue
+        catalog.append(candidate)
+        seen.add(code)
+    return catalog
 
 
 class QuestionGenerationPayloadError(ValueError):
@@ -1275,8 +1309,19 @@ def _fresh_question_response_format(
             },
             "correct_option_id": {"enum": ["A", "B", "C", "D"]},
             "final_answer": {"type": "string"},
-            "diagnostic_prerequisite_code": {
-                "anyOf": [{"type": "string"}, {"type": "null"}]
+            "skill_trace": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "concept_code": {"type": "string"},
+                        "criterion": {"type": "string"},
+                    },
+                    "required": ["concept_code", "criterion"],
+                },
             },
             "expected_reasoning": {"type": "string"},
             "explanation": {"type": "string"},
@@ -1304,7 +1349,7 @@ def _fresh_question_response_format(
             "options",
             "correct_option_id",
             "final_answer",
-            "diagnostic_prerequisite_code",
+            "skill_trace",
             "expected_reasoning",
             "explanation",
             "misconception_tags",
@@ -1553,17 +1598,25 @@ def _fallback_question_variant(
     variant_index: int,
     variant_count: int,
 ) -> dict[str, Any]:
+    skill_trace = [
+        {
+            "concept_code": str(question["concept_code"]),
+            "criterion": str(question["expected_reasoning"]),
+        }
+    ]
     if variant_count <= 1:
         return {
             **question,
             "freshness_note": "Deterministic fallback question; not reusable in future assessments.",
             "misconception_tags": [],
+            "skill_trace": skill_trace,
         }
     return {
         **question,
         "prompt": f"{question['prompt']} (Variant {variant_index})",
         "freshness_note": "Deterministic fallback variant; not reusable in future assessments.",
         "misconception_tags": [],
+        "skill_trace": skill_trace,
     }
 
 

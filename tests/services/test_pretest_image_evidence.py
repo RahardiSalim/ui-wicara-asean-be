@@ -84,7 +84,15 @@ def test_written_method_evaluator_sends_attached_image_to_ai(monkeypatch, tmp_pa
                     "feedback": "The inner derivative was omitted.",
                     "method_valid": False,
                     "evidence_tags": ["inner_derivative_omitted"],
-                    "suspected_prerequisite_code": "chain_rule",
+                    "primary_gap_code": "chain_rule",
+                    "gap_confidence": 0.94,
+                    "step_results": [
+                        {
+                            "concept_code": "chain_rule",
+                            "status": "fail",
+                            "evidence": "The written derivative omits the inner factor.",
+                        }
+                    ],
                     "method_reason": "Visible work omits the inner derivative.",
                 }
             ),

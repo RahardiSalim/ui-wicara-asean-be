@@ -392,7 +392,7 @@ def test_finalize_and_path_selection_create_track(client):
         assert session.scalar(select(TrackModule).where(TrackModule.track_id == goal.track.id)) is not None
 
 
-def test_target_hard_wrong_probes_prerequisite_before_finalizing(client):
+def test_target_hard_wrong_without_step_evidence_stays_on_target(client):
     _override_account(client)
     learning_goal_id = _confirmed_goal_id(client)
     start = client.post("/api/v1/pretests/start", json={"learning_goal_id": learning_goal_id})
@@ -417,10 +417,10 @@ def test_target_hard_wrong_probes_prerequisite_before_finalizing(client):
     assert payload["next_action"] == {
         "type": "next_question",
         "concept_code": payload["next_question"]["concept_code"],
-        "difficulty": "medium",
-        "reason": "enter_prerequisite_node",
+        "difficulty": "easy",
+        "reason": "target_gap_disambiguation",
     }
-    assert payload["next_question"]["concept_code"] != medium_question["concept_code"]
+    assert payload["next_question"]["concept_code"] == medium_question["concept_code"]
     assert payload["diagnosis"] is None
 
 

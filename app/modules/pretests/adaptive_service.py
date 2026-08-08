@@ -145,7 +145,6 @@ class AdaptivePretestService:
             "max_nodes_visited": effective_max_nodes_visited,
             "max_questions_per_node": 2,
             "confidence_threshold": 0.95,
-            "probe_queue": self.graph_builder.build_probe_queue(graph_scope),
             "generated_packs": {},
             "generated_questions": {
                 target.code: {
@@ -248,6 +247,7 @@ class AdaptivePretestService:
         )
         evaluation = _validated_method_evaluation(
             evaluation,
+            question=question,
             graph_scope=assessment.graph_scope_json or {},
         )
         evaluation["is_correct"] = bool(option.is_correct)
@@ -278,6 +278,8 @@ class AdaptivePretestService:
                 "suspected_prerequisite_code": evaluation["suspected_prerequisite_code"],
                 "method_reason": evaluation["method_reason"],
                 "method_evaluation_source": evaluation["method_evaluation_source"],
+                "step_results": evaluation.get("step_results", []),
+                "gap_confidence": evaluation.get("gap_confidence"),
             },
             evaluation_metadata_json={
                 "canvas_status": evaluation["canvas_status"],
@@ -293,6 +295,8 @@ class AdaptivePretestService:
                 ),
                 "method_reason": evaluation["method_reason"],
                 "method_evaluation_source": evaluation["method_evaluation_source"],
+                "step_results": evaluation.get("step_results", []),
+                "gap_confidence": evaluation.get("gap_confidence"),
                 "evidence_deferred": False,
                 "evidence_analysis_mode": "upfront_adaptive_routing",
             },
@@ -475,11 +479,6 @@ class AdaptivePretestService:
     ) -> dict[str, AssessmentQuestion]:
         language = _assessment_language(assessment, user=user)
         graph_scope = assessment.graph_scope_json or {}
-        diagnostic_focus = _pretest_diagnostic_focus(
-            graph_scope,
-            concept_code=concept.code,
-            node_role=node_role,
-        )
         questions = self.generation_service.create_fresh_questions(
             session,
             assessment=assessment,
@@ -488,12 +487,10 @@ class AdaptivePretestService:
             assessment_type="pretest",
             language=language,
             node_role=node_role,
-            prerequisite_context=_pretest_prerequisite_context(
+            skill_candidates=_pretest_skill_candidates(
                 graph_scope,
                 concept_code=concept.code,
-                diagnostic_focus=diagnostic_focus,
             ),
-            diagnostic_focus=diagnostic_focus,
         )
         by_difficulty = {question.difficulty_label.lower(): question for question in questions}
         missing = [difficulty for difficulty in PRETEST_NODE_DIFFICULTIES if difficulty not in by_difficulty]
@@ -652,6 +649,7 @@ def _evaluation_to_read(evaluation: dict[str, Any]) -> PretestEvaluationRead:
 def _validated_method_evaluation(
     evaluation: dict[str, Any],
     *,
+    question: AssessmentQuestion,
     graph_scope: dict[str, Any],
 ) -> dict[str, Any]:
     normalized = dict(evaluation)
@@ -664,15 +662,51 @@ def _validated_method_evaluation(
         if isinstance(raw_tags, list)
         else []
     )
-    allowed_codes = {
+    graph_codes = {
         str(node.get("concept_code"))
         for node in graph_scope.get("nodes", [])
         if isinstance(node, dict)
-        and node.get("role") == "prerequisite"
         and str(node.get("concept_code") or "").strip()
     }
+    trace = (question.metadata_json or {}).get("skill_trace")
+    allowed_codes = {
+        str(step.get("concept_code") or "").strip()
+        for step in trace
+        if isinstance(step, dict)
+        and str(step.get("concept_code") or "").strip() in graph_codes
+    } if isinstance(trace, list) else set()
+    raw_step_results = normalized.get("step_results")
+    step_results = [
+        {
+            "concept_code": str(step.get("concept_code") or "").strip(),
+            "status": str(step.get("status") or "").strip().lower(),
+            "evidence": str(step.get("evidence") or "").strip()[:500],
+        }
+        for step in raw_step_results[:16]
+        if isinstance(step, dict)
+        and str(step.get("concept_code") or "").strip() in allowed_codes
+        and str(step.get("status") or "").strip().lower()
+        in {"pass", "fail", "not_observed"}
+    ] if isinstance(raw_step_results, list) else []
+    failed_codes = {
+        step["concept_code"] for step in step_results if step["status"] == "fail"
+    }
+    raw_gap_confidence = normalized.get("gap_confidence")
+    gap_confidence = (
+        max(0.0, min(1.0, float(raw_gap_confidence)))
+        if isinstance(raw_gap_confidence, (int, float))
+        else None
+    )
     raw_code = str(normalized.get("suspected_prerequisite_code") or "").strip()
-    suspected_code = raw_code if method_valid is False and raw_code in allowed_codes else None
+    suspected_code = (
+        raw_code
+        if method_valid is False
+        and raw_code in allowed_codes
+        and raw_code in failed_codes
+        and gap_confidence is not None
+        and gap_confidence >= 0.7
+        else None
+    )
     if raw_code and raw_code not in allowed_codes:
         tags.append("suspected_prerequisite_rejected_out_of_scope")
         normalized["rejected_suspected_prerequisite_code"] = raw_code
@@ -690,6 +724,8 @@ def _validated_method_evaluation(
                 or normalized.get("reasoning_evaluation_source")
                 or "none"
             )[:160],
+            "step_results": step_results,
+            "gap_confidence": gap_confidence,
         }
     )
     return normalized
@@ -777,66 +813,11 @@ def _localized_graph_scope(
     return localized
 
 
-def _pretest_prerequisite_context(
+def _pretest_skill_candidates(
     graph_scope: dict[str, Any],
     *,
     concept_code: str,
-    diagnostic_focus: dict[str, str] | None = None,
-) -> str:
-    nodes = {
-        str(node.get("concept_code")): node
-        for node in graph_scope.get("nodes", [])
-        if isinstance(node, dict)
-    }
-    edges = [
-        edge
-        for edge in graph_scope.get("edges", [])
-        if isinstance(edge, dict)
-    ]
-    context_lines: list[str] = []
-    for edge in edges:
-        if str(edge.get("from")) != concept_code:
-            continue
-        prerequisite_code = str(edge.get("to") or "").strip()
-        node = nodes.get(prerequisite_code)
-        if prerequisite_code and node is not None:
-            context_lines.append(_prerequisite_context_line(edge=edge, node=node))
-    if diagnostic_focus and diagnostic_focus["concept_code"] not in {
-        str(edge.get("to") or "")
-        for edge in edges
-        if str(edge.get("from")) == concept_code
-    }:
-        context_lines.append(
-            " ".join(
-                part
-                for part in (
-                    f"- [selected hidden diagnostic] {diagnostic_focus['concept_code']} ({diagnostic_focus['title']}).",
-                    f"Capability: {diagnostic_focus['capability']}" if diagnostic_focus.get("capability") else "",
-                    f"Activation conditions: {diagnostic_focus['condition']}" if diagnostic_focus.get("condition") else "",
-                    f"Typical misconceptions: {diagnostic_focus['misconceptions']}" if diagnostic_focus.get("misconceptions") else "",
-                )
-                if part
-            )
-        )
-    if not context_lines:
-        return "No prerequisite candidates are present in this graph scope."
-    return "\n".join(
-        [
-            "These are diagnostic candidates, not automatic requirements.",
-            "Conditional candidates may be used only when the generated task matches their stated condition.",
-            *context_lines,
-        ]
-    )
-
-
-def _pretest_diagnostic_focus(
-    graph_scope: dict[str, Any],
-    *,
-    concept_code: str,
-    node_role: str,
-) -> dict[str, str] | None:
-    if node_role != "goal":
-        return None
+) -> list[dict[str, Any]]:
     nodes = {
         str(node.get("concept_code")): node
         for node in graph_scope.get("nodes", [])
@@ -849,79 +830,29 @@ def _pretest_diagnostic_focus(
     ]
     reachable = {concept_code}
     queue = [concept_code]
-    conditional_by_code: dict[str, list[dict[str, Any]]] = {}
+    ordered_codes: list[str] = []
     while queue:
         parent = queue.pop(0)
         for edge in edges:
             if str(edge.get("from")) != parent:
                 continue
-            prerequisite_code = str(edge.get("to") or "").strip()
-            if not prerequisite_code:
+            code = str(edge.get("to") or "").strip()
+            if not code or code in reachable:
                 continue
-            if str(edge.get("applicability") or "required") == "conditional":
-                conditional_by_code.setdefault(prerequisite_code, []).append(edge)
-            if prerequisite_code not in reachable:
-                reachable.add(prerequisite_code)
-                queue.append(prerequisite_code)
-    candidates = [
-        (code, nodes[code], relationships)
-        for code, relationships in conditional_by_code.items()
+            reachable.add(code)
+            ordered_codes.append(code)
+            queue.append(code)
+    return [
+        {
+            "concept_code": code,
+            "title": str(nodes[code].get("title") or code).strip(),
+            "description": str(nodes[code].get("description") or "").strip(),
+            "assessment_evidence": nodes[code].get("assessment_evidence") or [],
+            "common_misconceptions": nodes[code].get("common_misconceptions") or [],
+        }
+        for code in ordered_codes
         if code in nodes
     ]
-    if not candidates:
-        return None
-    code, node, relationships = sorted(
-        candidates,
-        key=lambda item: (-int(item[1].get("depth") or 0), item[0]),
-    )[0]
-    conditions = list(
-        dict.fromkeys(
-            str(edge.get("reason") or "").strip()
-            for edge in relationships
-            if str(edge.get("reason") or "").strip()
-        )
-    )
-    misconceptions = node.get("common_misconceptions")
-    misconception_text = "; ".join(
-        str(item).strip()
-        for item in misconceptions
-        if str(item).strip()
-    ) if isinstance(misconceptions, list) else ""
-    return {
-        "concept_code": code,
-        "title": str(node.get("title") or code).strip(),
-        "capability": str(node.get("description") or "").strip(),
-        "condition": " ".join(conditions),
-        "misconceptions": misconception_text,
-    }
-
-
-def _prerequisite_context_line(
-    *,
-    edge: dict[str, Any],
-    node: dict[str, Any],
-) -> str:
-    prerequisite_code = str(edge.get("to") or "").strip()
-    applicability = str(edge.get("applicability") or "required")
-    title = str(node.get("title") or prerequisite_code).strip()
-    description = str(node.get("description") or "").strip()
-    reason = str(edge.get("reason") or "").strip()
-    misconceptions = node.get("common_misconceptions")
-    misconception_text = "; ".join(
-        str(item).strip()
-        for item in misconceptions
-        if str(item).strip()
-    ) if isinstance(misconceptions, list) else ""
-    return " ".join(
-        part
-        for part in (
-            f"- [{applicability}] {prerequisite_code} ({title}).",
-            f"Capability: {description}" if description else "",
-            f"Relationship condition: {reason}" if reason else "",
-            f"Typical misconceptions: {misconception_text}" if misconception_text else "",
-        )
-        if part
-    )
 
 
 def _localized_concept_title(concept: KnowledgeConcept, *, language: str) -> str:

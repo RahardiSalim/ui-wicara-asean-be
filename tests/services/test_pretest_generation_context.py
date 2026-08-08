@@ -4,10 +4,8 @@ from app.modules.curriculum.models import KnowledgeConcept
 from app.modules.curriculum.seed import seed_curriculum
 from app.modules.pretests.adaptive_service import (
     _localized_graph_scope,
-    _pretest_diagnostic_focus,
-    _pretest_prerequisite_context,
+    _pretest_skill_candidates,
 )
-from app.modules.pretests.evidence_evaluator import _prerequisite_candidates
 from app.modules.pretests.generation_service import (
     _fresh_generation_max_tokens,
     _fresh_question_prompt,
@@ -15,7 +13,7 @@ from app.modules.pretests.generation_service import (
     _fresh_question_type_choices,
     _max_generation_attempts,
 )
-from app.modules.pretests.graph_scope_builder import GraphScopeBuilder, direct_prerequisites
+from app.modules.pretests.graph_scope_builder import GraphScopeBuilder
 
 
 def test_fresh_prompt_uses_curriculum_evidence_misconceptions_and_guidance():
@@ -40,8 +38,13 @@ def test_fresh_prompt_uses_curriculum_evidence_misconceptions_and_guidance():
         assessment_type="pretest",
         language="Indonesian",
         node_role="goal",
-        prerequisite_context="- [conditional] chain.rule",
-        diagnostic_focus=None,
+        skill_candidates=[
+            {
+                "concept_code": "chain.rule",
+                "title": "Aturan rantai",
+                "description": "Mendiferensiasikan fungsi komposit.",
+            }
+        ],
         diagnosis_context="",
         previous_questions=[],
     )
@@ -49,7 +52,8 @@ def test_fresh_prompt_uses_curriculum_evidence_misconceptions_and_guidance():
     assert "Membaca tanda f'(x)." in prompt
     assert "Menganggap f'(x)=0 selalu ekstrem." in prompt
     assert "- hard: Verifikasi kandidat titik belok." in prompt
-    assert "- [conditional] chain.rule" in prompt
+    assert '"concept_code": "chain.rule"' in prompt
+    assert "Build skill_trace from the actual steps" in prompt
     assert "be mutually exclusive" in prompt
     assert "not merely less complete" in prompt
     assert "admits another option is also correct" in prompt
@@ -74,6 +78,8 @@ def test_fresh_generation_uses_strict_batch_and_option_counts():
     assert response_format["json_schema"]["strict"] is True
     assert questions["minItems"] == questions["maxItems"] == 3
     assert options["minItems"] == options["maxItems"] == 4
+    skill_trace = questions["items"]["properties"]["skill_trace"]
+    assert skill_trace["minItems"] == 1
 
 
 def test_fresh_generation_output_budget_scales_with_batch_size():
@@ -101,7 +107,7 @@ def test_prerequisite_probe_schema_excludes_direct_computation():
     assert "final_answer" in question_schema["required"]
 
 
-def test_conditional_prerequisite_is_context_and_evaluator_candidate_not_generic_probe():
+def test_skill_candidates_include_reachable_nodes_without_auto_selecting_one():
     graph_scope = {
         "nodes": [
             {
@@ -123,6 +129,15 @@ def test_conditional_prerequisite_is_context_and_evaluator_candidate_not_generic
                 "parent": "curve.sketch",
             },
             {
+                "concept_code": "trig.derivative",
+                "concept_id": "trig-id",
+                "title": "Trigonometric derivatives",
+                "description": "Differentiate trigonometric functions.",
+                "depth": 1,
+                "role": "prerequisite",
+                "parent": "curve.sketch",
+            },
+            {
                 "concept_code": "chain.rule",
                 "concept_id": "chain-id",
                 "title": "Chain rule",
@@ -139,44 +154,46 @@ def test_conditional_prerequisite_is_context_and_evaluator_candidate_not_generic
                 "to": "derivative.algebra",
                 "weight": 0.9,
                 "depth": 1,
-                "applicability": "required",
                 "reason": "Required to obtain f'(x) and f''(x).",
+            },
+            {
+                "from": "curve.sketch",
+                "to": "trig.derivative",
+                "weight": 0.8,
+                "depth": 1,
+                "reason": "Used for trigonometric curve tasks.",
             },
             {
                 "from": "trig.derivative",
                 "to": "chain.rule",
                 "weight": 0.76,
                 "depth": 2,
-                "applicability": "conditional",
                 "reason": "Required when the trigonometric argument is composite.",
             },
         ],
     }
 
-    queue = GraphScopeBuilder.build_probe_queue(graph_scope)
-    direct = direct_prerequisites(graph_scope, concept_code="trig.derivative")
-    context = _pretest_prerequisite_context(
+    candidates = _pretest_skill_candidates(
         graph_scope,
-        concept_code="trig.derivative",
+        concept_code="curve.sketch",
     )
-    candidates = _prerequisite_candidates(graph_scope)
     chain_candidate = next(
         candidate
         for candidate in candidates
         if candidate["concept_code"] == "chain.rule"
     )
 
-    assert [item["concept_code"] for item in queue] == ["derivative.algebra"]
-    assert direct == []
-    assert "[conditional] chain.rule" in context
-    assert "trigonometric argument is composite" in context
+    assert [item["concept_code"] for item in candidates] == [
+        "derivative.algebra",
+        "trig.derivative",
+        "chain.rule",
+    ]
     assert chain_candidate["common_misconceptions"] == [
         "Forgetting the inner derivative."
     ]
-    assert chain_candidate["relationships"][0]["applicability"] == "conditional"
 
 
-def test_revised_golden_scope_exposes_chain_rule_without_generic_chain_probe(db_session):
+def test_revised_golden_scope_exposes_chain_rule_as_question_skill_candidate(db_session):
     seed_curriculum(db_session)
     target = db_session.scalar(
         select(KnowledgeConcept).where(
@@ -194,62 +211,51 @@ def test_revised_golden_scope_exposes_chain_rule_without_generic_chain_probe(db_
         graph_scope,
         language="id",
     )
-    diagnostic_focus = _pretest_diagnostic_focus(
+    candidates = _pretest_skill_candidates(
         localized_scope,
         concept_code=target.code,
-        node_role="goal",
     )
-    queue_codes = {
-        item["concept_code"]
-        for item in GraphScopeBuilder.build_probe_queue(localized_scope)
-    }
-    context = _pretest_prerequisite_context(
-        localized_scope,
-        concept_code=target.code,
-        diagnostic_focus=diagnostic_focus,
+    candidate_codes = {item["concept_code"] for item in candidates}
+    chain = next(
+        item
+        for item in candidates
+        if item["concept_code"]
+        == "km_f_matematika_tingkat_lanjut_aturan_rantai"
     )
 
-    assert diagnostic_focus is not None
-    assert diagnostic_focus["concept_code"] == (
-        "km_f_matematika_tingkat_lanjut_aturan_rantai"
+    assert "km_f_matematika_tingkat_lanjut_turunan_secara_aljabar" in candidate_codes
+    assert "km_f_matematika_tingkat_lanjut_aturan_rantai" in candidate_codes
+    assert any(
+        "Hanya menurunkan fungsi luar" in misconception
+        for misconception in chain["common_misconceptions"]
     )
-    assert "km_f_matematika_tingkat_lanjut_turunan_secara_aljabar" in queue_codes
-    assert "km_f_matematika_tingkat_lanjut_aturan_rantai" not in queue_codes
-    assert (
-        "[selected hidden diagnostic] "
-        "km_f_matematika_tingkat_lanjut_aturan_rantai"
-    ) in context
-    assert "argumen sinus, kosinus, atau tangen" in context
-    assert "Hanya menurunkan fungsi luar" in context
 
 
-def test_goal_prompt_requires_hard_question_to_use_selected_diagnostic_focus():
+def test_goal_prompt_requires_question_specific_skill_trace_without_forced_focus():
     concept = KnowledgeConcept(
         code="curve.sketch",
         title="Curve sketch",
         en_desc="Analyze curve behavior using derivatives.",
         metadata_json={},
     )
-    focus = {
-        "concept_code": "chain.rule",
-        "title": "Chain rule",
-        "capability": "Differentiate composite functions.",
-        "condition": "Use when the inner argument is a function.",
-        "misconceptions": "Forgetting the inner derivative.",
-    }
-
     prompt = _fresh_question_prompt(
         concept=concept,
         difficulties=["easy", "medium", "hard"],
         assessment_type="pretest",
         language="English",
         node_role="goal",
-        prerequisite_context="- [conditional] chain.rule",
-        diagnostic_focus=focus,
+        skill_candidates=[
+            {
+                "concept_code": "chain.rule",
+                "title": "Chain rule",
+                "description": "Differentiate composite functions.",
+            }
+        ],
         diagnosis_context="",
         previous_questions=[],
     )
 
-    assert "Selected prerequisite code: chain.rule" in prompt
-    assert "hard question must genuinely require that capability" in prompt
-    assert '"diagnostic_prerequisite_code": null' in prompt
+    assert '"concept_code": "chain.rule"' in prompt
+    assert "never add a skill merely to force adaptive routing" in prompt
+    assert '"skill_trace"' in prompt
+    assert "diagnostic_prerequisite_code" not in prompt

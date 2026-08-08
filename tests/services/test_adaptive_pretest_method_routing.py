@@ -71,6 +71,18 @@ class _MethodEvaluator:
             "suspected_prerequisite_code": self.suspected_prerequisite_code,
             "method_reason": "The written steps rely on an unsupported transformation.",
             "method_evaluation_source": "test:structured",
+            "step_results": (
+                [
+                    {
+                        "concept_code": self.suspected_prerequisite_code,
+                        "status": "fail",
+                        "evidence": "Observed unsupported transformation.",
+                    }
+                ]
+                if self.method_valid is False and self.suspected_prerequisite_code
+                else []
+            ),
+            "gap_confidence": 0.92 if self.method_valid is False else None,
         }
 
 
@@ -95,7 +107,7 @@ def test_correct_mcq_with_invalid_method_routes_to_synthetic_graph_prerequisite(
         "type": "next_question",
         "concept_code": "syn.kappa",
         "difficulty": "medium",
-        "reason": "method_evidence_prerequisite_probe",
+        "reason": "evidence_directed_gap_probe",
     }
     assert result.next_question is not None
     assert result.next_question.concept_code == "syn.kappa"
@@ -165,6 +177,29 @@ def test_correct_mcq_with_invalid_method_routes_to_synthetic_graph_prerequisite(
     assert target["evidence_summary"]["misconception_detected"] is True
 
 
+def test_wrong_mcq_with_step_failure_jumps_directly_to_identified_skill(db_session):
+    scenario = _create_synthetic_scenario(
+        db_session,
+        evaluator=_MethodEvaluator(
+            method_valid=False,
+            suspected_prerequisite_code="syn.kappa",
+            evidence_tags=["inner_derivative_omitted"],
+        ),
+    )
+
+    result = _submit_target_answer(db_session, scenario, correct=False)
+
+    assert result.evaluation.is_correct is False
+    assert result.next_action == {
+        "type": "next_question",
+        "concept_code": "syn.kappa",
+        "difficulty": "medium",
+        "reason": "evidence_directed_gap_probe",
+    }
+    assert result.next_question is not None
+    assert result.next_question.concept_code == "syn.kappa"
+
+
 def test_out_of_scope_suspect_is_rejected_before_graph_routing(db_session):
     scenario = _create_synthetic_scenario(
         db_session,
@@ -181,8 +216,8 @@ def test_out_of_scope_suspect_is_rejected_before_graph_routing(db_session):
     assert "suspected_prerequisite_rejected_out_of_scope" in (
         result.evaluation.evidence_tags
     )
-    assert result.next_action["concept_code"] == "syn.kappa"
-    assert result.next_action["reason"] == "method_evidence_prerequisite_probe"
+    assert result.next_action["concept_code"] == "syn.zeta"
+    assert result.next_action["reason"] == "target_medium_correct"
     assert result.next_action["concept_code"] != "outside.hidden"
 
     attempt = db_session.scalar(
@@ -195,7 +230,7 @@ def test_out_of_scope_suspect_is_rejected_before_graph_routing(db_session):
     db_session.refresh(scenario["assessment"])
     route = scenario["assessment"].decision_state_json["method_evidence_routes"][0]
     assert route["suspected_prerequisite_code"] is None
-    assert route["routed_prerequisite_code"] == "syn.kappa"
+    assert route["routed_prerequisite_code"] is None
 
 
 def test_valid_method_keeps_existing_target_difficulty_route(db_session):
@@ -253,9 +288,11 @@ def test_no_ai_key_fallback_does_not_invent_method_verdict(
     assert evaluation["method_evaluation_source"] == "heuristic"
 
 
-def _submit_target_answer(db_session, scenario):
+def _submit_target_answer(db_session, scenario, *, correct: bool = True):
     question = scenario["questions"]["syn.zeta"]["medium"]
-    selected_option = next(option for option in question.options if option.is_correct)
+    selected_option = next(
+        option for option in question.options if bool(option.is_correct) is correct
+    )
     return scenario["service"].submit_answer(
         db_session,
         user=scenario["user"],
@@ -433,7 +470,17 @@ def _add_question(
         helper_text="Show a method.",
         difficulty_label=difficulty.title(),
         sort_order=sort_order,
-        metadata_json={"concept_code": concept.code},
+        metadata_json={
+            "concept_code": concept.code,
+            "skill_trace": [
+                {
+                    "concept_code": (
+                        "syn.kappa" if concept.code == "syn.zeta" else concept.code
+                    ),
+                    "criterion": "Use the named operation correctly.",
+                }
+            ],
+        },
         expected_reasoning="Use a valid general method.",
         rubric_json={"criteria": ["valid method"]},
     )

@@ -193,7 +193,7 @@ def test_default_seed_uses_revised_golden_flow_metadata(db_session):
             == "km_f_matematika_tingkat_lanjut_turunan_fungsi_trigonometri"
         )
     )
-    conditional_edge = db_session.scalar(
+    chain_rule_edge = db_session.scalar(
         select(ConceptEdge).where(
             ConceptEdge.from_concept_id == chain_rule.id,
             ConceptEdge.to_concept_id == trig_derivative.id,
@@ -211,7 +211,8 @@ def test_default_seed_uses_revised_golden_flow_metadata(db_session):
         "medium",
         "hard",
     }
-    assert conditional_edge.metadata_json["applicability"] == "conditional"
+    assert "applicability" not in chain_rule_edge.metadata_json
+    assert "fungsi trigonometri komposit" in chain_rule_edge.metadata_json["reason_id"]
 
 
 def test_reseed_removes_edges_deleted_from_revised_graph(db_session):

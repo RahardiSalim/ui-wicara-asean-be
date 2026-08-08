@@ -21,8 +21,8 @@
       "Removed weak 0.65 progression-only edges because they encoded content ordering rather than genuine conceptual prerequisites; also removed redundant/reversed edges that created cycles or duplicated prerequisites.",
       "Converted same-subject cross_subject_prerequisite artifacts to prerequisite after Matematika and the former Matematika Tingkat Lanjut were unified under subject='matematika'.",
       "Normalized Fase F mathematics difficulty_order after the unification so retained prerequisite directions are consistent with pedagogical order; also corrected DNA -> protein-synthesis ordering in Fase F Biology.",
-      "For the derivative subgraph, algebraic differentiation is the general prerequisite for curve analysis; polynomial, exponential, and trigonometric differentiation edges to curve sketching are retained at supporting/conditional strengths for the relevant function family.",
-      "Chain-rule edges to polynomial, exponential, and trigonometric differentiation are encoded as conditional/supporting prerequisites in strength and reason because the current schema provides only prerequisite and cross_subject_prerequisite edge types.",
+      "For the derivative subgraph, algebraic differentiation is the general prerequisite for curve analysis; polynomial, exponential, and trigonometric differentiation remain candidate dependencies whose activation is recorded per assessment question.",
+      "Chain-rule edges remain candidate dependencies for composite-function tasks; adaptive routing now uses each question's explicit skill trace instead of edge applicability or graph depth.",
       "Curve sketching using derivatives explicitly assesses f'(x), f''(x), increasing/decreasing intervals, critical/stationary points, local extrema, concavity, inflection points, and synthesis of a consistent curve sketch. Optimization is modeled separately as objective/constraint modeling plus verification of extrema.",
       "All retained edges now include bilingual reasons grounded in observable prerequisite capability rather than generic strand-sequencing text."
     ],
@@ -156,7 +156,7 @@
       "remaining_teacher_review_items": [
         "Validate inferred prerequisite relationships against classroom sequencing and local ATP implementation before production use; the source graph itself marks prerequisite topology as inferred.",
         "Validate the 10 corrected concept hierarchy assignments, especially basic inheritance in Fase D IPA and disaster mitigation placement.",
-        "Confirm whether the product schema should add an explicit conditional_prerequisite edge type; currently conditional function-family dependencies are represented through 0.70-0.79 strength plus explicit bilingual reasons.",
+        "Keep task-specific skill activation in assessment skill traces; prerequisite graph edges remain candidate dependencies and do not prescribe adaptive traversal order.",
         "Review the normalized Fase F mathematics difficulty_order if downstream systems interpret difficulty_order globally across domains rather than as pedagogical ordering within the unified subject."
       ]
     }
@@ -36310,30 +36310,27 @@
       "from_node_id": "km_f_matematika_tingkat_lanjut_turunan_fungsi_polinomial",
       "to_node_id": "km_f_matematika_tingkat_lanjut_sketsa_kurva_menggunakan_turunan",
       "edge_type": "prerequisite",
-      "applicability": "conditional",
       "strength": 0.74,
-      "reason_id": "Bersyarat pada fungsi polinomial: learner perlu mampu menurunkan fungsi polinomial untuk memperoleh f'(x) dan f''(x) yang digunakan dalam analisis kurva polinomial.",
-      "reason_en": "Conditional for polynomial functions: learners need to differentiate polynomial functions to obtain f'(x) and f''(x) used in polynomial curve analysis."
+      "reason_id": "Pada soal kurva polinomial, learner perlu mampu menurunkan fungsi polinomial untuk memperoleh f'(x) dan f''(x) yang digunakan dalam analisis kurva.",
+      "reason_en": "For polynomial curve tasks, learners need to differentiate polynomial functions to obtain f'(x) and f''(x) used in curve analysis."
     },
     {
       "id": "edge_00569",
       "from_node_id": "km_f_matematika_tingkat_lanjut_turunan_fungsi_eksponensial",
       "to_node_id": "km_f_matematika_tingkat_lanjut_sketsa_kurva_menggunakan_turunan",
       "edge_type": "prerequisite",
-      "applicability": "conditional",
       "strength": 0.72,
-      "reason_id": "Bersyarat pada fungsi eksponensial: learner perlu mampu menurunkan fungsi eksponensial ketika kurva yang dianalisis memuat keluarga fungsi tersebut.",
-      "reason_en": "Conditional for exponential functions: learners need to differentiate exponential functions when the curve being analyzed belongs to that function family."
+      "reason_id": "Pada soal kurva eksponensial, learner perlu mampu menurunkan fungsi eksponensial untuk menganalisis bentuk kurva.",
+      "reason_en": "For exponential curve tasks, learners need to differentiate exponential functions to analyze the curve's shape."
     },
     {
       "id": "edge_00570",
       "from_node_id": "km_f_matematika_tingkat_lanjut_turunan_fungsi_trigonometri",
       "to_node_id": "km_f_matematika_tingkat_lanjut_sketsa_kurva_menggunakan_turunan",
       "edge_type": "prerequisite",
-      "applicability": "conditional",
       "strength": 0.74,
-      "reason_id": "Bersyarat pada fungsi trigonometri: learner perlu mampu menurunkan fungsi trigonometri untuk menganalisis interval, ekstrem, dan kecekungan kurva trigonometri.",
-      "reason_en": "Conditional for trigonometric functions: learners need to differentiate trigonometric functions to analyze intervals, extrema, and concavity of trigonometric curves."
+      "reason_id": "Pada soal kurva trigonometri, learner perlu mampu menurunkan fungsi trigonometri untuk menganalisis interval, ekstrem, dan kecekungan.",
+      "reason_en": "For trigonometric curve tasks, learners need to differentiate trigonometric functions to analyze intervals, extrema, and concavity."
     },
     {
       "id": "edge_00571",
@@ -36583,30 +36580,27 @@
       "from_node_id": "km_f_matematika_tingkat_lanjut_aturan_rantai",
       "to_node_id": "km_f_matematika_tingkat_lanjut_turunan_fungsi_polinomial",
       "edge_type": "prerequisite",
-      "applicability": "conditional",
       "strength": 0.76,
-      "reason_id": "Bersyarat untuk polinomial komposit: aturan rantai diperlukan ketika variabel muncul melalui komposisi fungsi, bukan untuk setiap turunan polinomial dasar.",
-      "reason_en": "Conditional for composite polynomials: the chain rule is required when the variable appears through function composition, not for every basic polynomial derivative."
+      "reason_id": "Pada soal polinomial komposit, aturan rantai diperlukan ketika variabel muncul melalui komposisi fungsi.",
+      "reason_en": "For composite-polynomial tasks, the chain rule is required when the variable appears through function composition."
     },
     {
       "id": "edge_00603",
       "from_node_id": "km_f_matematika_tingkat_lanjut_aturan_rantai",
       "to_node_id": "km_f_matematika_tingkat_lanjut_turunan_fungsi_eksponensial",
       "edge_type": "prerequisite",
-      "applicability": "conditional",
       "strength": 0.76,
-      "reason_id": "Bersyarat untuk fungsi eksponensial komposit: aturan rantai diperlukan ketika eksponen merupakan fungsi dari variabel.",
-      "reason_en": "Conditional for composite exponential functions: the chain rule is required when the exponent is itself a function of the variable."
+      "reason_id": "Pada soal fungsi eksponensial komposit, aturan rantai diperlukan ketika eksponen merupakan fungsi dari variabel.",
+      "reason_en": "For composite-exponential tasks, the chain rule is required when the exponent is itself a function of the variable."
     },
     {
       "id": "edge_00604",
       "from_node_id": "km_f_matematika_tingkat_lanjut_aturan_rantai",
       "to_node_id": "km_f_matematika_tingkat_lanjut_turunan_fungsi_trigonometri",
       "edge_type": "prerequisite",
-      "applicability": "conditional",
       "strength": 0.76,
-      "reason_id": "Bersyarat untuk fungsi trigonometri komposit: aturan rantai diperlukan ketika argumen sinus, kosinus, atau tangen merupakan fungsi dari variabel.",
-      "reason_en": "Conditional for composite trigonometric functions: the chain rule is required when the sine, cosine, or tangent argument is itself a function of the variable."
+      "reason_id": "Pada soal fungsi trigonometri komposit, aturan rantai diperlukan ketika argumen sinus, kosinus, atau tangen merupakan fungsi dari variabel.",
+      "reason_en": "For composite-trigonometric tasks, the chain rule is required when the sine, cosine, or tangent argument is itself a function of the variable."
     },
     {
       "id": "edge_00605",
