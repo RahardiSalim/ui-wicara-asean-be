@@ -1419,7 +1419,7 @@ def _max_generation_attempts(*, assessment_type: str | None = None) -> int:
 
 
 def _fresh_generation_max_tokens(*, question_count: int) -> int:
-    return 1000 + (2000 * max(1, question_count))
+    return 2000 + (4000 * max(1, question_count))
 
 
 def _fresh_question_type_choices(

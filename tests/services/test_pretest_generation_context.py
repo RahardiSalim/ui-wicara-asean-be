@@ -83,9 +83,9 @@ def test_fresh_generation_uses_strict_batch_and_option_counts():
 
 
 def test_fresh_generation_output_budget_scales_with_batch_size():
-    assert _fresh_generation_max_tokens(question_count=1) == 3000
-    assert _fresh_generation_max_tokens(question_count=2) == 5000
-    assert _fresh_generation_max_tokens(question_count=3) == 7000
+    assert _fresh_generation_max_tokens(question_count=1) == 6000
+    assert _fresh_generation_max_tokens(question_count=2) == 10000
+    assert _fresh_generation_max_tokens(question_count=3) == 14000
 
 
 def test_prerequisite_probe_schema_excludes_direct_computation():
