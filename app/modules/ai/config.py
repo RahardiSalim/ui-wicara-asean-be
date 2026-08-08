@@ -38,7 +38,7 @@ class AISettings(BaseSettings):
         validation_alias=AliasChoices("OPENROUTER_BASE_URL", "WICARA_OPENROUTER_BASE_URL"),
     )
     ai_request_timeout_seconds: float = Field(
-        default=30.0,
+        default=270.0,
         gt=0,
         validation_alias=AliasChoices(
             "AI_REQUEST_TIMEOUT_SECONDS",

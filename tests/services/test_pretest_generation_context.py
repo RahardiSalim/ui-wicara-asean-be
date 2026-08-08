@@ -8,11 +8,13 @@ from app.modules.pretests.adaptive_service import (
 )
 from app.modules.pretests.generation_service import (
     _fresh_generation_max_tokens,
+    _fresh_generation_timeout_seconds,
     _fresh_question_prompt,
     _fresh_question_response_format,
     _fresh_question_type_choices,
     _max_generation_attempts,
     _normalize_skill_trace,
+    _solution_skill_catalog,
 )
 from app.modules.pretests.graph_scope_builder import GraphScopeBuilder
 
@@ -111,6 +113,15 @@ def test_fresh_generation_output_budget_scales_with_batch_size():
     assert _fresh_generation_max_tokens(question_count=3) == 14000
 
 
+def test_pretest_generation_timeout_is_capped_below_frontend_timeout(monkeypatch):
+    monkeypatch.setenv("WICARA_PRETEST_LLM_TIMEOUT_SECONDS", "999")
+
+    assert _fresh_generation_timeout_seconds(
+        assessment_type="pretest",
+        ai_request_timeout_seconds=999,
+    ) == 270
+
+
 def test_prerequisite_probe_schema_excludes_direct_computation():
     types = _fresh_question_type_choices(
         difficulties=["easy", "medium", "hard"],
@@ -147,6 +158,40 @@ def test_duplicate_skill_trace_entries_are_merged_by_concept_code():
         {
             "concept_code": "chain.rule",
             "criterion": "Include the inner derivative.",
+        },
+    ]
+
+
+def test_solution_skill_catalog_excludes_verbose_candidate_diagnostics():
+    concept = KnowledgeConcept(
+        code="curve.sketch",
+        title="Curve sketch",
+        description="Analyze curve behavior.",
+    )
+
+    catalog = _solution_skill_catalog(
+        concept=concept,
+        skill_candidates=[
+            {
+                "concept_code": "chain.rule",
+                "title": "Chain rule",
+                "description": "Differentiate composite functions.",
+                "assessment_evidence": ["Long evidence that belongs to the candidate node."],
+                "common_misconceptions": ["Long misconception that is not needed in this catalog."],
+            }
+        ],
+    )
+
+    assert catalog == [
+        {
+            "concept_code": "curve.sketch",
+            "title": "Curve sketch",
+            "description": "Analyze curve behavior.",
+        },
+        {
+            "concept_code": "chain.rule",
+            "title": "Chain rule",
+            "description": "Differentiate composite functions.",
         },
     ]
 
@@ -301,5 +346,5 @@ def test_goal_prompt_requires_question_specific_skill_trace_without_forced_focus
 
     assert '"concept_code": "chain.rule"' in prompt
     assert "never add a skill merely to force adaptive routing" in prompt
-    assert '"skill_trace"' in prompt
+    assert "skill_trace" in prompt
     assert "diagnostic_prerequisite_code" not in prompt

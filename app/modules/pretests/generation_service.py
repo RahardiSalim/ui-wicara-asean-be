@@ -26,7 +26,7 @@ from app.modules.review.flagger import enqueue_flag
 PACK_PROMPT_VERSION = "adaptive_node_pack_v6_flexible_subject_tasks"
 FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v10_minimal_contract"
 DEFAULT_PACK_GENERATION_MAX_ATTEMPTS = 4
-DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 20.0
+DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 270.0
 
 
 class AssessmentQuestionGenerationError(ValueError):
@@ -1081,27 +1081,7 @@ Before returning JSON, internally verify:
 - every skill_trace is non-empty and contains only skills genuinely used by that question
 
 Return exactly {len(difficulties)} question objects in the same order as the requested difficulty sequence.
-Return JSON shaped exactly as:
-{{
-  "questions": [
-    {{
-      "stem": "string",
-      "question_type": "direct_computation | concept_recognition | word_problem | equation_representation | error_analysis | missing_value | strategy_comparison | table_interpretation | multi_step_application | concept_application",
-      "options": [
-        {{"id": "A", "text": "string"}},
-        {{"id": "B", "text": "string"}},
-        {{"id": "C", "text": "string"}},
-        {{"id": "D", "text": "string"}}
-      ],
-      "correct_option_id": "A",
-      "skill_trace": [
-        {{"concept_code": "exact code from the allowed catalog", "criterion": "observable solution-step criterion"}}
-      ],
-      "expected_reasoning": "string",
-      "explanation": "string"
-    }}
-  ]
-}}
+Follow the provided strict response schema; do not repeat fields that are not in it.
 {retry_instruction}
 """.strip()
 
@@ -1262,7 +1242,7 @@ def _solution_skill_catalog(
         {
             "concept_code": concept.code,
             "title": concept.title,
-            "description": concept.description,
+            "description": str(concept.description or "").strip()[:240],
         }
     ]
     seen = {concept.code}
@@ -1270,7 +1250,13 @@ def _solution_skill_catalog(
         code = str(candidate.get("concept_code") or "").strip()
         if not code or code in seen:
             continue
-        catalog.append(candidate)
+        catalog.append(
+            {
+                "concept_code": code,
+                "title": str(candidate.get("title") or code).strip(),
+                "description": str(candidate.get("description") or "").strip()[:240],
+            }
+        )
         seen.add(code)
     return catalog
 
@@ -1419,7 +1405,7 @@ def _fresh_generation_timeout_seconds(
     if not raw_value:
         return ai_request_timeout_seconds
     try:
-        return max(1.0, min(180.0, float(raw_value)))
+        return max(1.0, min(270.0, float(raw_value)))
     except ValueError:
         return min(ai_request_timeout_seconds, DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS)
 
