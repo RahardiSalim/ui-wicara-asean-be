@@ -25,6 +25,7 @@ class CurriculumSeedResult:
     concepts_updated: int = 0
     edges_created: int = 0
     edges_updated: int = 0
+    edges_deleted: int = 0
 
 
 def seed_curriculum(
@@ -41,6 +42,7 @@ def seed_curriculum(
         "concepts_updated": 0,
         "edges_created": 0,
         "edges_updated": 0,
+        "edges_deleted": 0,
     }
 
     subjects_by_code: dict[str, Subject] = {}
@@ -102,9 +104,13 @@ def seed_curriculum(
     _mark_stale_concepts(session, subjects_by_code, current_concept_keys)
     session.flush()
 
+    current_edge_keys: set[tuple[object, object, str]] = set()
     for edge_data in seed_data.edges:
         from_concept = concepts_by_code[edge_data.from_code]
         to_concept = concepts_by_code[edge_data.to_code]
+        current_edge_keys.add(
+            (from_concept.id, to_concept.id, edge_data.edge_type)
+        )
         edge = session.scalar(
             select(ConceptEdge).where(
                 ConceptEdge.from_concept_id == from_concept.id,
@@ -126,10 +132,33 @@ def seed_curriculum(
         edge.weight = edge_data.weight
         edge.metadata_json = edge_data.metadata
 
+    counts["edges_deleted"] = _remove_stale_seed_edges(
+        session,
+        current_edge_keys=current_edge_keys,
+    )
+
     if commit:
         session.commit()
 
     return CurriculumSeedResult(**counts)
+
+
+def _remove_stale_seed_edges(
+    session: Session,
+    *,
+    current_edge_keys: set[tuple[object, object, str]],
+) -> int:
+    deleted = 0
+    for edge in session.scalars(select(ConceptEdge)):
+        metadata = edge.metadata_json or {}
+        if not metadata.get("source_curriculum_graph"):
+            continue
+        edge_key = (edge.from_concept_id, edge.to_concept_id, edge.edge_type)
+        if edge_key in current_edge_keys:
+            continue
+        session.delete(edge)
+        deleted += 1
+    return deleted
 
 
 def _deactivate_legacy_subject_aliases(

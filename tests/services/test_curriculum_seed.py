@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from sqlalchemy import func, select
 
@@ -146,7 +147,7 @@ def test_curriculum_seed_preserves_bilingual_metadata(db_session):
     assert concept.title == "Bilangan bulat"
     assert concept.metadata_json["label_id"] == "Bilangan bulat"
     assert concept.metadata_json["label_en"] == "Integers"
-    assert concept.metadata_json["description_en"].startswith("Understand and apply")
+    assert concept.metadata_json["description_en"].startswith("Learners can represent")
     assert concept.metadata_json["domain_en"] == "Numbers"
     assert concept.metadata_json["translation_status"]["en"] == "machine_draft"
     assert edge is not None
@@ -168,10 +169,69 @@ def test_curriculum_seed_generates_english_label_when_seed_copies_indonesian(
     assert concept.title == "Bilangan desimal"
     assert concept.metadata_json["label_id"] == "Bilangan desimal"
     assert concept.metadata_json["label_en"] == "Decimal numbers"
-    assert concept.en_desc == (
-        "Build understanding of Decimal numbers within Numbers for "
-        "Phase D / SMP/MTs / grades 7-9."
+    assert concept.en_desc.startswith("Learners can represent and compare decimal numbers")
+
+
+def test_default_seed_uses_revised_golden_flow_metadata(db_session):
+    seed_curriculum(db_session)
+
+    curve_sketch = db_session.scalar(
+        select(KnowledgeConcept).where(
+            KnowledgeConcept.code
+            == "km_f_matematika_tingkat_lanjut_sketsa_kurva_menggunakan_turunan"
+        )
     )
+    chain_rule = db_session.scalar(
+        select(KnowledgeConcept).where(
+            KnowledgeConcept.code
+            == "km_f_matematika_tingkat_lanjut_aturan_rantai"
+        )
+    )
+    trig_derivative = db_session.scalar(
+        select(KnowledgeConcept).where(
+            KnowledgeConcept.code
+            == "km_f_matematika_tingkat_lanjut_turunan_fungsi_trigonometri"
+        )
+    )
+    conditional_edge = db_session.scalar(
+        select(ConceptEdge).where(
+            ConceptEdge.from_concept_id == chain_rule.id,
+            ConceptEdge.to_concept_id == trig_derivative.id,
+            ConceptEdge.edge_type == "prerequisite",
+        )
+    )
+
+    assert curve_sketch.metadata_json["source_curriculum_graph"] == (
+        "wicara_kurikulum_merdeka_graph_complete_revised_2026-08-08.json"
+    )
+    assert len(curve_sketch.metadata_json["assessment_evidence_id"]) == 4
+    assert "f'(x)=0" in curve_sketch.metadata_json["common_misconceptions_id"][0]
+    assert set(curve_sketch.metadata_json["question_generation_guidance_id"]) == {
+        "easy",
+        "medium",
+        "hard",
+    }
+    assert conditional_edge.metadata_json["applicability"] == "conditional"
+
+
+def test_reseed_removes_edges_deleted_from_revised_graph(db_session):
+    backend_root = Path(__file__).resolve().parents[2]
+    old_graph = (
+        backend_root
+        / "app"
+        / "modules"
+        / "curriculum"
+        / "data"
+        / "wicara_kurikulum_merdeka_graph_complete_matematika_digabung.json"
+    )
+    revised_data = load_kurikulum_merdeka_seed_data()
+
+    seed_curriculum(db_session, graph_path=old_graph)
+    result = seed_curriculum(db_session)
+
+    edge_count = db_session.scalar(select(func.count()).select_from(ConceptEdge))
+    assert result.edges_deleted == 107
+    assert edge_count == len(revised_data.edges)
 
 
 def test_curriculum_seed_marks_removed_concepts_as_stale(db_session, tmp_path):
