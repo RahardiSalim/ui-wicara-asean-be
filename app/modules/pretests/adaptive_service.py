@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.language import normalize_language_code, preferred_language_code
 from app.modules.accounts.models import UserAccount
@@ -460,6 +461,7 @@ class AdaptivePretestService:
         state["current_question_id"] = str(question.id)
         state["question_count"] = int(state.get("question_count", 0)) + 1
         assessment.decision_state_json = deepcopy(state)
+        flag_modified(assessment, "decision_state_json")
         return question
 
     def _generate_pretest_node_questions(
