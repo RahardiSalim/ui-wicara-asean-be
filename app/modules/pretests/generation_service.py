@@ -1381,9 +1381,7 @@ def _fresh_question_type_choices(
     difficulties: list[str],
     node_role: str,
 ) -> set[str] | None:
-    if node_role == "prerequisite" and all(
-        difficulty in {"medium", "hard"} for difficulty in difficulties
-    ):
+    if node_role == "prerequisite":
         return {"error_analysis"}
     return None
 

@@ -82,7 +82,7 @@ def test_fresh_generation_output_budget_scales_with_batch_size():
 
 def test_prerequisite_probe_schema_excludes_direct_computation():
     types = _fresh_question_type_choices(
-        difficulties=["medium"],
+        difficulties=["easy", "medium", "hard"],
         node_role="prerequisite",
     )
     response_format = _fresh_question_response_format(
