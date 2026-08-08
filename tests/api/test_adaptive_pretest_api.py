@@ -355,14 +355,20 @@ def test_finalize_and_path_selection_create_track(client):
     assert target_metric["score_percent"] == 100
     assert target_metric["mastery_estimate_percent"] == 90
     assert target_metric["confidence_percent"] == 68
-    assert target_metric["metric_source"] == "official_mcq"
+    assert target_metric["metric_source"] == "adaptive_pretest_diagnosis"
+    assert target_metric["answer_metric_source"] == "official_mcq"
 
     dashboard = client.get(f"/api/v1/learning-goals/{learning_goal_id}/assessment-dashboard")
     assert dashboard.status_code == 200
     dashboard_payload = dashboard.json()
     assert dashboard_payload["state"] == "diagnosed"
     assert dashboard_payload["pretest"]["recommended_path"] == "review_only"
-    assert dashboard_payload["pretest"]["nodes"][0]["metric_source"] == "official_mcq"
+    assert dashboard_payload["pretest"]["nodes"][0]["metric_source"] == (
+        "adaptive_pretest_diagnosis"
+    )
+    assert dashboard_payload["pretest"]["nodes"][0]["answer_metric_source"] == (
+        "official_mcq"
+    )
     assert dashboard_payload["comparison"]["available"] is False
 
     path = client.post(
