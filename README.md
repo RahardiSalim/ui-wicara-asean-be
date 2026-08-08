@@ -55,7 +55,8 @@ The current backend AI provider is OpenRouter. The default model is defined in `
 
 ```text
 AI_PROVIDER=openrouter
-AI_MODEL=google/gemma-4-26b-a4b-it
+AI_MODEL=deepseek/deepseek-v4-flash
+AI_REASONING_EFFORT=high
 ```
 
 Override it with `AI_MODEL` or `WICARA_AI_MODEL` in `.env`.
@@ -337,7 +338,8 @@ SUPABASE_SERVICE_ROLE_KEY=replace-with-your-service-role-key
 OPENROUTER_API_KEY=replace-with-your-openrouter-key
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 AI_PROVIDER=openrouter
-AI_MODEL=google/gemma-4-26b-a4b-it
+AI_MODEL=deepseek/deepseek-v4-flash
+AI_REASONING_EFFORT=high
 ```
 
 ### Supabase pooler database URL

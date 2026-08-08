@@ -10,7 +10,7 @@ Usage (from backend root):
     python scripts/expand_question_bank_ai.py --dry-run 2     # generate for 2 concepts, print, no write
     python scripts/expand_question_bank_ai.py                 # full run, writes *.aigen.v1.json
     python scripts/expand_question_bank_ai.py --only mathematics.senior_high
-    python scripts/expand_question_bank_ai.py --model google/gemini-3.5-flash --workers 6
+    python scripts/expand_question_bank_ai.py --model deepseek/deepseek-v4-flash --workers 6
 
 Reads OPENROUTER_API_KEY / OPENROUTER_BASE_URL / AI_MODEL from .env or env.
 """
@@ -34,7 +34,7 @@ ENV_PATH = BACKEND_ROOT / ".env"
 
 TARGET_MEDIUM = 3
 TARGET_HARD = 7
-DEFAULT_MODEL = "google/gemma-4-26b-a4b-it"
+DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
 
 SUPPORTED_DIFFICULTIES = {"easy", "medium", "hard"}
 ASSESSMENT_TYPES = ["pretest", "daily_quiz", "posttest", "workspace_quiz"]
