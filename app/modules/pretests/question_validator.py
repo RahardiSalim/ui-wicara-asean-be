@@ -180,6 +180,8 @@ def _looks_like_direct_computation_only(prompt: str, *, question_type: str) -> b
         "hitung",
         "berapa hasil",
         "tentukan hasil",
+    )
+    direct_derivative_markers = (
         "tentukan turunan",
         "turunan pertama dari",
         "find the derivative",
@@ -210,4 +212,7 @@ def _looks_like_direct_computation_only(prompt: str, *, question_type: str) -> b
         "mistake",
         "kesalahan",
     )
-    return has_direct_marker and has_operation and not any(term in normalized for term in contextual_terms)
+    has_context = any(term in normalized for term in contextual_terms)
+    if any(marker in normalized for marker in direct_derivative_markers):
+        return not has_context
+    return has_direct_marker and has_operation and not has_context

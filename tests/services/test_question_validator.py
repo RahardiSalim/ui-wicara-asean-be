@@ -94,7 +94,7 @@ def test_hard_reasoning_type_does_not_depend_on_keyword_matching():
 def test_medium_direct_derivative_is_rejected_even_if_type_claims_error_analysis():
     question = _question()
     question["difficulty"] = "medium"
-    question["prompt"] = "Tentukan turunan pertama dari g(x)=sin(x^3+2x)."
+    question["prompt"] = "Tentukan turunan pertama dari g(x)=cos(x^2)."
 
     with pytest.raises(
         QuestionValidationError,
