@@ -93,6 +93,9 @@ class OpenRouterProvider(AIProvider):
             "messages": messages,
         }
         params = request.params.model_dump(exclude_none=True)
+        reasoning_effort = self._settings.ai_reasoning_effort.strip()
+        if reasoning_effort and "reasoning" not in params:
+            payload["reasoning"] = {"effort": reasoning_effort}
         if params:
             payload.update(params)
         return payload

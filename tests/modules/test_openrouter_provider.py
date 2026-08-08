@@ -15,6 +15,7 @@ def _settings(**overrides):
     values = {
         "AI_PROVIDER": "openrouter",
         "AI_MODEL": DEFAULT_AI_MODEL,
+        "AI_REASONING_EFFORT": "high",
         "OPENROUTER_API_KEY": "test-openrouter-key",
         "OPENROUTER_BASE_URL": "https://openrouter.test/api/v1",
         "AI_REQUEST_TIMEOUT_SECONDS": 1.0,
@@ -22,6 +23,7 @@ def _settings(**overrides):
     aliases = {
         "ai_provider": "AI_PROVIDER",
         "ai_model": "AI_MODEL",
+        "ai_reasoning_effort": "AI_REASONING_EFFORT",
         "openrouter_api_key": "OPENROUTER_API_KEY",
         "openrouter_base_url": "OPENROUTER_BASE_URL",
         "ai_request_timeout_seconds": "AI_REQUEST_TIMEOUT_SECONDS",
@@ -105,6 +107,7 @@ def test_text_request_uses_openrouter_chat_completion_payload():
     assert body["temperature"] == 0.2
     assert body["max_tokens"] == 64
     assert body["response_format"] == {"type": "json_object"}
+    assert body["reasoning"] == {"effort": "high"}
     assert body["messages"] == [
         {"role": "system", "content": "Return a short greeting."},
         {"role": "user", "content": [{"type": "text", "text": "Say hello."}]},
