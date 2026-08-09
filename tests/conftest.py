@@ -20,6 +20,7 @@ from app.modules.curriculum import models as curriculum_models  # noqa: F401,E40
 from app.modules.inputs import models as input_models  # noqa: F401,E402
 from app.modules.learning import models as learning_models  # noqa: F401,E402
 from app.modules.question_bank import models as question_bank_models  # noqa: F401,E402
+from app.modules.teacher_students import models as teacher_student_models  # noqa: F401,E402
 from app.modules.workspaces import models as workspace_models  # noqa: F401,E402
 
 
