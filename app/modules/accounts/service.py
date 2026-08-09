@@ -89,17 +89,17 @@ def _normalize_role(role: str) -> str:
 
 
 def resolve_role(claims: dict[str, Any], settings: Any) -> str:
-    """Derive the account role from a teacher allowlist or Supabase claims.
+    """Derive the account role from a teacher allowlist or trusted claims.
 
-    Falls back to ``learner`` when nothing matches. Kept dependency-free of the
-    Settings type so it can be called from anywhere a settings object is handy.
+    User metadata is user-controlled and therefore cannot grant teacher access.
+    Falls back to ``learner`` when nothing trusted matches. Kept dependency-free
+    of the Settings type so it can be called wherever a settings object is handy.
     """
     email = _string_or_none(claims.get("email"))
     if email and email.lower() in settings.teacher_email_set:
         return "teacher"
     app_metadata = claims.get("app_metadata") or {}
-    user_metadata = claims.get("user_metadata") or {}
-    claimed = app_metadata.get("role") or user_metadata.get("role") or "learner"
+    claimed = app_metadata.get("role") if isinstance(app_metadata, dict) else None
     return _normalize_role(str(claimed))
 
 
