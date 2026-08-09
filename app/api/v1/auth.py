@@ -98,7 +98,7 @@ def authenticate_with_supabase(
     settings: Settings = Depends(get_settings),
 ) -> AuthSessionResponse:
     claims = verify_supabase_token_or_401(payload.access_token, settings)
-    role = _authoritative_role(claims, settings=settings, requested_role=payload.role)
+    role = _authoritative_role(claims, settings=settings)
     account = sync_supabase_user(session, claims=claims, role=role)
     return _auth_session_response(session, account=account, token=payload.access_token)
 
@@ -109,7 +109,6 @@ async def sign_in_with_backend(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> AuthSessionResponse:
-    _requested_role(payload.role)
     try:
         access_token, supabase_refresh_token = await sign_in_with_password(
             settings=settings,
@@ -122,7 +121,7 @@ async def sign_in_with_backend(
             detail=str(exc),
         ) from exc
     claims = verify_supabase_token_or_401(access_token, settings)
-    role = _authoritative_role(claims, settings=settings, requested_role=payload.role)
+    role = _authoritative_role(claims, settings=settings)
     account = sync_supabase_user(session, claims=claims, role=role)
     return _auth_session_response(
         session, account=account, token=access_token, refresh_token=supabase_refresh_token
@@ -164,7 +163,6 @@ async def sign_in_with_google(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> AuthSessionResponse:
-    _requested_role(payload.role)
     try:
         access_token, supabase_refresh_token = await sign_in_with_google_id_token(
             settings=settings,
@@ -178,7 +176,7 @@ async def sign_in_with_google(
             detail=str(exc),
         ) from exc
     claims = verify_supabase_token_or_401(access_token, settings)
-    role = _authoritative_role(claims, settings=settings, requested_role=payload.role)
+    role = _authoritative_role(claims, settings=settings)
     account = sync_supabase_user(session, claims=claims, role=role)
     return _auth_session_response(
         session, account=account, token=access_token, refresh_token=supabase_refresh_token
