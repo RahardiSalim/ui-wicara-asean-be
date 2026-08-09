@@ -3,6 +3,7 @@ from app.modules.workspaces.service import (
     _ensure_phase_metadata,
     _phase_is_ready,
     _record_phase_evidence,
+    _remediate_metadata_to_phase,
     _sanitize_learner_metadata,
 )
 from app.modules.workspaces.tutor import (
@@ -66,6 +67,84 @@ def test_scaffold_escalates_after_repeated_verified_failure():
 
     assert levels == [1, 2, 3]
     assert metadata["consecutive_failures"] == 3
+
+
+def test_scaffold_unwinds_after_recovery():
+    metadata = _ensure_phase_metadata({})
+    for _ in range(3):
+        metadata = _record_phase_evidence(
+            metadata,
+            phase="explore",
+            tutor_response=_response(
+                tags=["exploration_attempt"],
+                correctness="incorrect",
+                misconception="active",
+            ),
+            event_type="text",
+        )
+    assert metadata["hint_level"] == 3
+
+    metadata = _record_phase_evidence(
+        metadata,
+        phase="explore",
+        tutor_response=_response(tags=["pattern_identified"]),
+        event_type="text",
+    )
+    # A learner who recovers must not stay stuck near the top of the ladder.
+    assert metadata["consecutive_failures"] == 0
+    assert metadata["hint_level"] == 1
+
+
+def test_remediation_clears_evidence_so_the_learner_cannot_ping_pong():
+    metadata = _ensure_phase_metadata({})
+    for tag in ("exploration_attempt", "pattern_identified"):
+        metadata = _record_phase_evidence(
+            metadata,
+            phase="explore",
+            tutor_response=_response(tags=[tag]),
+            event_type="text",
+        )
+    for tag in ("independent_attempt", "error_analysis"):
+        metadata = _record_phase_evidence(
+            metadata,
+            phase="evaluate",
+            tutor_response=_response(tags=[tag]),
+            event_type="text",
+        )
+    assert _phase_is_ready(metadata, phase="explore") is True
+    assert _phase_is_ready(metadata, phase="evaluate") is True
+
+    metadata = _remediate_metadata_to_phase(
+        metadata,
+        phase="explore",
+        reason="evaluate_misconception",
+    )
+
+    # Everything from the remediation target forward is re-earned, otherwise the
+    # stale evidence re-opens the gate on the very next turn.
+    assert metadata["current_phase"] == "explore"
+    assert _phase_is_ready(metadata, phase="explore") is False
+    assert _phase_is_ready(metadata, phase="evaluate") is False
+    assert metadata["posttest_eligible"] is False
+
+
+def test_evaluate_gate_is_reachable_with_attempt_and_analysis():
+    metadata = _ensure_phase_metadata({"current_phase": "evaluate"})
+    metadata = _record_phase_evidence(
+        metadata,
+        phase="evaluate",
+        tutor_response=_response(tags=["independent_attempt"]),
+        event_type="text",
+    )
+    assert _phase_is_ready(metadata, phase="evaluate") is False
+
+    metadata = _record_phase_evidence(
+        metadata,
+        phase="evaluate",
+        tutor_response=_response(tags=["reflection"]),
+        event_type="text",
+    )
+    assert _phase_is_ready(metadata, phase="evaluate") is True
 
 
 def test_learner_metadata_cannot_claim_correctness_or_phase_state():

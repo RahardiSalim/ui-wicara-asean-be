@@ -13,6 +13,10 @@ from app.modules.curriculum.kurikulum_merdeka import (
     translate_curriculum_label_to_english,
 )
 from app.modules.curriculum.models import ConceptEdge, KnowledgeConcept
+from app.modules.evidence.canvas_upload_service import (
+    image_asset_file_path,
+    load_owned_image_asset,
+)
 from app.modules.inputs.service import create_workspace_input_event
 from app.modules.learning.models import LearningTrack, MediaArtifact, TrackModule
 from app.modules.learning.spec_generator import generate_spec_from_workspace_context
@@ -29,7 +33,7 @@ from app.modules.workspaces.schemas import (
     WorkspaceSessionHistoryRead,
     WorkspaceSessionSummaryRead,
 )
-from app.modules.workspaces.tutor import generate_tutor_response
+from app.modules.workspaces.tutor import TutorImageInput, generate_tutor_response
 
 VALID_EVENT_TYPES = {
     "text",
@@ -47,6 +51,9 @@ _posttest_service = AdaptivePosttestService()
 
 _PILOT_TEMPLATE_ID = "manim.number_line_quantity.v1"
 _PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
+_MAX_HINT_LEVEL = 6
+_HINT_DECAY_PER_SUCCESS = 2
+_EVIDENCE_CONFIDENCE_FLOOR = 0.55
 _DEFAULT_PHASE_MIN_TURNS: dict[str, int] = {
     "engage": 1,
     "explore": 1,
@@ -77,8 +84,7 @@ _PHASE_REQUIRED_EVIDENCE: dict[str, tuple[frozenset[str], ...]] = {
     ),
     "evaluate": (
         frozenset({"independent_attempt"}),
-        frozenset({"error_analysis"}),
-        frozenset({"reflection"}),
+        frozenset({"error_analysis", "reflection"}),
     ),
 }
 
@@ -116,12 +122,15 @@ def create_or_resume_workspace(
         if workspace.track_id != track.id or workspace.module_id != module.id:
             raise LookupError("Workspace session does not belong to the requested module.")
     elif not start_new_session:
+        # A completed workspace is a finished record, not somewhere to drop the
+        # learner back into: auto-resume only ever picks up unfinished work.
         workspace = session.scalar(
             select(WorkspaceSession)
             .where(
                 WorkspaceSession.user_id == user.id,
                 WorkspaceSession.track_id == track.id,
                 WorkspaceSession.module_id == module.id,
+                WorkspaceSession.status != "completed",
             )
             .order_by(WorkspaceSession.updated_at.desc(), WorkspaceSession.created_at.desc())
             .options(selectinload(WorkspaceSession.events))
@@ -160,7 +169,10 @@ def create_or_resume_workspace(
     else:
         workspace.current_topic = topic_title or module.title
         workspace.content_mode = _normalize_content_mode(content_mode)
-        workspace.status = "active"
+        # Never demote a completed session back to active; the posttest owns that
+        # transition and reopening a finished record must not undo it.
+        if workspace.status != "completed":
+            workspace.status = "active"
         workspace.updated_at = datetime.now(UTC)
     _apply_workspace_context(
         session,
@@ -204,6 +216,8 @@ def list_workspace_sessions(
     user: UserAccount,
     track_id: UUID,
     module_id: UUID,
+    limit: int = 20,
+    offset: int = 0,
 ) -> WorkspaceSessionHistoryRead:
     track, module = _resolve_owned_track_module(
         session,
@@ -211,22 +225,47 @@ def list_workspace_sessions(
         track_id=track_id,
         module_id=module_id,
     )
+    scope = (
+        WorkspaceSession.user_id == user.id,
+        WorkspaceSession.track_id == track.id,
+        WorkspaceSession.module_id == module.id,
+    )
+    total = int(session.scalar(select(func.count()).select_from(WorkspaceSession).where(*scope)) or 0)
     workspaces = session.scalars(
         select(WorkspaceSession)
-        .where(
-            WorkspaceSession.user_id == user.id,
-            WorkspaceSession.track_id == track.id,
-            WorkspaceSession.module_id == module.id,
-        )
+        .where(*scope)
         .order_by(WorkspaceSession.updated_at.desc(), WorkspaceSession.created_at.desc())
+        .offset(offset)
+        .limit(limit)
         .options(selectinload(WorkspaceSession.events))
     ).all()
+    language = _preferred_language(user)
     return WorkspaceSessionHistoryRead(
         sessions=[
-            _workspace_session_summary(workspace, fallback_title=module.title)
+            _workspace_session_summary(
+                workspace,
+                fallback_title=module.title,
+                language=language,
+            )
             for workspace in workspaces
-        ]
+        ],
+        total=total,
+        has_more=(offset + len(workspaces)) < total,
     )
+
+
+def delete_workspace(
+    session: Session,
+    *,
+    user: UserAccount,
+    workspace_id: UUID,
+) -> bool:
+    workspace = _load_workspace(session, user=user, workspace_id=workspace_id)
+    if workspace is None:
+        return False
+    session.delete(workspace)
+    session.commit()
+    return True
 
 
 def advance_workspace_phase(
@@ -302,16 +341,52 @@ def start_posttest(
         track_id=workspace.track_id,
         module_id=workspace.module_id,
     )
-    posttest = _posttest_service.start(
-        session,
-        user=user,
-        workspace_session_id=workspace.id,
-        learning_goal_id=track.learning_goal_id,
-        track_id=track.id,
-        module_id=module.id,
+    language = _preferred_language(user)
+    concept = session.get(KnowledgeConcept, module.concept_id) if module.concept_id else None
+    concept_title = (
+        _concept_display_title(concept, language=language)
+        if concept is not None
+        else _module_display_title(module, language=language)
     )
+
+    def _record_trigger(payload: dict[str, Any]) -> None:
+        refreshed = _ensure_phase_metadata(
+            dict(workspace.metadata_json or {}),
+            created_at=workspace.created_at,
+        )
+        refreshed["posttest_trigger"] = {
+            "learning_goal_id": str(track.learning_goal_id),
+            "track_id": str(track.id),
+            "module_id": str(module.id),
+            "workspace_session_id": str(workspace.id),
+            "concept_code": concept.code if concept is not None else None,
+            "concept_title": concept_title,
+            "triggered_at": datetime.now(UTC).isoformat(),
+            **payload,
+        }
+        workspace.metadata_json = refreshed
+        workspace.updated_at = datetime.now(UTC)
+        session.commit()
+
+    try:
+        posttest = _posttest_service.start(
+            session,
+            user=user,
+            workspace_session_id=workspace.id,
+            learning_goal_id=track.learning_goal_id,
+            track_id=track.id,
+            module_id=module.id,
+        )
+    except ValueError as exc:
+        # Drop anything the failed generation left pending before recording the
+        # error, so a partial posttest is never committed as a side effect.
+        session.rollback()
+        _record_trigger({"status": "error", "reason": "posttest_start_failed", "error": str(exc)})
+        raise
     if posttest is None:
-        raise ValueError("Posttest could not be created for this module.")
+        message = "Posttest could not be created for this module."
+        _record_trigger({"status": "error", "reason": "posttest_unavailable", "error": message})
+        raise ValueError(message)
     refreshed_metadata = _ensure_phase_metadata(
         dict(workspace.metadata_json or {}),
         created_at=workspace.created_at,
@@ -325,8 +400,11 @@ def start_posttest(
         "track_id": str(track.id),
         "module_id": str(module.id),
         "workspace_session_id": str(workspace.id),
+        "concept_code": concept.code if concept is not None else None,
+        "concept_title": concept_title,
         "posttest_session_id": str(posttest.session_id),
         "question_count": int(posttest.total_questions),
+        "error": None,
         "triggered_at": datetime.now(UTC).isoformat(),
     }
     workspace.metadata_json = refreshed_metadata
@@ -351,7 +429,9 @@ async def append_workspace_event(
     media_artifact_id: UUID | None,
     metadata: dict[str, Any],
 ) -> WorkspaceEventCreateResponse | None:
-    workspace = _load_workspace(session, user=user, workspace_id=workspace_id)
+    workspace = _load_workspace(
+        session, user=user, workspace_id=workspace_id, for_update=True
+    )
     if workspace is None:
         return None
 
@@ -361,6 +441,7 @@ async def append_workspace_event(
         raise ValueError("Public workspace events must be authored by the learner.")
     if media_artifact_id is not None:
         _resolve_owned_media_artifact(session, user=user, media_artifact_id=media_artifact_id)
+    tutor_image = _resolve_tutor_image_input(session, user=user, image_asset_id=image_asset_id)
 
     module = session.get(TrackModule, workspace.module_id)
     if module is not None:
@@ -387,13 +468,14 @@ async def append_workspace_event(
         events=list(workspace.events),
         current_phase=current_phase,
         learner_language=_preferred_language(user),
+        image_input=tutor_image,
     )
     learner_metadata = _sanitize_learner_metadata(metadata)
     event_metadata = {**learner_metadata, "ai_audit": ai_audit}
     evidence_verified = bool(
         tutor_response is not None
         and tutor_response.evidence_tags
-        and tutor_response.confidence >= 0.55
+        and tutor_response.confidence >= _EVIDENCE_CONFIDENCE_FLOOR
     )
     audit_metadata = {
         **learner_metadata,
@@ -498,26 +580,17 @@ async def append_workspace_event(
             ]
         metadata_json["phase_history"] = history
 
-    auto_advanced_next_phase: str | None = None
+    # Phase advance is learner-confirmed: the backend only flags readiness here and
+    # waits for POST /workspaces/{id}/advance-phase. Advancing inside this request
+    # would strand the tutor reply (generated for `current_phase`) in the next phase.
     phase_ready = _phase_is_ready(metadata_json, phase=current_phase)
     if current_phase != "evaluate":
-        metadata_json["phase_transition_pending"] = phase_ready
         min_turns = int(_phase_min_turns(metadata_json).get(current_phase, 1))
         current_turns = _current_phase_turns(metadata_json)
-        if phase_ready and current_turns >= min_turns:
-            next_phase = _PHASE_SEQUENCE[_PHASE_SEQUENCE.index(current_phase) + 1]
-            metadata_json = _advance_metadata_to_phase(
-                metadata_json,
-                next_phase=next_phase,
-            )
-            auto_advanced_next_phase = next_phase
+        metadata_json["phase_transition_pending"] = phase_ready and current_turns >= min_turns
     elif tutor_response is not None:
         outcome = tutor_response.evaluation_outcome
-        if (
-            phase_ready
-            and outcome == "passed"
-            and tutor_response.correctness == "correct"
-        ):
+        if phase_ready and outcome == "passed":
             metadata_json["posttest_eligible"] = True
             metadata_json["phase_transition_pending"] = False
         elif outcome == "misconception":
@@ -532,9 +605,10 @@ async def append_workspace_event(
                 phase="elaborate",
                 reason="evaluate_partial_transfer",
             )
-        else:
-            metadata_json["posttest_eligible"] = False
+        # Otherwise leave posttest_eligible untouched: once the learner has earned
+        # eligibility it stays earned until a remediation explicitly revokes it.
 
+    tutor_degraded = bool(ai_audit.get("degraded", False))
     if tutor_response is not None:
         tutor_response = tutor_response.model_copy(
             update={
@@ -542,6 +616,7 @@ async def append_workspace_event(
                 "scaffold_level": max(
                     0, _safe_int(metadata_json.get("hint_level"), 0)
                 ),
+                "degraded": tutor_degraded,
             }
         )
 
@@ -554,15 +629,8 @@ async def append_workspace_event(
             "scaffold_level": max(
                 0, _safe_int(metadata_json.get("hint_level"), 0)
             ),
+            "degraded": tutor_degraded,
         }
-        if auto_advanced_next_phase is not None:
-            tutor_event.metadata_json.update(
-                {
-                    "auto_phase_advanced": True,
-                    "advanced_from": current_phase,
-                    "advanced_to": auto_advanced_next_phase,
-                }
-            )
 
     metadata_json = _sync_learning_context_state(metadata_json)
     workspace.metadata_json = _ensure_phase_metadata(
@@ -600,7 +668,9 @@ def queue_workspace_video_generation(
     concept_id: UUID | None,
     metadata: dict[str, Any],
 ) -> WorkspaceGenerateVideoResponse | None:
-    workspace = _load_workspace(session, user=user, workspace_id=workspace_id)
+    workspace = _load_workspace(
+        session, user=user, workspace_id=workspace_id, for_update=True
+    )
     if workspace is None:
         return None
 
@@ -719,7 +789,20 @@ def workspace_to_schema(
         learning_context=dict(metadata.get("learning_context") or {}),
         phase_evidence=dict(metadata.get("phase_evidence") or {}),
         hint_level=max(0, _safe_int(metadata.get("hint_level"), 0)),
+        tutor_degraded=_latest_tutor_degraded(events),
     )
+
+
+def _latest_tutor_degraded(events: list[WorkspaceEvent]) -> bool:
+    """True when the most recent tutor turn came from the deterministic fallback."""
+    for event in reversed(events):
+        if event.actor_type != "tutor":
+            continue
+        metadata = event.metadata_json or {}
+        if metadata.get("source") != "workspace_tutor_response":
+            continue
+        return bool(metadata.get("degraded", False))
+    return False
 
 
 def event_to_schema(event: WorkspaceEvent) -> WorkspaceEventRead:
@@ -744,6 +827,7 @@ def _workspace_session_summary(
     workspace: WorkspaceSession,
     *,
     fallback_title: str,
+    language: str = "en",
 ) -> WorkspaceSessionSummaryRead:
     events = sorted(workspace.events, key=lambda event: event.event_index)
     text_events = [
@@ -752,7 +836,12 @@ def _workspace_session_summary(
         if event.text_payload.strip() and event.event_type in {"text", "quiz_answer", "note"}
     ]
     preview_event = text_events[-1] if text_events else None
-    preview = preview_event.text_payload.strip() if preview_event else "Belum ada pesan."
+    empty_preview = (
+        "Belum ada pesan."
+        if _normalize_language_code(language) == "id"
+        else "No messages yet."
+    )
+    preview = preview_event.text_payload.strip() if preview_event else empty_preview
     first_learner_event = next(
         (event for event in text_events if event.actor_type == "learner"),
         None,
@@ -795,6 +884,26 @@ def _resolve_owned_track_module(
     return track, module
 
 
+def _resolve_tutor_image_input(
+    session: Session,
+    *,
+    user: UserAccount,
+    image_asset_id: UUID | None,
+) -> TutorImageInput | None:
+    """Resolve a learner-owned image asset into something the tutor can actually see."""
+    if image_asset_id is None:
+        return None
+    asset = load_owned_image_asset(session, user=user, asset_id=image_asset_id)
+    if asset is None:
+        raise LookupError("Image asset was not found.")
+    path = image_asset_file_path(asset)
+    if path is None:
+        # The row exists but the bytes are gone; degrade to a text-only turn rather
+        # than failing the whole append.
+        return None
+    return TutorImageInput(file_path=str(path), mime_type=asset.mime_type)
+
+
 def _resolve_owned_media_artifact(
     session: Session,
     *,
@@ -817,13 +926,19 @@ def _load_workspace(
     *,
     user: UserAccount,
     workspace_id: UUID,
+    for_update: bool = False,
 ) -> WorkspaceSession | None:
-    return session.scalar(
+    statement = (
         select(WorkspaceSession)
         .where(WorkspaceSession.id == workspace_id, WorkspaceSession.user_id == user.id)
-        .options(selectinload(WorkspaceSession.events))
         .execution_options(populate_existing=True)
     )
+    if for_update:
+        # Serialise concurrent appends against the same workspace. Without this two
+        # in-flight events both read the same max(event_index) and the second commit
+        # trips uq_workspace_events_session_index with a 500.
+        statement = statement.with_for_update()
+    return session.scalar(statement.options(selectinload(WorkspaceSession.events)))
 
 
 def _next_event_index(session: Session, *, workspace_id: UUID) -> int:
@@ -976,7 +1091,9 @@ def _ensure_phase_metadata(
             "phase_min_turns": min_turns,
             "visited_5e_phases": visited_phases,
             "phase_evidence": phase_evidence,
-            "hint_level": max(0, min(6, _safe_int(safe.get("hint_level"), 0))),
+            "hint_level": max(
+                0, min(_MAX_HINT_LEVEL, _safe_int(safe.get("hint_level"), 0))
+            ),
             "consecutive_failures": max(
                 0, _safe_int(safe.get("consecutive_failures"), 0)
             ),
@@ -1034,14 +1151,19 @@ def _record_phase_evidence(
     if failed:
         failures = max(0, _safe_int(updated.get("consecutive_failures"), 0)) + 1
         updated["consecutive_failures"] = failures
-        updated["hint_level"] = min(6, max(failures, 3 if failures >= 3 else 0))
+        updated["hint_level"] = min(_MAX_HINT_LEVEL, failures)
     elif tutor_response.correctness == "correct":
+        # Unwind at the same rate the ladder can climb, so a learner who recovers
+        # is not stuck at a high scaffold level for the rest of the session.
         updated["consecutive_failures"] = 0
         updated["hint_level"] = max(
-            0, _safe_int(updated.get("hint_level"), 0) - 1
+            0, _safe_int(updated.get("hint_level"), 0) - _HINT_DECAY_PER_SUCCESS
         )
 
-    if tutor_response.confidence < 0.55 or not tutor_response.evidence_tags:
+    if (
+        tutor_response.confidence < _EVIDENCE_CONFIDENCE_FLOOR
+        or not tutor_response.evidence_tags
+    ):
         return updated
     evidence_by_phase = dict(updated.get("phase_evidence") or {})
     records = list(evidence_by_phase.get(phase, []))
@@ -1072,7 +1194,7 @@ def _phase_is_ready(metadata: dict[str, Any], *, phase: str) -> bool:
     for record in records:
         if not isinstance(record, dict):
             continue
-        if float(record.get("confidence") or 0.0) < 0.55:
+        if float(record.get("confidence") or 0.0) < _EVIDENCE_CONFIDENCE_FLOOR:
             continue
         if str(record.get("misconception_status") or "none") == "active":
             continue
@@ -1108,13 +1230,31 @@ def _advance_metadata_to_phase(
     return _sync_learning_context_state(updated)
 
 
+def _clear_phase_evidence_from(metadata: dict[str, Any], *, phase: str) -> dict[str, Any]:
+    """Drop recorded evidence for `phase` and every phase after it.
+
+    Without this a remediated learner re-satisfies the gate immediately from the
+    evidence they banked on their first pass, and ping-pongs back to evaluate.
+    """
+    updated = dict(metadata)
+    evidence = dict(updated.get("phase_evidence") or {})
+    start_index = _PHASE_SEQUENCE.index(_normalize_phase(phase))
+    for stale_phase in _PHASE_SEQUENCE[start_index:]:
+        evidence.pop(stale_phase, None)
+    updated["phase_evidence"] = evidence
+    return updated
+
+
 def _remediate_metadata_to_phase(
     metadata: dict[str, Any],
     *,
     phase: str,
     reason: str,
 ) -> dict[str, Any]:
-    updated = _advance_metadata_to_phase(metadata, next_phase=phase)
+    updated = _advance_metadata_to_phase(
+        _clear_phase_evidence_from(metadata, phase=phase),
+        next_phase=phase,
+    )
     updated["remediation_reason"] = reason
     updated["posttest_eligible"] = False
     return updated

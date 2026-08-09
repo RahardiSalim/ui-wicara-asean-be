@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import re
-from typing import Any
+from typing import Any, NamedTuple
 
 from app.modules.ai import ai_client
 from app.modules.ai.errors import AIError
@@ -17,9 +17,21 @@ from app.modules.workspaces.schemas import TutorResponseRead
 
 logger = logging.getLogger(__name__)
 
+
+class TutorImageInput(NamedTuple):
+    """A learner-supplied image (canvas snapshot / photo) to show the tutor."""
+
+    file_path: str
+    mime_type: str
+
+
 PROMPT_VERSION = "wicara_5e_evidence_context_v4"
 PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
 DEFAULT_TUTOR_TIMEOUT_SECONDS = 20.0
+MAX_SCAFFOLD_LEVEL = 6
+WORKED_EXAMPLE_SCAFFOLD_LEVEL = 3
+_TUTOR_MAX_ATTEMPTS = 2
+_TUTOR_RETRY_BACKOFF_SECONDS = 0.5
 
 _ALLOWED_EVIDENCE_TAGS = {
     "challenge_accepted",
@@ -97,14 +109,17 @@ Language rule:
 Teaching rules:
 - Be concise: avoid long generic monologues.
 - End with one guiding question or clear next action.
-- Lead the student to discover the answer. A worked example is allowed only when the
-  backend scaffold level is 3 or higher, and it must use a different example.
+- Lead the student to discover the answer. Obey the scaffold policy supplied with each
+  turn: it states the current backend scaffold level and what you may reveal at it.
 - Be warm, encouraging, and precise.
 - Avoid repeating the same opening pattern (for example repeated "Imagine..." hooks).
 - Treat the supplied learning context as authoritative. Ground the activity in the
   diagnosed evidence and remember the learner's original target.
 - Report evidence only when the latest learner message actually demonstrates it.
 - Never claim mastery merely because the learner says they understand or watches media.
+- When an image accompanies the turn it is the learner's own drawing or worked solution:
+  read it, refer to something concrete you can actually see in it, and judge correctness
+  from the work shown. Never claim to have seen a drawing when no image was supplied.
 """.strip()
 
 _PROMPTS: dict[str, str] = {
@@ -206,6 +221,16 @@ def _build_user_instruction(
 ) -> str:
     template = _PROMPTS.get(current_phase, _PROMPTS["chat"])
     next_phase = _next_phase(current_phase)
+    scaffold_level = max(0, int(learning_context.get("scaffold_level") or 0))
+    scaffold_instruction = (
+        "Scaffold policy:\n"
+        f"- Backend scaffold level: {scaffold_level} of {MAX_SCAFFOLD_LEVEL}.\n"
+        "- Level 0-1: ask one guiding question, reveal nothing.\n"
+        "- Level 2: give one targeted hint that names the idea to reconsider.\n"
+        f"- Level {WORKED_EXAMPLE_SCAFFOLD_LEVEL}+: a worked example is allowed, but it must "
+        "use different numbers/context than the learner's own task.\n"
+        "- Never exceed what the current level permits."
+    )
     transition_instruction = (
         "Phase transition check:\n"
         f"- Current phase: {current_phase}\n"
@@ -238,6 +263,7 @@ def _build_user_instruction(
     return "\n\n".join(
         [
             language_context,
+            scaffold_instruction,
             "Authoritative learning context:\n"
             + json.dumps(learning_context, ensure_ascii=False, default=str),
             template.format(
@@ -259,6 +285,7 @@ async def generate_tutor_response(
     events: list[WorkspaceEvent],
     current_phase: str,
     learner_language: str | None = None,
+    image_input: TutorImageInput | None = None,
 ) -> tuple[TutorResponseRead | None, dict[str, Any]]:
     """
     Call the configured AI provider to generate a tutor response.
@@ -285,6 +312,7 @@ async def generate_tutor_response(
                 phase, []
             ),
             "hint_level": int(workspace_metadata.get("hint_level") or 0),
+            "scaffold_level": int(workspace_metadata.get("hint_level") or 0),
             "recent_event_count": len(events),
         }
     )
@@ -323,7 +351,18 @@ async def generate_tutor_response(
         learning_context=learning_context,
     )
 
+    ai_inputs: list[dict[str, Any]] = []
+    if image_input is not None:
+        ai_inputs.append(
+            {
+                "type": "image",
+                "mime_type": image_input.mime_type,
+                "file_path": image_input.file_path,
+            }
+        )
+
     audit: dict[str, Any] = {
+        "has_image_input": image_input is not None,
         "prompt_version": PROMPT_VERSION,
         "phase": phase,
         "stage": phase,
@@ -337,17 +376,29 @@ async def generate_tutor_response(
         "learning_context": learning_context,
     }
 
-    try:
-        ai_response: AIGenerationResponse = await asyncio.wait_for(
-            ai_client.generate(
-                system_instruction=_SYSTEM_INSTRUCTION,
-                user_instruction=user_instruction,
-                params={
-                    "response_format": {"type": "json_object"},
-                },
-            ),
-            timeout=_tutor_timeout_seconds(),
-        )
+    last_error: Exception | None = None
+    for attempt in range(1, _TUTOR_MAX_ATTEMPTS + 1):
+        try:
+            ai_response: AIGenerationResponse = await asyncio.wait_for(
+                ai_client.generate(
+                    system_instruction=_SYSTEM_INSTRUCTION,
+                    user_instruction=user_instruction,
+                    inputs=ai_inputs,
+                    params={
+                        "response_format": {"type": "json_object"},
+                    },
+                ),
+                timeout=_tutor_timeout_seconds(),
+            )
+        except (AIError, TimeoutError) as exc:
+            last_error = exc
+            logger.warning(
+                "AI tutor attempt %s/%s failed: %s", attempt, _TUTOR_MAX_ATTEMPTS, exc
+            )
+            if attempt < _TUTOR_MAX_ATTEMPTS:
+                await asyncio.sleep(_TUTOR_RETRY_BACKOFF_SECONDS)
+            continue
+
         audit.update(
             {
                 "ai_source": ai_response.provider,
@@ -356,6 +407,7 @@ async def generate_tutor_response(
                 "finish_reason": ai_response.finish_reason,
                 "input_tokens": ai_response.usage.input_tokens if ai_response.usage else None,
                 "output_tokens": ai_response.usage.output_tokens if ai_response.usage else None,
+                "attempts": attempt,
             }
         )
         parsed = _parse_structured_tutor_output(ai_response.text)
@@ -395,15 +447,20 @@ async def generate_tutor_response(
             explanation_card=parsed["explanation_card"],
         ), audit
 
-    except (AIError, TimeoutError) as exc:
-        logger.warning("AI tutor call failed, using deterministic fallback: %s", exc)
-        audit["ai_source"] = "deterministic_fallback"
-        audit["fallback_reason"] = str(exc)
-        return _fallback_response(
-            event_type,
-            language_code=language_code,
-            current_phase=phase,
-        ), audit
+    logger.warning(
+        "AI tutor exhausted %s attempts, using deterministic fallback: %s",
+        _TUTOR_MAX_ATTEMPTS,
+        last_error,
+    )
+    audit["ai_source"] = "deterministic_fallback"
+    audit["fallback_reason"] = str(last_error)
+    audit["attempts"] = _TUTOR_MAX_ATTEMPTS
+    audit["degraded"] = True
+    return _fallback_response(
+        event_type,
+        language_code=language_code,
+        current_phase=phase,
+    ), audit
 
 
 def _tutor_timeout_seconds() -> float:

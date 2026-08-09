@@ -88,6 +88,7 @@ class WorkspaceRead(BaseModel):
     learning_context: dict[str, Any] = Field(default_factory=dict)
     phase_evidence: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     hint_level: int = 0
+    tutor_degraded: bool = False
 
 
 class WorkspaceSessionSummaryRead(BaseModel):
@@ -103,6 +104,8 @@ class WorkspaceSessionSummaryRead(BaseModel):
 
 class WorkspaceSessionHistoryRead(BaseModel):
     sessions: list[WorkspaceSessionSummaryRead] = Field(default_factory=list)
+    total: int = 0
+    has_more: bool = False
 
 
 class TutorResponseRead(BaseModel):
@@ -119,6 +122,7 @@ class TutorResponseRead(BaseModel):
     scaffold_level: int = 0
     evidence_request: dict[str, Any] | None = None
     explanation_card: dict[str, Any] | None = None
+    degraded: bool = False
 
 
 class WorkspaceMasteryUpdateRead(BaseModel):

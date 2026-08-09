@@ -3,10 +3,14 @@
 **Scope:** the Workspace (5E tutoring chat) feature only.
 
 **Code reviewed**
-- Backend: `ui-wicara-asean-be/app/api/v1/workspaces.py`, `app/modules/workspaces/{service,schemas,models,tutor,mastery}.py`, plus the posttest/learning/inputs touchpoints it calls.
+- Backend: `ui-wicara-asean-be/app/api/v1/workspaces.py`, `app/modules/workspaces/{service,schemas,models,tutor,mastery}.py`, `app/modules/evidence/*`, plus the posttest/learning/inputs touchpoints.
 - Mobile: `ui-wicara-asean-mobile/lib/src/features/workspace/**`, `lib/src/app/wicara_app.dart`, `lib/main.dart`, `lib/src/features/home/presentation/app_home_page.dart`.
 
-**Verdict.** The wire contract (field names, endpoints, JSON shapes) is actually in good shape — almost everything the backend emits parses cleanly on mobile. The breakage is elsewhere: **the 5E progression state machine produces states the UI is built to react to but that the backend can never emit**, several backend capabilities have **no client path at all** (image/canvas upload, mastery feedback, hint level), and a handful of **error paths return 500 or dead-end the learner**. That is the "ngaco" the feature is showing.
+**Status: 22 of 23 gaps fixed; 1 closed as by-design.** See the [status table](#status-summary) at the end.
+
+**Verdict (original).** The wire contract was in good shape — almost everything the backend emitted parsed cleanly on mobile. The breakage was elsewhere: the 5E progression state machine produced states the UI was built to react to but that the backend could never emit, several backend capabilities had no client path, and a handful of error paths returned 500 or dead-ended the learner.
+
+> **Correction to the first version of this report.** GAP-08 originally claimed "there is no image-upload endpoint on the backend at all." That was wrong. `POST /api/v1/evidence/image-assets/upload` exists in `app/modules/evidence/router.py:25` and is mounted at `app/api/v1/router.py:17`; the original grep only covered `app/api/v1/` and missed routers defined under `app/modules/`. The gap was real but narrower than written — the endpoint existed, but nothing called it, the tutor had no multimodal path, and there was no way to read an image back. See GAP-08 below.
 
 Severity key: **P0** = learner-visible breakage / data loss / 500. **P1** = feature is dead or silently degraded. **P2** = correctness/robustness debt.
 
@@ -14,177 +18,181 @@ Severity key: **P0** = learner-visible breakage / data loss / 500. **P1** = feat
 
 ## 1. The 5E phase state machine
 
-### GAP-01 (P0) — `phase_transition_pending` can never be `true`, so the "Next phase" button is permanently dead
+### GAP-01 (P0) — `phase_transition_pending` could never be `true`, so the "Next phase" button was permanently dead ✅ Fixed
 
-`service.py:501-513` computes `phase_transition_pending = phase_ready`, then immediately auto-advances when `phase_ready and current_turns >= min_turns` — and `_advance_metadata_to_phase` (`service.py:1106`) resets pending to `False`.
+`service.py` computed `phase_transition_pending = phase_ready`, then immediately auto-advanced when `phase_ready and current_turns >= min_turns`, and `_advance_metadata_to_phase` reset pending to `False`. Since `_DEFAULT_PHASE_MIN_TURNS` is `1` for every phase and the turn counter is incremented earlier in the same request, the guard always held — so the only surviving path to `pending = true` was unreachable.
 
-Since `_DEFAULT_PHASE_MIN_TURNS` is `1` for every phase (`service.py:50-56`) and the learner turn counter is incremented earlier in the same request (`service.py:486-499`), `current_turns >= min_turns` is **always** satisfied on any turn that could have produced evidence. So the only surviving path to `pending = true` is unreachable.
+**Decision taken: learner-confirmed advance.** The UI (footer button, stepper pending state, the `advance-phase` endpoint, and an existing mobile test) is all built for it, and removing auto-advance also fixes GAP-02 for free. The auto-advance block is gone; `append_workspace_event` now only flags readiness:
 
-Consequences:
-- `workspace_modules_page.dart:872-883` `_canAdvancePhase()` returns `phaseTransitionPending` → the footer's primary FilledButton (`workspace_modules_page.dart:3373-3384`) is greyed out forever.
-- `_PhaseStepperBar` / `_WorkspaceCompactHeaderStatus` are passed `phaseTransitionPending` (`workspace_modules_page.dart:1030-1036`, `1101-1104`) and never render their "ready to advance" state.
-- `POST /workspaces/{id}/advance-phase` is effectively unreachable from the app; when it *is* called it raises `ValueError` → **409** (`workspaces.py:107-108`), which the UI surfaces as a raw error string.
+```python
+phase_ready = _phase_is_ready(metadata_json, phase=current_phase)
+if current_phase != "evaluate":
+    min_turns = int(_phase_min_turns(metadata_json).get(current_phase, 1))
+    current_turns = _current_phase_turns(metadata_json)
+    metadata_json["phase_transition_pending"] = phase_ready and current_turns >= min_turns
+```
 
-**Decide and commit to one model:** either (a) auto-advance is the design → delete the advance-phase button and endpoint from the client contract, or (b) learner-confirmed advance is the design → remove the auto-advance block in `service.py:507-513` and let `pending` persist.
+### GAP-02 (P0) — the tutor message the learner read belonged to the *previous* phase ✅ Fixed
 
-### GAP-02 (P0) — the tutor message the learner reads belongs to the *previous* phase
+The reply was generated for `current_phase`, then the same request advanced the phase, so the learner read an Engage hook under an "Explore" header. Removing auto-advance (GAP-01) means the phase only changes when the learner confirms, and the next turn opens the new phase cleanly.
 
-The tutor reply is generated for `current_phase` (`service.py:383-390`), and only *after* that does the same request advance the workspace to the next phase (`service.py:507-513`). The learner therefore sees an Engage-style hook while the header already says "Explore", and the next turn jumps straight into an Explore prompt with no bridging sentence. Repeated across five phases this is the single biggest source of "the chat feels incoherent".
+### GAP-03 (P0) — remediation loops: evidence was never cleared when a phase was re-entered ✅ Fixed
 
-Fix: either emit a synthetic phase-transition tutor message when `auto_advanced_next_phase is not None`, or defer the advance so the *next* request is the one that opens the new phase.
+`_remediate_metadata_to_phase` sent the learner back to `explore`/`elaborate` but left `phase_evidence` intact, so `_phase_is_ready` re-fired from stale evidence and the learner ping-ponged back to `evaluate`.
 
-### GAP-03 (P0) — remediation loops: evidence is never cleared when a phase is re-entered
+New `_clear_phase_evidence_from()` drops evidence for the remediation target and every phase after it. Covered by `test_remediation_clears_evidence_so_the_learner_cannot_ping_pong`.
 
-`_remediate_metadata_to_phase` (`service.py:1111-1120`) sends the learner back to `explore` (on `misconception`) or `elaborate` (on `partial`) but leaves `metadata["phase_evidence"]` fully intact. `_phase_is_ready` (`service.py:1064-1083`) reads that stale evidence, so the very next turn re-satisfies the requirement and the learner is auto-advanced straight back to `evaluate` — where they fail again. Ping-pong loop, no learning, no exit.
+### GAP-04 (P1) — `evaluate` → posttest required three evidence tags *plus* a perfect final turn ✅ Fixed
 
-Fix: clear (or version-stamp) `phase_evidence[phase]` for every phase from the remediation target forward.
+`_PHASE_REQUIRED_EVIDENCE["evaluate"]` demanded `independent_attempt` **and** `error_analysis` **and** `reflection` as three separate groups, and eligibility additionally required `evaluation_outcome == "passed"` **and** `correctness == "correct"` on the same turn — with every other outcome resetting `posttest_eligible` to `False`.
 
-### GAP-04 (P1) — `evaluate` → posttest requires three independent evidence tags *plus* a perfect final turn
+Now: `independent_attempt` **and** (`error_analysis` **or** `reflection`); eligibility needs `phase_ready and outcome == "passed"` (which already implies correctness); and eligibility is **sticky** — once earned it survives until a remediation explicitly revokes it.
 
-`_PHASE_REQUIRED_EVIDENCE["evaluate"]` (`service.py:78-82`) requires `independent_attempt` **and** `error_analysis` **and** `reflection` as three separate groups, and `service.py:514-521` additionally requires `evaluation_outcome == "passed"` **and** `correctness == "correct"` on the same turn. Any other outcome falls into the `else` branch (`service.py:535-536`) which resets `posttest_eligible = False`.
+### GAP-05 (P0) — an AI outage left the learner permanently stuck in Engage ✅ Fixed
 
-In practice `posttest_eligible` almost never flips true, so `showStartPosttestButton` (`workspace_modules_page.dart:915-917`) never appears and the module has no completion path. This is the terminal dead end of the feature.
+`_fallback_response` returned no evidence tags and `confidence=0.0`, so no evidence was ever recorded during an outage and the phase never moved — with no signal to the learner.
 
-### GAP-05 (P0) — when the AI provider is down, the learner is permanently stuck in Engage
+Three changes: the AI call now retries (`_TUTOR_MAX_ATTEMPTS = 2`) before falling back; the fallback sets `degraded` in the audit, which flows to `TutorResponseRead.degraded` and a new `WorkspaceRead.tutor_degraded`; and mobile renders a `_TutorOfflineBanner` plus a per-turn chip explaining that the phase will not advance until the tutor recovers.
 
-`_fallback_response` (`tutor.py:507-521`) returns `evidence_tags=[]` and `confidence=0.0`. `_record_phase_evidence` (`service.py:1044-1045`) discards anything with no tags or confidence < 0.55, so **no** evidence is ever recorded during an outage and `_phase_is_ready` never returns true. There is no timeout budget, no retry, and no user-facing signal that the tutor is degraded — the chat just answers with canned text forever while the phase bar never moves.
+### GAP-06 (P2) — the scaffold contract was stated to the model but never supplied ✅ Fixed
 
-Same applies to `_greeting_response` (`tutor.py:292-313`), which is fine as a one-off but shares the no-evidence property.
+The system prompt referenced "backend scaffold level is 3 or higher" while the payload only carried `hint_level` — the term "scaffold level" appeared nowhere. There is now an explicit per-turn `Scaffold policy:` block naming the current level and what may be revealed at it, and `scaffold_level` is included in the learning context.
 
-### GAP-06 (P2) — `hint_level` scaffold contract is stated to the model but never supplied
+### GAP-07 (P2) — hint-level decay was asymmetric ✅ Fixed
 
-`_SYSTEM_INSTRUCTION` (`tutor.py:96-97`) tells the model "a worked example is allowed only when the **backend scaffold level** is 3 or higher", but the prompt only ships `hint_level` inside the `learning_context` JSON blob (`tutor.py:287`) — the term "scaffold level" appears nowhere in the payload. The escalation ladder in `_record_phase_evidence` (`service.py:1030-1042`) is computed but never actually gates model behaviour.
-
-### GAP-07 (P2) — hint-level decay is asymmetric and can strand a learner at a high hint level
-
-`service.py:1037` jumps `hint_level` to `max(failures, 3)` on the third consecutive failure, but `service.py:1040-1042` decays it by only `1` per correct answer. Combined with GAP-06 nothing observable depends on it today, but it will misbehave the moment it does.
+The ladder climbed via a convoluted `min(6, max(failures, 3 if failures >= 3 else 0))` — which simplifies exactly to `min(6, failures)` — but decayed by only 1 per success. Now `min(_MAX_HINT_LEVEL, failures)` up, `_HINT_DECAY_PER_SUCCESS` (2) down. Covered by `test_scaffold_unwinds_after_recovery`.
 
 ---
 
-## 2. Capabilities the backend has that mobile cannot reach
+## 2. Capabilities the backend had that mobile could not reach
 
-### GAP-08 (P0) — the canvas drawing is never actually sent; there is no image upload endpoint anywhere
+### GAP-08 (P0) — the canvas drawing never reached the tutor ✅ Fixed
 
-This is the largest functional hole in the feature.
+**As originally filed this overstated the problem — see the correction above.** The upload endpoint existed; what was missing was everything around it:
 
-- Backend accepts `image_asset_id` on every workspace event (`schemas.py:23`, `workspaces.py:81`) and threads it into the input-event ledger (`inputs/service.py:22-42`), which computes `has_image` for downstream scoring.
-- Mobile's `appendEvent` signature (`workspace_repository.dart:39-44`, `api_workspace_repository.dart:120-142`) has **no image parameter** and never sends the field.
-- `_handleCanvasSentToChat` (`workspace_modules_page.dart:682-699`) ships only *metadata about* the drawing (`element_count`, `canvas_width`, …) — the pixels are dropped on the floor.
-- **There is no image-upload endpoint on the backend at all.** `grep` across `app/api/v1/` finds `image_asset_id` referenced only as an inbound UUID; nothing ever mints one. The field is dead end-to-end.
+- Mobile's `appendEvent` had no image parameter and never sent `image_asset_id`.
+- `_handleCanvasSentToChat` shipped only *metadata about* the drawing (`element_count`, canvas dimensions) — the pixels were dropped, while `tutor.py` replied "I saved your canvas snapshot", which was not true in any meaningful sense.
+- `tutor.generate_tutor_response` took no image input at all.
+- There was no endpoint to read an image back, so a drawing could never be re-rendered in the transcript.
+- `image_asset_id` was accepted on workspace events **without any ownership check** — any caller could attach an arbitrary or another user's asset id.
 
-So: the tutor is asked to teach STEAM reasoning, the learner draws a diagram, and the tutor receives the literal string `""` plus a element count. `tutor.py:442-446` then replies "I saved your canvas snapshot" — a claim that is not true in any meaningful sense.
+Now, end to end: mobile rasterises via the pre-existing `renderCanvasSnapshotPng`, uploads to `POST /evidence/image-assets/upload`, and attaches the returned id to the event; the backend validates ownership (`_resolve_tutor_image_input`, rejecting foreign ids with 404) and passes the file to the model through the AI client's existing image-input support; a new `GET /evidence/image-assets/{id}/file` serves it back, ownership-checked, for `_WorkspaceImageAttachment` to render. The system prompt now instructs the tutor to read the image and never claim to have seen a drawing when none was supplied.
 
-Needs: an asset-upload endpoint, an `imageAssetId` parameter on the mobile repository, and a multimodal path in `tutor.generate_tutor_response` (which today takes no image input whatsoever).
+If the upload fails the turn still sends as text, with the learner told the tutor only received text — a degraded turn beats a lost one.
 
-### GAP-09 (P1) — the canvas bubble disappears from the chat one frame after it is sent
+### GAP-09 (P1) — the canvas bubble disappeared one frame after sending ✅ Fixed
 
-`_handleCanvasSentToChat` optimistically appends a `_WorkspaceChatEntry.canvas(snapshot)` (`workspace_modules_page.dart:685`), then `_appendWorkspaceEvent` clears and rebuilds `_chatEntries` from the server response (`workspace_modules_page.dart:788-790`). `_entriesFromEvents` (`workspace_modules_page.dart:811-817`) turns `canvas_sent` into a plain text label. Net effect: the drawing flashes on screen and is replaced by "Canvas snapshot sent (7 elements)". Reopening the session never shows it again.
+The optimistic canvas entry was replaced when `_chatEntries` was rebuilt from the server, and `_entriesFromEvents` turned `canvas_sent` into a plain text label. Entries now carry an `imageUrl` resolved from the event's `image_asset_id`, so the drawing persists and survives reopening the session.
 
-### GAP-10 (P1) — `tutor_response` and `mastery_update` from the append response are parsed and then thrown away
+### GAP-10 (P1) — `tutor_response` and `mastery_update` were parsed and thrown away ✅ Fixed
 
-`appendResultFromJson` (`api_workspace_repository.dart:333-384`) fully decodes `WorkspaceTutorResponse` (correctness, misconceptionStatus, confidence, evaluationOutcome, scaffoldLevel, evidenceTags) and `WorkspaceMasteryUpdate` (masteryScore, delta, evidenceCount, status). `_appendWorkspaceEvent` (`workspace_modules_page.dart:785-792`) uses **only** `result.workspace` and discards both.
+`appendResultFromJson` fully decoded correctness, misconception status, confidence, scaffold level and the whole mastery update; `_appendWorkspaceEvent` used only `result.workspace`. Both are now retained in state and rendered by `_TutorFeedbackStrip` (correctness, misconception, mastery delta, hint level).
 
-So the learner never sees: whether their answer was judged correct, that a misconception was detected, that their mastery score moved, or what the current scaffold level is. All of that signal is computed, persisted, serialized, transmitted, decoded — and dropped.
+### GAP-11 (P1) — `hintLevel`, `phaseEvidence`, `learningContext` were decoded but unrendered ✅ Fixed
 
-### GAP-11 (P1) — `hintLevel`, `phaseEvidence`, `learningContext` are decoded but unrendered
+The routing rationale built in `_apply_workspace_context` was invisible. A new `_LearningContextCard` shows the diagnosis reason and the original target, so the learner is told *why* they were routed to a prerequisite module; hint level surfaces in the feedback strip.
 
-`grep` for these across the whole 3,850-line page returns exactly three hits (`workspace_modules_page.dart:337, 604, 916`), and the only `learningContext` use is `currentModuleConceptId` passed to video generation. The remediation narrative the backend builds so carefully in `_apply_workspace_context` (`service.py:1299-1335`) — original target, diagnosis reason, route, `returns_to_original_target`, `already_understood` — is invisible to the learner. They are never told *why* they were routed to a prerequisite module.
+### GAP-12 (P2) — event types mobile never sent ✅ Fixed (partially by design)
 
-### GAP-12 (P2) — event types the backend supports that mobile never sends
+`media_viewed` is now emitted when playback actually starts, making video engagement measurable. `quiz_answer` and `note` remain unused — the workspace is a free-text chat surface and has no quiz UI, so there is nothing to send them from; the backend support stays for the assessment surfaces that do.
 
-Mobile emits only `text` and `canvas_sent`. Unused: `quiz_answer` (which `tutor.py:269` explicitly handles and `mastery.py` scores differently), `media_viewed` (the only signal that the learner actually watched a generated video), and `note`. `media_viewed` in particular means video engagement is unmeasurable.
+### GAP-13 (P2) — `WorkspaceEvent` dropped four fields ✅ Fixed
 
-### GAP-13 (P2) — `WorkspaceEvent` model drops four fields the backend sends
+`imageAssetId`, `mediaArtifactId`, `inputEventId` and `createdAt` are now decoded, along with `lastImageAssetId` on the session.
 
-`workspaceEventFromJson` (`api_workspace_repository.dart:320-331`) ignores `image_asset_id`, `media_artifact_id`, `input_event_id`, and `created_at`. Consequences: no inline media in the transcript, no timestamps, no date grouping in the chat, and no way to correlate a chat bubble with its ledger entry for debugging.
+### GAP-14 (P2) — `media_generated` events were invisible in the transcript ✅ Fixed
 
-Also unused: `WorkspaceRead.last_image_asset_id` (`schemas.py:82`) has no counterpart in `WorkspaceSession` (`workspace_models.dart:33-71`).
-
-### GAP-14 (P2) — `media_generated` events are invisible in the transcript
-
-`_entriesFromEvents` drops any event with an empty `textPayload` (`workspace_modules_page.dart:818-820`). `queue_workspace_video_generation` writes its event with `text_payload=""` (`service.py:654`). So "a video was requested here" leaves no trace in the scrollback — the video only exists in transient `_contentMode` widget state and vanishes on session switch.
+Events with an empty `textPayload` were dropped, so "a video was requested here" left no trace. `media_generated` now renders as a muted `_WorkspaceTranscriptNote`, and image-only events render as an attachment.
 
 ---
 
 ## 3. Error paths and lifecycle
 
-### GAP-15 (P0) — opening a locked module returns HTTP 500
+### GAP-15 (P0) — opening a locked module returned HTTP 500 ✅ Fixed
 
-`create_or_resume_workspace` raises `ValueError("Locked modules cannot be opened before prerequisites pass.")` (`service.py:102-103`), but `POST /workspaces` catches **only** `LookupError` (`workspaces.py:50-51`). FastAPI turns the uncaught `ValueError` into a 500. Mobile shows a generic failure with no explanation of the prerequisite.
+`create_or_resume_workspace` raised `ValueError` but the route caught only `LookupError`. Now mapped to **409** with the prerequisite message. Covered by `test_opening_a_locked_module_is_a_conflict_not_a_server_error`.
 
-Fix: add `except ValueError → 409` to `create_workspace`.
+### GAP-16 (P0) — stale local workspace ids survived logout and locked the user out ✅ Fixed
 
-### GAP-16 (P0) — stale local workspace ids survive logout and lock the user out of the workspace
+`WorkspaceSessionStore.clearAll()` was never called, so after switching accounts the app posted the previous user's id, got a 404, and hard-blocked that module with no in-app recovery.
 
-`WorkspaceSessionStore` persists `activeWorkspaceId` per track+module in `SharedPreferences` (`workspace_session_store.dart:140-146`). `clearAll()` (line 132) is **never called** — `grep` shows no caller outside the file, and `authController.signOut()` (`auth_controller.dart:176`) does not touch it.
+Two fixes: `AuthController` gained an `onSignedOut` cleanup hook list, wired in `main.dart` to `workspaceStore.clearAll`; and `_loadWorkspace` now catches a failure on a *cached* id, clears just that pointer via `clearCachedSession`, and retries with a fresh resume.
 
-After logging in as a different account, `_loadWorkspace` reads the previous user's id (`workspace_modules_page.dart:132-138`) and posts it as `workspace_session_id`. `_load_workspace` filters on `user_id` (`service.py:821-826`), returns `None`, and the service raises `LookupError` → **404** (`service.py:113-114`). The learner is hard-blocked from that module until app data is cleared, with no self-recovery path.
+### GAP-17 (P1) — double-tap send could 500 on a unique-constraint violation ✅ Fixed
 
-Two fixes needed: clear the store on sign-out, **and** make `_loadWorkspace` fall back to "start fresh" on a 404 for a locally-cached id rather than surfacing the error.
+Two in-flight appends both read the same `max(event_index)` and the second commit tripped `uq_workspace_events_session_index`.
 
-### GAP-17 (P1) — double-tap send can 500 on a unique-constraint violation
+Fixed on both sides. Backend: the append and video-generation paths take the workspace row with `SELECT … FOR UPDATE`, serialising concurrent appends. (A retry loop was the obvious alternative but is wrong here — the whole append is one transaction, so a rollback would also discard the input-event ledger row and the mastery write.) Mobile: `_sendMessage` returns early while `_isAppendingEvent`, and the composer field and send button are disabled with a spinner.
 
-The send button has `onPressed: onSend` with no guard (`workspace_modules_page.dart:3495-3499`) and `_sendMessage` (`workspace_modules_page.dart:701-717`) does not check `_isAppendingEvent`. Two in-flight appends both call `_next_event_index` (`service.py:829-835`), both get `N+1`, and the second commit violates `uq_workspace_events_session_index` (`models.py:67-70`) → unhandled `IntegrityError` → 500, and the learner's message is lost.
+### GAP-18 (P1) — resuming a finished workspace silently reopened it ✅ Fixed
 
-Fix: disable the send affordance while `_isAppendingEvent`, and make the backend index allocation collision-safe (retry, or a DB sequence per session).
+Auto-resume picked the most recently updated session regardless of status and unconditionally set it back to `active`, undoing the posttest's completion. Auto-resume now excludes `completed` sessions, and an explicitly requested completed session is never demoted. Covered by `test_a_completed_workspace_is_not_resumed_or_reopened`.
 
-### GAP-18 (P1) — resuming a finished workspace silently reopens it as `active`
+### GAP-19 (P2) — the posttest is started twice ⚪ Closed: by design
 
-`create_or_resume_workspace` picks the most recently updated session regardless of status (`service.py:119-128`) and unconditionally sets `workspace.status = "active"` (`service.py:163`). A workspace that the posttest marked `completed` (`posttests/service.py:765`) is therefore reverted to active on the next open, and `moduleCompleted` in `WorkspaceCompletionResult` (`workspace_modules_page.dart:675`) is read *before* the posttest runs, so it is effectively always `false`.
+Re-examined and **not** worth changing. `AdaptivePosttestService.start` calls `_active_posttest_for_goal` first and returns the existing session when there is one, so the second call is literally the *read* half of a get-or-create — not a duplicate creation. The workspace endpoint owns the eligibility transition; home owns presenting it. Restructuring to collapse the two would move the eligibility gate for no behavioural gain. Documented rather than "fixed".
 
-Fix: exclude `completed` sessions from auto-resume (or surface them read-only), and stop resetting status on resume.
+One real sub-issue was addressed: `posttest_trigger.status` staying `"ready"` forever is now accompanied by an explicit `error: None` and, on failure, a `status: "error"` trigger (see GAP-20).
 
-### GAP-19 (P2) — the posttest is started twice
+### GAP-20 (P2) — `posttest_trigger` fields mobile parsed that the backend never sent ✅ Fixed
 
-`POST /workspaces/{id}/start-posttest` already creates the session and returns `posttest_session_id` in the trigger (`service.py:305-331`). Mobile ignores that id, pops the route (`workspace_modules_page.dart:665-680`), and `_openWorkspaceModules` → `_openPosttest` calls `homeRepository.startPosttest(workspaceSessionId: ...)` (`app_home_page.dart:710-760`), hitting the posttest service a second time. It is idempotent thanks to `_active_posttest_for_goal` (`posttests/service.py:98-104`), so this is wasted latency rather than corruption — but the workspace endpoint's return value is pure dead weight today.
+`concept_code`, `concept_title` and `error` were read by the client and never written by the server, so the error path could only ever show a generic fallback string. All three are now populated, and a failed posttest start records a `status: "error"` trigger with the real message before raising.
 
-Related: `posttest_trigger.status` stays `"ready"` forever, so `_workspace_allows_posttest` (`posttests/service.py:558-563`) keeps returning true indefinitely — the eligibility gate only ever fires once.
+### GAP-21 (P2) — video polling had no resume and gave up silently ✅ Fixed
 
-### GAP-20 (P2) — `posttest_trigger` fields mobile parses that the backend never sends
+Backgrounding, switching sessions, or the 5-minute timeout abandoned the job with no way to re-attach, even though the artifact usually lands. The job id is now retained on timeout and a "Re-attach" action resumes polling instead of paying to regenerate.
 
-`_workspacePosttestTriggerFromJson` (`api_workspace_repository.dart:443-458`) reads `concept_code`, `concept_title`, and `error`. `start_posttest` (`service.py:321-331`) writes none of them — it writes `workspace_session_id` and `triggered_at`, which mobile ignores. The result: `_workspaceError = updated.posttestTrigger?.error ?? posttestUnavailableMessage` (`workspace_modules_page.dart:649-651`) can only ever show the generic fallback string.
+### GAP-22 (P2) — `GET /workspaces` had no pagination, no delete, and a hardcoded Indonesian string ✅ Fixed
 
-### GAP-21 (P2) — video polling has no resume and gives up silently at 5 minutes
+Added `limit`/`offset` (with `total` and `has_more` in the response), `DELETE /workspaces/{id}` with a confirm flow in the history sheet, and localisation of the empty-preview string. Covered by `test_session_history_paginates_and_supports_deletion`.
 
-`_pollVideoStatus` (`workspace_modules_page.dart:367-434`) is pure widget state. Backgrounding the app, switching sessions (`_resetCurrentChatState` sets `_stopVideoPolling = true`), or the 5-minute timeout all abandon the job with no way to re-attach — even though the artifact does eventually land and `_sync_ready_media_followups` (`service.py:1417-1478`) will post a follow-up on the next GET. The learner sees "generation timed out" for a video that succeeded.
+### GAP-23 (P2) — the local session store duplicated a server-authoritative list ✅ Fixed
 
-### GAP-22 (P2) — `GET /workspaces` cannot list sessions without a module, and has no pagination or delete
-
-`list_workspaces` requires both `track_id` and `module_id` as mandatory query params (`workspaces.py:18-19`). There is no cross-module "all my sessions" view, no `limit`/`offset` (`service.py:214-229` returns every session with all events eagerly loaded via `selectinload`), and no delete or rename endpoint — so the history sheet (`workspace_modules_page.dart:282-295`) grows unboundedly and the learner can never prune it. `_workspace_session_summary` also hardcodes the Indonesian string `"Belum ada pesan."` (`service.py:755`) regardless of the learner's language.
-
-### GAP-23 (P2) — mobile's local session store duplicates a server-authoritative list
-
-`WorkspaceSessionHistory.workspaceIds` in `SharedPreferences` mirrors what `GET /workspaces` already returns authoritatively. `sessionHistory()` (`api_workspace_repository.dart:52-65`) is used only to seed `activeWorkspaceId`, and it is the direct cause of GAP-16. The list half of this store has no reader and should be deleted; the "which session was I last in" half belongs in the API (an `is_active` flag on the summary).
+`WorkspaceSessionHistory.workspaceIds` had no reader and was the direct cause of GAP-16. The store is now a single `Map<track+module → activeWorkspaceId>` (with migrations from both legacy formats), and the model moved to the domain layer where both sides can share it.
 
 ---
 
-## 4. Test coverage gaps
+## 4. Test coverage
 
-Backend workspace tests (`tests/api/test_workspace_api.py`, `tests/services/test_workspace_orchestration.py`) cover 8 cases, all of them about the evidence contract and anti-cheat. Nothing covers:
+Backend went from 8 workspace tests to 15. New coverage: locked-module 409, foreign image-asset rejection, history pagination + deletion, resume-after-completion, remediation evidence clearing, evaluate-gate reachability, and scaffold unwind.
 
-- auto-advance behaviour or the `phase_transition_pending` lifecycle (GAP-01/02)
-- remediation re-entry (GAP-03)
-- reaching `posttest_eligible` end-to-end (GAP-04)
-- the AI-outage fallback path (GAP-05)
-- locked-module rejection (GAP-15)
-- concurrent event append (GAP-17)
-- resume-after-completion (GAP-18)
+Two pre-existing tests (`test_workspace_api.py::test_workspace_events_are_persisted_in_module_timeline` and `test_input_events.py::test_workspace_event_creates_canonical_input_event`) attached fabricated `image_asset_id`s and started failing once ownership validation landed. They were updated to mint a real asset rather than weakening the check — the fact that they passed before is itself the evidence that unvalidated ids were being accepted.
 
-Mobile has 3 tests, all in `test/api_workspace_repository_test.dart` — serialization only. There is no widget test for `WorkspaceModulesPage` at all, which is where the majority of the P0/P1 findings live.
+Mobile went from 3 repository tests to 8: canvas upload + asset attachment, the new event id/timestamp fields, degraded-tutor propagation, bounded history pages, and cached-pointer cleanup on delete.
+
+**Not covered:** there is still no widget test for `WorkspaceModulesPage`, which is where most of the P0/P1 UI fixes live. That remains the largest test gap in the feature.
 
 ---
 
-## 5. Suggested order of work
+## Status summary
 
-| # | Item | Gaps |
-|---|---|---|
-| 1 | Pick one phase-advance model (auto **or** learner-confirmed) and make backend + UI agree | GAP-01, 02 |
-| 2 | Clear phase evidence on remediation; relax the `evaluate` gate so a completion path exists | GAP-03, 04 |
-| 3 | Make AI-outage a visible, recoverable state instead of a silent freeze | GAP-05 |
-| 4 | Fix the three learner-blocking error paths: locked module 500, stale-id 404 lockout, double-send 500 | GAP-15, 16, 17 |
-| 5 | Build the image-asset upload endpoint + multimodal tutor input; wire the canvas to it | GAP-08, 09 |
-| 6 | Surface the feedback the backend already sends: correctness, mastery delta, hint level, learning context | GAP-10, 11 |
-| 7 | Session lifecycle: stop resurrecting completed workspaces, stop double-starting the posttest | GAP-18, 19 |
-| 8 | Everything else | GAP-06, 07, 12–14, 20–23 |
+| # | Gap | Severity | Status |
+|---|---|---|---|
+| 01 | `phase_transition_pending` unreachable | P0 | ✅ Fixed — learner-confirmed advance |
+| 02 | Tutor reply one phase behind | P0 | ✅ Fixed |
+| 03 | Remediation ping-pong | P0 | ✅ Fixed |
+| 04 | Evaluate gate unreachable | P1 | ✅ Fixed |
+| 05 | AI outage freezes progression | P0 | ✅ Fixed |
+| 06 | Scaffold level never supplied | P2 | ✅ Fixed |
+| 07 | Asymmetric hint decay | P2 | ✅ Fixed |
+| 08 | Canvas never reaches tutor | P0 | ✅ Fixed (finding corrected) |
+| 09 | Canvas bubble vanishes | P1 | ✅ Fixed |
+| 10 | Tutor/mastery feedback discarded | P1 | ✅ Fixed |
+| 11 | Learning context unrendered | P1 | ✅ Fixed |
+| 12 | Unused event types | P2 | ✅ `media_viewed` wired; rest by design |
+| 13 | Event fields dropped | P2 | ✅ Fixed |
+| 14 | `media_generated` invisible | P2 | ✅ Fixed |
+| 15 | Locked module → 500 | P0 | ✅ Fixed |
+| 16 | Stale ids lock user out | P0 | ✅ Fixed |
+| 17 | Concurrent append → 500 | P1 | ✅ Fixed (row lock + UI guard) |
+| 18 | Completed workspace reopened | P1 | ✅ Fixed |
+| 19 | Posttest started twice | P2 | ⚪ Closed — get-or-create, by design |
+| 20 | Unpopulated trigger fields | P2 | ✅ Fixed |
+| 21 | Video polling not resumable | P2 | ✅ Fixed |
+| 22 | No pagination/delete/i18n | P2 | ✅ Fixed |
+| 23 | Redundant local session list | P2 | ✅ Fixed |
 
-Items 1–3 are what make the feature feel broken to a learner today; the rest is what makes it feel thin.
+### Verification status
+
+- **Backend:** full suite run against a temporary venv — all workspace and posttest tests pass. One unrelated failure (`test_curriculum_api.py::test_get_knowledge_map_returns_mobile_ready_kurikulum_graph`) was confirmed pre-existing by re-running it on a stashed tree.
+- **Mobile:** ⚠️ **not compiled or run.** No Flutter/Dart SDK is installed on the machine these changes were made on, so `flutter analyze` and `flutter test` could not be executed. The Dart edits were verified only by structural brace/string balance checking and by auditing every implementer and call site of the changed interfaces (`WorkspaceRepository`, `_WorkspaceChatPanel`, `_WorkspaceFooter`, `_WorkspaceHistorySheet`, `WorkspaceSessionHistory`). **Run `flutter analyze && flutter test` before merging the mobile side.**

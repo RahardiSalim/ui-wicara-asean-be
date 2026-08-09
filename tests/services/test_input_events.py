@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import select
 
 from app.modules.accounts.models import UserAccount
+from app.modules.evidence.models import ImageAsset
 from app.modules.inputs.models import InputEvent
 from app.modules.learning import service as learning_service
 from app.modules.workspaces import service as workspace_service
@@ -25,6 +26,17 @@ async def test_workspace_event_creates_canonical_input_event(db_session):
     db_session.add(account)
     db_session.commit()
     db_session.refresh(account)
+
+    # Workspace events may only reference an image asset the learner owns.
+    db_session.add(
+        ImageAsset(
+            id=IMAGE_ASSET_ID,
+            user_id=account.id,
+            storage_path="evidence/test/canvas.png",
+            mime_type="image/png",
+        )
+    )
+    db_session.commit()
 
     goal = learning_service.create_learning_goal(
         db_session,

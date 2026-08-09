@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings, resolve_project_path
@@ -92,6 +93,17 @@ class CanvasUploadService:
             height=asset.height,
             checksum=asset.checksum,
         )
+
+
+def load_owned_image_asset(
+    session: Session,
+    *,
+    user: UserAccount,
+    asset_id: UUID,
+) -> ImageAsset | None:
+    return session.scalar(
+        select(ImageAsset).where(ImageAsset.id == asset_id, ImageAsset.user_id == user.id)
+    )
 
 
 def image_asset_file_path(

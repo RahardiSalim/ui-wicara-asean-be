@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_session
 from app.modules.accounts.dependencies import get_current_account
 from app.modules.accounts.models import UserAccount
+from app.modules.workspaces.models import WorkspaceSession
 
 
 ACCOUNT_ID = UUID("33333333-3333-4333-8333-333333333333")
@@ -70,7 +71,14 @@ def test_workspace_events_are_persisted_in_module_timeline(client):
     assert text_payload["workspace"]["events"][1]["event_type"] == "text"
     assert text_payload["workspace"]["events"][1]["text_payload"]
 
-    image_asset_id = "44444444-4444-4444-8444-444444444444"
+    # Workspace events may only reference an image asset the caller owns, so mint
+    # a real one instead of inventing an id.
+    asset_response = client.post(
+        "/api/v1/evidence/image-assets",
+        json={"storage_path": "evidence/test/canvas.png", "mime_type": "image/png"},
+    )
+    assert asset_response.status_code == 200
+    image_asset_id = asset_response.json()["id"]
     image_response = client.post(
         f"/api/v1/workspaces/{workspace['id']}/events",
         json={
@@ -186,6 +194,120 @@ def test_workspace_rejects_event_with_unknown_type(client):
     )
 
     assert response.status_code == 422
+
+
+def test_opening_a_locked_module_is_a_conflict_not_a_server_error(client):
+    _override_account(client)
+    track_id, first_module_id = _create_track_and_first_module(client)
+    modules = client.get(f"/api/v1/tracks/{track_id}/modules").json()["modules"]
+    locked_module = next(
+        module
+        for module in modules
+        if module["id"] != first_module_id and module["status"] == "locked"
+    )
+
+    response = client.post(
+        "/api/v1/workspaces",
+        json={"track_id": track_id, "module_id": locked_module["id"]},
+    )
+
+    assert response.status_code == 409
+    assert "prerequisite" in response.json()["detail"].lower()
+
+
+def test_workspace_event_rejects_an_image_asset_the_caller_does_not_own(client):
+    _override_account(client)
+    track_id, module_id = _create_track_and_first_module(client)
+    workspace = client.post(
+        "/api/v1/workspaces",
+        json={"track_id": track_id, "module_id": module_id},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/workspaces/{workspace['id']}/events",
+        json={
+            "event_type": "canvas_sent",
+            "actor_type": "learner",
+            "image_asset_id": "44444444-4444-4444-8444-444444444444",
+        },
+    )
+
+    assert response.status_code == 404
+
+
+def test_session_history_paginates_and_supports_deletion(client):
+    _override_account(client)
+    track_id, module_id = _create_track_and_first_module(client)
+    created = [
+        client.post(
+            "/api/v1/workspaces",
+            json={
+                "track_id": track_id,
+                "module_id": module_id,
+                "start_new_session": True,
+            },
+        ).json()["id"]
+        for _ in range(3)
+    ]
+
+    first_page = client.get(
+        "/api/v1/workspaces",
+        params={
+            "track_id": track_id,
+            "module_id": module_id,
+            "limit": 2,
+            "offset": 0,
+        },
+    ).json()
+    assert len(first_page["sessions"]) == 2
+    assert first_page["total"] == 3
+    assert first_page["has_more"] is True
+
+    second_page = client.get(
+        "/api/v1/workspaces",
+        params={
+            "track_id": track_id,
+            "module_id": module_id,
+            "limit": 2,
+            "offset": 2,
+        },
+    ).json()
+    assert len(second_page["sessions"]) == 1
+    assert second_page["has_more"] is False
+
+    assert client.delete(f"/api/v1/workspaces/{created[0]}").status_code == 204
+    assert client.get(f"/api/v1/workspaces/{created[0]}").status_code == 404
+    remaining = client.get(
+        "/api/v1/workspaces",
+        params={"track_id": track_id, "module_id": module_id},
+    ).json()
+    assert remaining["total"] == 2
+
+
+def test_a_completed_workspace_is_not_resumed_or_reopened(client):
+    _override_account(client)
+    track_id, module_id = _create_track_and_first_module(client)
+    workspace_id = client.post(
+        "/api/v1/workspaces",
+        json={"track_id": track_id, "module_id": module_id},
+    ).json()["id"]
+
+    session = next(client.app.dependency_overrides[get_session]())
+    completed = session.get(WorkspaceSession, UUID(workspace_id))
+    completed.status = "completed"
+    session.commit()
+
+    resumed = client.post(
+        "/api/v1/workspaces",
+        json={"track_id": track_id, "module_id": module_id},
+    ).json()
+
+    # Auto-resume must start a fresh session rather than reviving the finished
+    # one, and the finished one must stay completed.
+    assert resumed["id"] != workspace_id
+    assert client.get(f"/api/v1/workspaces/{workspace_id}").json()["status"] == (
+        "completed"
+    )
 
 
 def _create_track_and_first_module(client) -> tuple[str, str]:
