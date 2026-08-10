@@ -90,7 +90,7 @@ class AdaptivePretestService:
         if target is None:
             raise ValueError("Target concept was not found.")
         effective_depth = min(int(depth), 2)
-        effective_max_questions = max(1, int(max_questions))
+        effective_max_questions = max(1, min(int(max_questions), 10))
         effective_max_nodes_visited = max(1, min(int(max_nodes_visited), max(1, effective_max_questions // 2)))
         language = _goal_language(goal, user=user)
         graph_scope = self.graph_builder.build(
@@ -145,6 +145,7 @@ class AdaptivePretestService:
             "max_nodes_visited": effective_max_nodes_visited,
             "max_questions_per_node": 2,
             "confidence_threshold": 0.95,
+            "probe_queue": self.graph_builder.build_probe_queue(graph_scope),
             "generated_packs": {},
             "generated_questions": {
                 target.code: {
@@ -582,7 +583,10 @@ def _normalize_assessment_limits(assessment: AssessmentSession) -> dict[str, Any
 
 
 def _effective_limits(assessment: AssessmentSession, state: dict[str, Any]) -> tuple[int, int]:
-    max_questions = _positive_int(state.get("max_questions"), assessment.max_questions or 10)
+    max_questions = min(
+        _positive_int(state.get("max_questions"), assessment.max_questions or 10),
+        10,
+    )
     requested_nodes = _positive_int(state.get("max_nodes_visited"), assessment.max_nodes_visited or 5)
     max_nodes_visited = max(1, min(requested_nodes, max(1, max_questions // 2)))
     return max_questions, max_nodes_visited
