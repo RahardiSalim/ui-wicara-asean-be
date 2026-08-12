@@ -9,17 +9,17 @@ import re
 from typing import Any
 
 from app.modules.ai import ai_client
-from app.modules.ai.errors import AIError
+from app.modules.ai.errors import AIError, AIProviderError
 from app.modules.ai.schemas import AIGenerationResponse
 from app.core.language import language_display_name, normalize_language_code
 from app.modules.workspaces.models import WorkspaceEvent, WorkspaceSession
-from app.modules.workspaces.schemas import TutorResponseRead
+from app.modules.workspaces.schemas import TutorResponseRead, WorkspaceToolSuggestionRead
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "wicara_5e_evidence_context_v4"
+PROMPT_VERSION = "wicara_5e_evidence_context_v6_explain_micro_check"
 PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
-DEFAULT_TUTOR_TIMEOUT_SECONDS = 20.0
+DEFAULT_TUTOR_TIMEOUT_SECONDS = 240.0
 
 _ALLOWED_EVIDENCE_TAGS = {
     "challenge_accepted",
@@ -49,8 +49,8 @@ _PHASE_TRANSITION_CRITERIA: dict[str, str] = {
         "so they are ready for explicit explanation."
     ),
     "explain": (
-        "Learner can restate the key concept and connect it to at least one worked idea/example, "
-        "so they are ready for application."
+        "Learner has explained the key concept and then correctly answered a separate "
+        "micro-check in a later turn, so they are ready for application."
     ),
     "elaborate": (
         "Learner can apply the concept to a new/contextualized case with reasonable reasoning, "
@@ -63,25 +63,90 @@ _PHASE_TRANSITION_CRITERIA: dict[str, str] = {
 
 _TUTOR_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "text": {"type": "string"},
         "next_phase_ready": {"type": "boolean"},
         "phase_reasoning": {"type": "string"},
-        "evidence_tags": {"type": "array", "items": {"type": "string"}},
-        "correctness": {"type": "string"},
-        "misconception_status": {"type": "string"},
+        "evidence_tags": {
+            "type": "array",
+            "items": {"type": "string", "enum": sorted(_ALLOWED_EVIDENCE_TAGS)},
+        },
+        "correctness": {"type": "string", "enum": sorted(_ALLOWED_CORRECTNESS)},
+        "misconception_status": {
+            "type": "string",
+            "enum": sorted(_ALLOWED_MISCONCEPTION),
+        },
         "confidence": {"type": "number"},
-        "evaluation_outcome": {"type": ["string", "null"]},
-        "evidence_request": {"type": ["object", "null"]},
-        "explanation_card": {"type": ["object", "null"]},
+        "evaluation_outcome": {
+            "type": ["string", "null"],
+            "enum": ["passed", "partial", "misconception", "continue", None],
+        },
+        "evidence_request": {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "type": {"type": "string"},
+                        "prompt": {"type": "string"},
+                        "expected_evidence": {"type": "string"},
+                    },
+                    "required": ["type", "prompt", "expected_evidence"],
+                },
+                {"type": "null"},
+            ]
+        },
+        "explanation_card": {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "title": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "example": {"type": "string"},
+                    },
+                    "required": ["title", "summary", "example"],
+                },
+                {"type": "null"},
+            ]
+        },
+        "tool_suggestion": {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "tool": {"type": "string", "enum": ["visualization"]},
+                        "reason": {
+                            "type": "string",
+                            "enum": [
+                                "learner_stuck",
+                                "repeated_misconception",
+                                "learner_requested",
+                            ],
+                        },
+                        "prompt": {"type": "string"},
+                    },
+                    "required": ["tool", "reason", "prompt"],
+                    "additionalProperties": False,
+                },
+                {"type": "null"},
+            ]
+        },
     },
     "required": [
         "text",
         "next_phase_ready",
+        "phase_reasoning",
         "evidence_tags",
         "correctness",
         "misconception_status",
         "confidence",
+        "evaluation_outcome",
+        "evidence_request",
+        "explanation_card",
+        "tool_suggestion",
     ],
 }
 
@@ -105,6 +170,10 @@ Teaching rules:
   diagnosed evidence and remember the learner's original target.
 - Report evidence only when the latest learner message actually demonstrates it.
 - Never claim mastery merely because the learner says they understand or watches media.
+- A visualization is an optional Explore scaffold, never a phase requirement.
+- Suggest a visualization only in Explore after the learner has attempted the task and is
+  still confused, has repeated a misconception, or explicitly asks for a visual.
+- Do not suggest a visualization merely because the tool exists.
 """.strip()
 
 _PROMPTS: dict[str, str] = {
@@ -132,17 +201,25 @@ _PROMPTS: dict[str, str] = {
         "Stage: Explain\n"
         "Conversation so far:\n{history}\n\n"
         "Student: {message}\n\n"
-        "First elicit the learner's explanation in their own words. Only after the "
-        "learning context shows learner_explanation evidence, give a concise grounded "
-        "formal explanation and a micro-check. Do not skip learner articulation."
+        "First elicit the learner's explanation in their own words. If the latest message "
+        "itself demonstrates learner_explanation, give a concise grounded formal explanation "
+        "and end with exactly one concrete micro-check for the next learner turn. Also return "
+        "that task in evidence_request with type=micro_check. Do not mark micro_check_correct "
+        "until the learner answers it in a later turn. If phase_evidence already contains "
+        "learner_explanation and the latest learner message correctly applies the concept to "
+        "the requested new example, return micro_check_correct and next_phase_ready=true."
     ),
     "elaborate": (
         "Topic: {topic}\n"
         "Stage: Elaborate\n"
         "Conversation so far:\n{history}\n\n"
         "Student: {message}\n\n"
-        "Give one application task in {response_language} that makes the student apply what they learned. "
-        "Keep it 2-3 sentences and tie it to the student's latest message."
+        "First inspect the latest student message. If it is a substantive solution to the "
+        "previous application task, assess that exact solution; do not replace it with another "
+        "task. For a correct solution return both transfer_attempt and transfer_correct and set "
+        "next_phase_ready=true. If it is an incorrect attempt, return transfer_attempt and one "
+        "focused hint. Only when there is no substantive solution yet, give one new application "
+        "task in {response_language}. Keep it concise and tied to the current concept."
     ),
     "evaluate": (
         "Topic: {topic}\n"
@@ -219,12 +296,20 @@ def _build_user_instruction(
         "- misconception_status: none|suspected|active|resolved.\n"
         "- In Evaluate, evaluation_outcome is passed only with an independent attempt, "
         "error analysis, and reflection; otherwise use partial, misconception, or continue.\n"
+        "- In Elaborate, whenever transfer_correct is returned, also return transfer_attempt; "
+        "a correct transfer necessarily includes an attempt.\n"
         "- evidence_request describes the next task/tool but must not claim a result.\n"
         "- explanation_card is allowed only in Explain after learner_explanation evidence.\n\n"
+        "Tool suggestion contract:\n"
+        "- Return tool_suggestion=null unless an optional scaffold is currently justified.\n"
+        "- Only suggest {\"tool\":\"visualization\",\"reason\":\"learner_stuck|"
+        "repeated_misconception|learner_requested\",\"prompt\":\"...\"}.\n"
+        "- Visualization is allowed only in Explore, after an attempt plus confusion, "
+        "or after an explicit learner request. It is never required for phase readiness.\n\n"
         "Output format requirement:\n"
         "Return one JSON object with keys: text, next_phase_ready, phase_reasoning, "
         "evidence_tags, correctness, misconception_status, confidence, "
-        "evaluation_outcome, evidence_request, explanation_card."
+        "evaluation_outcome, evidence_request, explanation_card, tool_suggestion."
     )
     language_context = (
         f"Learner profile language: {learner_language or 'unknown'}\n"
@@ -338,16 +423,34 @@ async def generate_tutor_response(
     }
 
     try:
-        ai_response: AIGenerationResponse = await asyncio.wait_for(
-            ai_client.generate(
-                system_instruction=_SYSTEM_INSTRUCTION,
-                user_instruction=user_instruction,
-                params={
-                    "response_format": {"type": "json_object"},
-                },
-            ),
-            timeout=_tutor_timeout_seconds(),
-        )
+        parsed: dict[str, Any] | None = None
+        ai_response: AIGenerationResponse | None = None
+        generation_instruction = user_instruction
+        for generation_attempt in range(1, 3):
+            ai_response = await asyncio.wait_for(
+                ai_client.generate(
+                    system_instruction=_SYSTEM_INSTRUCTION,
+                    user_instruction=generation_instruction,
+                    params={
+                        "temperature": 0.0,
+                        "response_format": _tutor_response_format(),
+                    },
+                ),
+                timeout=_tutor_timeout_seconds(),
+            )
+            parsed = _parse_structured_tutor_output(ai_response.text)
+            if _tutor_payload_is_usable(parsed):
+                break
+            generation_instruction = (
+                user_instruction
+                + "\n\nYour previous response was structurally unusable. Return only the required "
+                "JSON object. The text field must contain a complete human-readable tutor "
+                "message, not punctuation or another encoded JSON object."
+            )
+        assert ai_response is not None
+        assert parsed is not None
+        if not _tutor_payload_is_usable(parsed):
+            raise AIProviderError("Tutor returned an unusable structured response twice.")
         audit.update(
             {
                 "ai_source": ai_response.provider,
@@ -356,10 +459,10 @@ async def generate_tutor_response(
                 "finish_reason": ai_response.finish_reason,
                 "input_tokens": ai_response.usage.input_tokens if ai_response.usage else None,
                 "output_tokens": ai_response.usage.output_tokens if ai_response.usage else None,
+                "generation_attempts": generation_attempt,
             }
         )
-        parsed = _parse_structured_tutor_output(ai_response.text)
-        tutor_text = parsed["text"].strip()
+        tutor_text = _normalize_tutor_text(parsed["text"])
         next_phase_ready = parsed["next_phase_ready"]
         phase_reasoning = parsed["phase_reasoning"]
         if not tutor_text:
@@ -377,13 +480,29 @@ async def generate_tutor_response(
                 topic=topic,
             )
             audit["anti_repeat_fallback"] = True
+        if phase == "explain" and "learner_explanation" in parsed["evidence_tags"]:
+            tutor_text, parsed["evidence_request"] = _ensure_explain_micro_check(
+                tutor_text=tutor_text,
+                evidence_request=parsed["evidence_request"],
+                language_code=language_code,
+            )
         audit["structured_parse_ok"] = parsed["parse_ok"]
         if not parsed["parse_ok"]:
             audit["structured_parse_fallback"] = True
+        tool_suggestion = _resolve_tool_suggestion(
+            parsed=parsed,
+            phase=phase,
+            learner_message=text_payload,
+            workspace_metadata=workspace_metadata,
+            language_code=language_code,
+        )
+        next_actions = list(_STAGE_ACTIONS.get(phase, ["ask_followup"]))
+        if tool_suggestion is not None and "request_visualization" not in next_actions:
+            next_actions.append("request_visualization")
         return TutorResponseRead(
             text=tutor_text,
             intent=_STAGE_INTENT.get(phase, "ask_followup"),
-            next_actions=_STAGE_ACTIONS.get(phase, ["ask_followup"]),
+            next_actions=next_actions,
             next_phase_ready=bool(next_phase_ready) if phase != "evaluate" else False,
             phase_reasoning=phase_reasoning,
             evidence_tags=parsed["evidence_tags"],
@@ -393,6 +512,7 @@ async def generate_tutor_response(
             evaluation_outcome=parsed["evaluation_outcome"],
             evidence_request=parsed["evidence_request"],
             explanation_card=parsed["explanation_card"],
+            tool_suggestion=tool_suggestion,
         ), audit
 
     except (AIError, TimeoutError) as exc:
@@ -489,6 +609,19 @@ def _safe_prompt_learning_context(metadata: dict[str, Any]) -> dict[str, Any]:
             "status": evidence.get("status"),
             "confidence": evidence.get("confidence"),
             "diagnostic_signals": summary.get("diagnostic_signals", []),
+            "evidence_tags": [
+                str(tag)
+                for tag in summary.get("evidence_tags", [])
+                if isinstance(tag, str)
+            ][:20],
+            "suspected_prerequisite_codes": [
+                str(code)
+                for code in summary.get("suspected_prerequisite_codes", [])
+                if isinstance(code, str)
+            ][:20],
+            "method_invalid_detected": bool(
+                summary.get("method_invalid_detected", False)
+            ),
             "misconception_detected": bool(
                 summary.get("misconception_detected", False)
             ),
@@ -767,6 +900,7 @@ def _parse_structured_tutor_output(raw_text: str) -> dict[str, Any]:
     explanation_card = payload.get("explanation_card")
     if not isinstance(explanation_card, dict):
         explanation_card = None
+    tool_suggestion = _parse_tool_suggestion(payload.get("tool_suggestion"))
     return {
         "text": parsed_text,
         "next_phase_ready": next_phase_ready,
@@ -778,8 +912,27 @@ def _parse_structured_tutor_output(raw_text: str) -> dict[str, Any]:
         "evaluation_outcome": evaluation_outcome,
         "evidence_request": evidence_request,
         "explanation_card": explanation_card,
+        "tool_suggestion": tool_suggestion,
         "parse_ok": True,
     }
+
+
+def _tutor_response_format() -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "workspace_tutor_response",
+            "strict": True,
+            "schema": _TUTOR_OUTPUT_SCHEMA,
+        },
+    }
+
+
+def _tutor_payload_is_usable(payload: dict[str, Any]) -> bool:
+    if not payload.get("parse_ok"):
+        return False
+    normalized_text = _normalize_tutor_text(payload.get("text"))
+    return len(re.findall(r"[A-Za-z0-9]", normalized_text)) >= 8
 
 
 def _unverified_tutor_payload(*, text: str) -> dict[str, Any]:
@@ -794,8 +947,115 @@ def _unverified_tutor_payload(*, text: str) -> dict[str, Any]:
         "evaluation_outcome": None,
         "evidence_request": None,
         "explanation_card": None,
+        "tool_suggestion": None,
         "parse_ok": False,
     }
+
+
+def _parse_tool_suggestion(value: Any) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    tool = str(value.get("tool") or "").strip().lower()
+    reason = str(value.get("reason") or "").strip().lower()
+    prompt = str(value.get("prompt") or "").strip()
+    if tool != "visualization":
+        return None
+    if reason not in {"learner_stuck", "repeated_misconception", "learner_requested"}:
+        return None
+    if not prompt:
+        return None
+    return {
+        "tool": tool,
+        "reason": reason,
+        "prompt": prompt[:240],
+    }
+
+
+def _resolve_tool_suggestion(
+    *,
+    parsed: dict[str, Any],
+    phase: str,
+    learner_message: str,
+    workspace_metadata: dict[str, Any],
+    language_code: str,
+) -> WorkspaceToolSuggestionRead | None:
+    if phase != "explore":
+        return None
+
+    explicit_request = _learner_requests_visualization(learner_message)
+    suggestion = parsed.get("tool_suggestion")
+    failed = (
+        parsed.get("correctness") in {"incorrect", "partial"}
+        or parsed.get("misconception_status") in {"suspected", "active"}
+    )
+    current_tags = set(parsed.get("evidence_tags") or [])
+    attempted = "exploration_attempt" in current_tags or _has_phase_evidence_tag(
+        workspace_metadata,
+        phase="explore",
+        tag="exploration_attempt",
+    )
+    repeated_failure = int(workspace_metadata.get("consecutive_failures") or 0) >= 2
+
+    if explicit_request:
+        reason = "learner_requested"
+        prompt = _default_visualization_prompt(language_code=language_code)
+    elif isinstance(suggestion, dict) and failed and attempted:
+        reason = str(suggestion["reason"])
+        prompt = str(suggestion["prompt"])
+    elif failed and attempted and repeated_failure:
+        reason = "repeated_misconception"
+        prompt = _default_visualization_prompt(language_code=language_code)
+    else:
+        return None
+
+    return WorkspaceToolSuggestionRead(
+        tool="visualization",
+        reason=reason,
+        prompt=prompt,
+    )
+
+
+def _learner_requests_visualization(message: str) -> bool:
+    normalized = str(message or "").strip().lower()
+    if not normalized:
+        return False
+    phrases = (
+        "visual",
+        "video",
+        "animasi",
+        "animation",
+        "show me",
+        "tunjukkan",
+        "lihat gambar",
+        "see a graph",
+    )
+    return any(phrase in normalized for phrase in phrases)
+
+
+def _has_phase_evidence_tag(
+    metadata: dict[str, Any],
+    *,
+    phase: str,
+    tag: str,
+) -> bool:
+    evidence_by_phase = metadata.get("phase_evidence")
+    if not isinstance(evidence_by_phase, dict):
+        return False
+    records = evidence_by_phase.get(phase)
+    if not isinstance(records, list):
+        return False
+    return any(
+        isinstance(record, dict)
+        and isinstance(record.get("tags"), list)
+        and tag in record["tags"]
+        for record in records
+    )
+
+
+def _default_visualization_prompt(*, language_code: str) -> str:
+    if language_code == "id":
+        return "Mau lihat visualisasi singkat untuk membandingkan hubungan yang sedang kamu selidiki?"
+    return "Would you like a short visualization of the relationship you are investigating?"
 
 
 def _parse_json_payload(value: str) -> dict[str, Any] | None:
@@ -804,6 +1064,49 @@ def _parse_json_payload(value: str) -> dict[str, Any] | None:
     except ValueError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _normalize_tutor_text(value: Any) -> str:
+    text = str(value or "").strip()
+    nested = _parse_json_payload(text)
+    if nested and len(nested) == 1:
+        only_value = next(iter(nested.values()))
+        if isinstance(only_value, str) and only_value.strip():
+            return only_value.strip()
+    if text.startswith("{"):
+        malformed_wrapper = re.match(
+            r'^\{\s*"[^"]{0,20}"\s*:\s*"(?P<body>[\s\S]+)$',
+            text,
+        )
+        if malformed_wrapper:
+            return malformed_wrapper.group("body").rstrip('"} ').strip()
+    return text
+
+
+def _ensure_explain_micro_check(
+    *,
+    tutor_text: str,
+    evidence_request: dict[str, Any] | None,
+    language_code: str,
+) -> tuple[str, dict[str, Any]]:
+    if language_code == "id":
+        prompt = (
+            "Micro-check: terapkan aturan yang baru kamu jelaskan pada satu contoh baru, "
+            "lalu sebutkan faktor yang berasal dari fungsi dalam."
+        )
+    else:
+        prompt = (
+            "Micro-check: apply the rule you just explained to one new example, "
+            "then identify the factor contributed by the inner function."
+        )
+    request = dict(evidence_request or {})
+    request.setdefault("type", "micro_check")
+    request.setdefault("prompt", prompt)
+    request.setdefault("expected_evidence", "correct application in a later learner turn")
+    normalized_text = tutor_text.strip()
+    if prompt.lower() not in normalized_text.lower():
+        normalized_text = f"{normalized_text}\n\n{prompt}" if normalized_text else prompt
+    return normalized_text, request
 
 
 def _coerce_bool(value: Any) -> bool:

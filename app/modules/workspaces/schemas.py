@@ -105,6 +105,12 @@ class WorkspaceSessionHistoryRead(BaseModel):
     sessions: list[WorkspaceSessionSummaryRead] = Field(default_factory=list)
 
 
+class WorkspaceToolSuggestionRead(BaseModel):
+    tool: str
+    reason: str
+    prompt: str
+
+
 class TutorResponseRead(BaseModel):
     text: str
     intent: str
@@ -119,6 +125,7 @@ class TutorResponseRead(BaseModel):
     scaffold_level: int = 0
     evidence_request: dict[str, Any] | None = None
     explanation_card: dict[str, Any] | None = None
+    tool_suggestion: WorkspaceToolSuggestionRead | None = None
 
 
 class WorkspaceMasteryUpdateRead(BaseModel):

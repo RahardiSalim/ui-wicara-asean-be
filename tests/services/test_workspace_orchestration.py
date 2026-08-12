@@ -3,11 +3,19 @@ from app.modules.workspaces.service import (
     _ensure_phase_metadata,
     _phase_is_ready,
     _record_phase_evidence,
+    _remediate_metadata_to_phase,
+    _sanitize_tutor_response_for_phase,
     _sanitize_learner_metadata,
 )
 from app.modules.workspaces.tutor import (
+    _ensure_explain_micro_check,
+    _normalize_tutor_text,
     _parse_structured_tutor_output,
+    _resolve_tool_suggestion,
     _safe_prompt_learning_context,
+    _tutor_timeout_seconds,
+    _tutor_payload_is_usable,
+    _tutor_response_format,
 )
 
 
@@ -68,6 +76,90 @@ def test_scaffold_escalates_after_repeated_verified_failure():
     assert metadata["consecutive_failures"] == 3
 
 
+def test_workspace_tutor_default_timeout_allows_reasoning_model(monkeypatch):
+    monkeypatch.delenv("WICARA_WORKSPACE_TUTOR_TIMEOUT_SECONDS", raising=False)
+    assert _tutor_timeout_seconds() == 240.0
+
+
+def test_explain_requires_explanation_before_micro_check_can_pass():
+    metadata = _ensure_phase_metadata({})
+    metadata = _record_phase_evidence(
+        metadata,
+        phase="explain",
+        tutor_response=_response(
+            tags=["learner_explanation", "micro_check_correct"],
+        ),
+        event_type="text",
+    )
+
+    assert metadata["phase_evidence"]["explain"][0]["tags"] == [
+        "learner_explanation"
+    ]
+    assert _phase_is_ready(metadata, phase="explain") is False
+
+    metadata = _record_phase_evidence(
+        metadata,
+        phase="explain",
+        tutor_response=_response(tags=["micro_check_correct"]),
+        event_type="quiz_answer",
+    )
+    assert _phase_is_ready(metadata, phase="explain") is True
+
+
+def test_media_view_without_explanation_cannot_create_phase_evidence():
+    response = _response(tags=["exploration_attempt", "pattern_identified"])
+    sanitized = _sanitize_tutor_response_for_phase(
+        _ensure_phase_metadata({}),
+        phase="explore",
+        event_type="media_viewed",
+        text_payload="",
+        tutor_response=response,
+    )
+
+    assert sanitized is not None
+    assert sanitized.evidence_tags == []
+
+
+def test_elaborate_correct_transfer_implies_transfer_attempt():
+    sanitized = _sanitize_tutor_response_for_phase(
+        _ensure_phase_metadata({}),
+        phase="elaborate",
+        event_type="text",
+        text_payload="A complete correct transfer solution.",
+        tutor_response=_response(tags=["transfer_correct"]),
+    )
+
+    assert sanitized is not None
+    assert sanitized.evidence_tags == ["transfer_attempt", "transfer_correct"]
+
+
+def test_remediation_clears_old_phase_evidence_before_retry():
+    metadata = _ensure_phase_metadata(
+        {
+            "current_phase": "evaluate",
+            "phase_evidence": {
+                "explore": [
+                    {
+                        "tags": ["exploration_attempt", "pattern_identified"],
+                        "confidence": 0.9,
+                    }
+                ]
+            },
+        }
+    )
+
+    remediated = _remediate_metadata_to_phase(
+        metadata,
+        phase="explore",
+        reason="evaluate_misconception",
+    )
+
+    assert remediated["current_phase"] == "explore"
+    assert remediated["phase_evidence"]["explore"] == []
+    assert remediated["phase_transition_pending"] is False
+    assert remediated["remediation_cycle"] == 1
+
+
 def test_learner_metadata_cannot_claim_correctness_or_phase_state():
     sanitized = _sanitize_learner_metadata(
         {
@@ -96,7 +188,12 @@ def test_tutor_parser_allowlists_evidence_contract():
           "confidence": 0.8,
           "evaluation_outcome": "continue",
           "evidence_request": {"tool": "canvas"},
-          "explanation_card": null
+          "explanation_card": null,
+          "tool_suggestion": {
+            "tool": "visualization",
+            "reason": "learner_stuck",
+            "prompt": "Would a visual comparison help?"
+          }
         }
         """
     )
@@ -105,6 +202,78 @@ def test_tutor_parser_allowlists_evidence_contract():
     assert parsed["correctness"] == "partial"
     assert parsed["misconception_status"] == "suspected"
     assert parsed["confidence"] == 0.8
+    assert parsed["tool_suggestion"] == {
+        "tool": "visualization",
+        "reason": "learner_stuck",
+        "prompt": "Would a visual comparison help?",
+    }
+
+
+def test_tutor_text_unwraps_accidental_nested_json_object():
+    assert (
+        _normalize_tutor_text('{":": "Use the outer derivative, then the inner factor."}')
+        == "Use the outer derivative, then the inner factor."
+    )
+
+
+def test_explain_response_always_requests_a_later_micro_check():
+    text, request = _ensure_explain_micro_check(
+        tutor_text="Your explanation correctly connects both derivative layers.",
+        evidence_request=None,
+        language_code="en",
+    )
+
+    assert "Micro-check:" in text
+    assert request["type"] == "micro_check"
+    assert "later learner turn" in request["expected_evidence"]
+
+
+def test_tutor_structured_contract_rejects_punctuation_only_text():
+    assert _tutor_payload_is_usable(
+        _parse_structured_tutor_output(
+            '{"text":",","next_phase_ready":false,"phase_reasoning":"",'
+            '"evidence_tags":[],"correctness":"unknown",'
+            '"misconception_status":"none","confidence":0,'
+            '"evaluation_outcome":null,"evidence_request":null,'
+            '"explanation_card":null,"tool_suggestion":null}'
+        )
+    ) is False
+
+    response_format = _tutor_response_format()
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["strict"] is True
+
+
+def test_visual_suggestion_is_only_exposed_for_justified_explore_scaffold():
+    parsed = {
+        "correctness": "partial",
+        "misconception_status": "suspected",
+        "evidence_tags": ["exploration_attempt"],
+        "tool_suggestion": {
+            "tool": "visualization",
+            "reason": "learner_stuck",
+            "prompt": "Would a visual comparison help?",
+        },
+    }
+
+    suggestion = _resolve_tool_suggestion(
+        parsed=parsed,
+        phase="explore",
+        learner_message="I am still unsure.",
+        workspace_metadata={},
+        language_code="en",
+    )
+    blocked = _resolve_tool_suggestion(
+        parsed=parsed,
+        phase="evaluate",
+        learner_message="Show me a video.",
+        workspace_metadata={},
+        language_code="en",
+    )
+
+    assert suggestion is not None
+    assert suggestion.tool == "visualization"
+    assert blocked is None
 
 
 def test_external_tutor_context_excludes_raw_reason_and_attempt_ids():
@@ -127,6 +296,9 @@ def test_external_tutor_context_excludes_raw_reason_and_attempt_ids():
                         "source_attempt_ids": ["sensitive-attempt-id"],
                         "summary": {
                             "diagnostic_signals": ["misconception_detected"],
+                            "evidence_tags": ["inner_derivative_omitted"],
+                            "suspected_prerequisite_codes": ["opaque-gap"],
+                            "method_invalid_detected": True,
                             "misconception_detected": True,
                         },
                     },
@@ -138,5 +310,8 @@ def test_external_tutor_context_excludes_raw_reason_and_attempt_ids():
     serialized = str(safe)
     assert safe["diagnosis"]["status"] == "gap"
     assert safe["diagnosis"]["diagnostic_signals"] == ["misconception_detected"]
+    assert safe["diagnosis"]["evidence_tags"] == ["inner_derivative_omitted"]
+    assert safe["diagnosis"]["suspected_prerequisite_codes"] == ["opaque-gap"]
+    assert safe["diagnosis"]["method_invalid_detected"] is True
     assert "raw learner reasoning" not in serialized
     assert "sensitive-attempt-id" not in serialized

@@ -14,9 +14,13 @@ from app.modules.curriculum.kurikulum_merdeka import (
 )
 from app.modules.curriculum.models import ConceptEdge, KnowledgeConcept
 from app.modules.inputs.service import create_workspace_input_event
-from app.modules.learning.models import LearningTrack, MediaArtifact, TrackModule
-from app.modules.learning.spec_generator import generate_spec_from_workspace_context
-from app.modules.learning.service import media_artifact_to_schema, queue_animation_job
+from app.modules.learning.models import LearningTrack, MediaArtifact, MediaJob, TrackModule
+from app.modules.learning.schemas import AnimationQueueResponse
+from app.modules.learning.service import (
+    media_artifact_to_schema,
+    queue_animation_job,
+    queue_context_animation_job,
+)
 from app.modules.posttests.service import AdaptivePosttestService
 from app.modules.workspaces.mastery import WorkspaceMasteryService
 from app.modules.workspaces.models import WorkspaceEvent, WorkspaceSession
@@ -80,6 +84,10 @@ _PHASE_REQUIRED_EVIDENCE: dict[str, tuple[frozenset[str], ...]] = {
         frozenset({"error_analysis"}),
         frozenset({"reflection"}),
     ),
+}
+_PHASE_ALLOWED_EVIDENCE: dict[str, frozenset[str]] = {
+    phase: frozenset().union(*requirements)
+    for phase, requirements in _PHASE_REQUIRED_EVIDENCE.items()
 }
 
 
@@ -388,8 +396,19 @@ async def append_workspace_event(
         current_phase=current_phase,
         learner_language=_preferred_language(user),
     )
+    tutor_response = _sanitize_tutor_response_for_phase(
+        phase_metadata,
+        phase=current_phase,
+        event_type=normalized_event_type,
+        text_payload=text_payload,
+        tutor_response=tutor_response,
+    )
     learner_metadata = _sanitize_learner_metadata(metadata)
-    event_metadata = {**learner_metadata, "ai_audit": ai_audit}
+    event_metadata = {
+        **learner_metadata,
+        "phase": current_phase,
+        "ai_audit": ai_audit,
+    }
     evidence_verified = bool(
         tutor_response is not None
         and tutor_response.evidence_tags
@@ -400,6 +419,7 @@ async def append_workspace_event(
         **ai_audit,
         "track_id": str(workspace.track_id),
         "module_id": str(workspace.module_id),
+        "phase": current_phase,
         "tutor_policy": ai_audit.get("ai_source", "unknown"),
         "evidence_verified": evidence_verified,
         "evidence_correctness": (
@@ -469,6 +489,12 @@ async def append_workspace_event(
                 "evaluation_outcome": tutor_response.evaluation_outcome,
                 "evidence_request": tutor_response.evidence_request,
                 "explanation_card": tutor_response.explanation_card,
+                "tool_suggestion": (
+                    tutor_response.tool_suggestion.model_dump()
+                    if tutor_response.tool_suggestion is not None
+                    else None
+                ),
+                "phase": current_phase,
             },
         )
 
@@ -604,15 +630,47 @@ def queue_workspace_video_generation(
     if workspace is None:
         return None
 
+    workspace_metadata = _ensure_phase_metadata(
+        dict(workspace.metadata_json or {}),
+        created_at=workspace.created_at,
+    )
+    requested_phase = str(workspace_metadata.get("current_phase") or "engage")
+    if requested_phase != "explore":
+        raise ValueError("Visualization can only be requested during the Explore phase.")
+
+    module = session.get(TrackModule, workspace.module_id)
+    resolved_concept_id = concept_id or (module.concept_id if module is not None else None)
+    active_request = _active_workspace_media_request(
+        session,
+        workspace=workspace,
+        concept_id=resolved_concept_id,
+        requested_phase=requested_phase,
+    )
+    if active_request is not None:
+        artifact, job, existing_event = active_request
+        return WorkspaceGenerateVideoResponse(
+            queue=AnimationQueueResponse(
+                job_id=job.id,
+                artifact_id=artifact.id,
+                status=job.status,
+                error_details=None,
+            ),
+            event=event_to_schema(existing_event),
+            workspace=workspace_to_schema(session, workspace, user=user),
+        )
+
     normalized_generation_mode = _normalize_generation_mode(generation_mode)
     if normalized_generation_mode == "context_auto":
-        generated = generate_spec_from_workspace_context(
-            workspace=workspace,
+        queue = queue_context_animation_job(
+            session,
+            user=user,
+            workspace_id=workspace.id,
+            concept_id=resolved_concept_id,
             language=language,
+            quality_profile=quality_profile,
         )
-        resolved_template_id = generated.template_id
-        resolved_spec_json = generated.spec_json
-        resolved_metadata = generated.debug_meta
+        resolved_template_id = "pending.context_auto"
+        resolved_metadata = {"spec_source": "context_auto_worker"}
     else:
         resolved_template_id = (template_id or "").strip().lower()
         if not resolved_template_id:
@@ -623,16 +681,16 @@ def queue_workspace_video_generation(
             "resolved_template_id": resolved_template_id,
         }
 
-    queue = queue_animation_job(
-        session,
-        user=user,
-        workspace_id=workspace.id,
-        concept_id=concept_id,
-        template_id=resolved_template_id,
-        spec_json=resolved_spec_json,
-        language=language,
-        quality_profile=quality_profile,
-    )
+        queue = queue_animation_job(
+            session,
+            user=user,
+            workspace_id=workspace.id,
+            concept_id=resolved_concept_id,
+            template_id=resolved_template_id,
+            spec_json=resolved_spec_json,
+            language=language,
+            quality_profile=quality_profile,
+        )
     event_metadata = {
         **metadata,
         "source": "workspace_generate_video_api",
@@ -641,6 +699,7 @@ def queue_workspace_video_generation(
         "job_id": str(queue.job_id),
         "artifact_id": str(queue.artifact_id),
         "queue_status": queue.status,
+        "requested_phase": requested_phase,
         **resolved_metadata,
     }
     if queue.error_details is not None:
@@ -1041,7 +1100,24 @@ def _record_phase_evidence(
             0, _safe_int(updated.get("hint_level"), 0) - 1
         )
 
-    if tutor_response.confidence < 0.55 or not tutor_response.evidence_tags:
+    allowed_tags = _PHASE_ALLOWED_EVIDENCE.get(phase, frozenset())
+    evidence_tags = [
+        tag for tag in tutor_response.evidence_tags if tag in allowed_tags
+    ]
+    if phase == "elaborate" and "transfer_correct" in evidence_tags:
+        evidence_tags.insert(0, "transfer_attempt")
+        evidence_tags = list(dict.fromkeys(evidence_tags))
+    if (
+        phase == "explain"
+        and "micro_check_correct" in evidence_tags
+        and not _phase_has_recorded_tag(
+            updated,
+            phase="explain",
+            tag="learner_explanation",
+        )
+    ):
+        evidence_tags.remove("micro_check_correct")
+    if tutor_response.confidence < 0.55 or not evidence_tags:
         return updated
     evidence_by_phase = dict(updated.get("phase_evidence") or {})
     records = list(evidence_by_phase.get(phase, []))
@@ -1049,7 +1125,7 @@ def _record_phase_evidence(
         {
             "recorded_at": datetime.now(UTC).isoformat(),
             "event_type": event_type,
-            "tags": list(dict.fromkeys(tutor_response.evidence_tags)),
+            "tags": list(dict.fromkeys(evidence_tags)),
             "correctness": tutor_response.correctness,
             "misconception_status": tutor_response.misconception_status,
             "confidence": round(float(tutor_response.confidence), 4),
@@ -1059,6 +1135,131 @@ def _record_phase_evidence(
     evidence_by_phase[phase] = records[-20:]
     updated["phase_evidence"] = evidence_by_phase
     return updated
+
+
+def _sanitize_tutor_response_for_phase(
+    metadata: dict[str, Any],
+    *,
+    phase: str,
+    event_type: str,
+    text_payload: str,
+    tutor_response: TutorResponseRead | None,
+) -> TutorResponseRead | None:
+    if tutor_response is None:
+        return None
+
+    allowed_tags = _PHASE_ALLOWED_EVIDENCE.get(phase, frozenset())
+    evidence_tags = [
+        tag for tag in tutor_response.evidence_tags if tag in allowed_tags
+    ]
+    if event_type == "media_viewed" and not text_payload.strip():
+        evidence_tags = []
+    if phase == "elaborate" and "transfer_correct" in evidence_tags:
+        evidence_tags.insert(0, "transfer_attempt")
+        evidence_tags = list(dict.fromkeys(evidence_tags))
+    if (
+        phase == "explain"
+        and "micro_check_correct" in evidence_tags
+        and not _phase_has_recorded_tag(
+            metadata,
+            phase="explain",
+            tag="learner_explanation",
+        )
+    ):
+        evidence_tags.remove("micro_check_correct")
+
+    has_explanation = (
+        phase == "explain"
+        and (
+            "learner_explanation" in evidence_tags
+            or _phase_has_recorded_tag(
+                metadata,
+                phase="explain",
+                tag="learner_explanation",
+            )
+        )
+    )
+    return tutor_response.model_copy(
+        update={
+            "evidence_tags": evidence_tags,
+            "evaluation_outcome": (
+                tutor_response.evaluation_outcome if phase == "evaluate" else None
+            ),
+            "explanation_card": (
+                tutor_response.explanation_card if has_explanation else None
+            ),
+            "tool_suggestion": (
+                tutor_response.tool_suggestion if phase == "explore" else None
+            ),
+        }
+    )
+
+
+def _active_workspace_media_request(
+    session: Session,
+    *,
+    workspace: WorkspaceSession,
+    concept_id: UUID | None,
+    requested_phase: str,
+) -> tuple[MediaArtifact, MediaJob, WorkspaceEvent] | None:
+    statement = (
+        select(MediaArtifact)
+        .where(
+            MediaArtifact.user_id == workspace.user_id,
+            MediaArtifact.workspace_id == workspace.id,
+            MediaArtifact.status.in_(("queued", "processing")),
+        )
+        .order_by(MediaArtifact.created_at.desc())
+    )
+    if concept_id is not None:
+        statement = statement.where(MediaArtifact.concept_id == concept_id)
+    artifacts = list(session.scalars(statement))
+    if not artifacts:
+        return None
+
+    events_by_artifact = {
+        event.media_artifact_id: event
+        for event in workspace.events
+        if event.event_type == "media_generated" and event.media_artifact_id is not None
+    }
+    for artifact in artifacts:
+        event = events_by_artifact.get(artifact.id)
+        if event is None:
+            continue
+        event_phase = str((event.metadata_json or {}).get("requested_phase") or "")
+        if event_phase and event_phase != requested_phase:
+            continue
+        job = session.scalar(
+            select(MediaJob)
+            .where(
+                MediaJob.artifact_id == artifact.id,
+                MediaJob.status.in_(("queued", "processing")),
+            )
+            .order_by(MediaJob.created_at.desc())
+        )
+        if job is not None:
+            return artifact, job, event
+    return None
+
+
+def _phase_has_recorded_tag(
+    metadata: dict[str, Any],
+    *,
+    phase: str,
+    tag: str,
+) -> bool:
+    evidence_by_phase = metadata.get("phase_evidence")
+    if not isinstance(evidence_by_phase, dict):
+        return False
+    records = evidence_by_phase.get(phase)
+    if not isinstance(records, list):
+        return False
+    return any(
+        isinstance(record, dict)
+        and isinstance(record.get("tags"), list)
+        and tag in record["tags"]
+        for record in records
+    )
 
 
 def _phase_is_ready(metadata: dict[str, Any], *, phase: str) -> bool:
@@ -1114,9 +1315,19 @@ def _remediate_metadata_to_phase(
     phase: str,
     reason: str,
 ) -> dict[str, Any]:
-    updated = _advance_metadata_to_phase(metadata, next_phase=phase)
+    cleared = dict(metadata)
+    evidence_by_phase = dict(cleared.get("phase_evidence") or {})
+    evidence_by_phase[phase] = []
+    cleared["phase_evidence"] = evidence_by_phase
+    updated = _advance_metadata_to_phase(cleared, next_phase=phase)
     updated["remediation_reason"] = reason
     updated["posttest_eligible"] = False
+    updated["phase_transition_pending"] = False
+    updated["consecutive_failures"] = 0
+    updated["remediation_cycle"] = max(
+        0,
+        _safe_int(metadata.get("remediation_cycle"), 0),
+    ) + 1
     return updated
 
 
@@ -1427,6 +1638,7 @@ def _sync_ready_media_followups(
         if (event.metadata_json or {}).get("follow_up_for_media_artifact_id")
     }
     ready_artifacts: list[MediaArtifact] = []
+    requested_phases: dict[UUID, str] = {}
     for event in events:
         if event.media_artifact_id is None:
             continue
@@ -1436,6 +1648,9 @@ def _sync_ready_media_followups(
         if str(artifact.id) in followed_ids:
             continue
         ready_artifacts.append(artifact)
+        requested_phases[artifact.id] = str(
+            (event.metadata_json or {}).get("requested_phase") or "explore"
+        )
 
     if not ready_artifacts:
         return False
@@ -1470,6 +1685,10 @@ def _sync_ready_media_followups(
                     "intent": "reflect_on_visualization",
                     "next_actions": ["play_media", "explain_observation"],
                     "mastery_delta": 0.0,
+                    "requested_phase": requested_phases.get(artifact.id, "explore"),
+                    "current_phase_at_ready": str(
+                        (workspace.metadata_json or {}).get("current_phase") or "engage"
+                    ),
                 },
             )
         )
