@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.modules.accounts.models import UserAccount
 from app.modules.curriculum.models import KnowledgeConcept, Subject
 from app.modules.learning.models import (
+    AssessmentQuestion,
     AssessmentSession,
     LearnerConceptState,
     LearningGoal,
@@ -14,6 +15,7 @@ from app.modules.learning.models import (
 )
 from app.modules.posttests.service import (
     AdaptivePosttestService,
+    _create_posttest_questions,
     _target_concept_for_goal_or_workspace,
 )
 from app.modules.workspaces.models import WorkspaceSession
@@ -185,6 +187,84 @@ def test_passing_original_target_completes_goal_only_after_every_module_is_done(
     assert scenario["track"].status == "completed"
     assert scenario["goal"].status == "completed"
     assert scenario["goal"].completed_at is not None
+
+
+def test_posttest_generation_resumes_after_cached_batch(db_session, monkeypatch):
+    scenario = _create_scenario(db_session)
+    assessment = scenario["assessment"]
+    assessment.status = "active"
+    assessment.decision_state_json = {}
+    concept = scenario["concepts"][0]
+    assessment.target_concept_id = concept.id
+
+    for sort_order in range(1, 4):
+        db_session.add(
+            AssessmentQuestion(
+                session_id=assessment.id,
+                concept_id=concept.id,
+                step_label="Posttest",
+                topic=concept.title,
+                prompt=f"Cached question {sort_order}",
+                difficulty_label="Medium",
+                sort_order=sort_order,
+            )
+        )
+    db_session.commit()
+
+    generated_batches = []
+
+    def fake_generate(
+        _generation_service,
+        session,
+        *,
+        assessment,
+        concept,
+        difficulties,
+        **_kwargs,
+    ):
+        generated_batches.append(list(difficulties))
+        current_count = session.scalar(
+            select(func.count())
+            .select_from(AssessmentQuestion)
+            .where(AssessmentQuestion.session_id == assessment.id)
+        )
+        created = []
+        for offset, difficulty in enumerate(difficulties, start=1):
+            question = AssessmentQuestion(
+                session_id=assessment.id,
+                concept_id=concept.id,
+                step_label="Posttest",
+                topic=concept.title,
+                prompt=f"Generated question {current_count + offset}",
+                difficulty_label=difficulty.title(),
+                sort_order=current_count + offset,
+            )
+            session.add(question)
+            created.append(question)
+        session.flush()
+        return created
+
+    monkeypatch.setattr(
+        "app.modules.posttests.service._generate_posttest_question_chunk",
+        fake_generate,
+    )
+
+    questions = _create_posttest_questions(
+        object(),
+        db_session,
+        assessment=assessment,
+        concept=concept,
+        language="en",
+        diagnosis_context="cached generation test",
+    )
+
+    assert len(questions) == 10
+    assert generated_batches == [
+        ["hard", "hard", "hard"],
+        ["hard", "hard"],
+        ["hard", "hard"],
+    ]
+    assert assessment.metadata_json["generation_state"]["completed_questions"] == 10
 
 
 def _create_scenario(
