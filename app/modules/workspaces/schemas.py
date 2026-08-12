@@ -108,6 +108,12 @@ class WorkspaceSessionHistoryRead(BaseModel):
     has_more: bool = False
 
 
+class WorkspaceToolSuggestionRead(BaseModel):
+    tool: str
+    reason: str
+    prompt: str
+
+
 class TutorResponseRead(BaseModel):
     text: str
     intent: str
@@ -123,6 +129,7 @@ class TutorResponseRead(BaseModel):
     evidence_request: dict[str, Any] | None = None
     explanation_card: dict[str, Any] | None = None
     degraded: bool = False
+    tool_suggestion: WorkspaceToolSuggestionRead | None = None
 
 
 class WorkspaceMasteryUpdateRead(BaseModel):
