@@ -15,6 +15,7 @@ from app.modules.workspaces.service import (
 )
 from app.modules.workspaces.tutor import (
     _ensure_explain_micro_check,
+    _build_user_instruction,
     _normalize_tutor_text,
     _parse_structured_tutor_output,
     _resolve_tool_suggestion,
@@ -75,6 +76,22 @@ async def test_successful_ai_tutor_generation_returns_structured_response(monkey
     assert response.next_phase_ready is True
     assert audit["ai_source"] == "test"
     assert audit["structured_parse_ok"] is True
+
+
+def test_explore_prompt_defines_phase_specific_evidence_rubric():
+    prompt = _build_user_instruction(
+        "explore",
+        "Curve sketching using derivatives",
+        "(no prior conversation)",
+        "I compared the signs on each interval.",
+        learner_language="en",
+        response_language="English",
+        learning_context={"scaffold_level": 0},
+    )
+
+    assert "Use exploration_attempt" in prompt
+    assert "Use pattern_identified" in prompt
+    assert "Both tags may be returned on the same turn" in prompt
 
 
 def _response(

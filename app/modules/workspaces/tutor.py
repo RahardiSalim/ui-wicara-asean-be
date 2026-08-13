@@ -72,6 +72,32 @@ _PHASE_TRANSITION_CRITERIA: dict[str, str] = {
     ),
 }
 
+_PHASE_EVIDENCE_GUIDANCE: dict[str, str] = {
+    "engage": (
+        "Use challenge_accepted when the learner explicitly accepts or commits to the "
+        "investigation. Use prior_knowledge_shared when they state relevant prior knowledge."
+    ),
+    "explore": (
+        "Use exploration_attempt when the learner tries a calculation, comparison, example, "
+        "or experiment. Use pattern_identified when their latest message states a correct "
+        "relationship or pattern supported by that exploration. Both tags may be returned "
+        "on the same turn when both are demonstrated."
+    ),
+    "explain": (
+        "Use learner_explanation when the learner explains the key idea in their own words. "
+        "Use micro_check_correct only for a correct answer to a separate micro-check in a "
+        "later turn."
+    ),
+    "elaborate": (
+        "Use transfer_attempt for a substantive attempt on a new application. Add "
+        "transfer_correct when that application is correct."
+    ),
+    "evaluate": (
+        "Use independent_attempt, error_analysis, and reflection only when each is explicitly "
+        "present in the learner's final-stage response."
+    ),
+}
+
 _TUTOR_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -316,6 +342,7 @@ def _build_user_instruction(
         "- If current phase is evaluate, always return next_phase_ready=false.\n\n"
         "Evidence contract:\n"
         f"- Allowed evidence_tags: {', '.join(sorted(_ALLOWED_EVIDENCE_TAGS))}.\n"
+        f"- Current-phase evidence rubric: {_PHASE_EVIDENCE_GUIDANCE.get(current_phase, '')}\n"
         "- correctness: correct|partial|incorrect|unknown.\n"
         "- misconception_status: none|suspected|active|resolved.\n"
         "- In Evaluate, evaluation_outcome is passed only with an independent attempt, "
