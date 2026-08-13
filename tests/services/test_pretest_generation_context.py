@@ -113,6 +113,29 @@ def test_fresh_generation_output_budget_scales_with_batch_size():
     assert _fresh_generation_max_tokens(question_count=3) == 14000
 
 
+def test_fresh_prompt_rejects_complementary_true_options():
+    concept = KnowledgeConcept(
+        code="curve.sketch",
+        title="Curve sketch",
+        en_desc="Analyze curve behavior using derivatives.",
+        metadata_json={},
+    )
+    prompt = _fresh_question_prompt(
+        concept=concept,
+        difficulties=["hard"],
+        assessment_type="posttest",
+        language="English",
+        node_role="target",
+        skill_candidates=[],
+        diagnosis_context="none",
+        previous_questions=[],
+    )
+
+    assert "two options are simultaneously true" in prompt
+    assert "complementary descriptions, not competing answers" in prompt
+    assert "no second option is also true" in prompt
+
+
 def test_pretest_generation_timeout_is_capped_below_frontend_timeout(monkeypatch):
     monkeypatch.setenv("WICARA_PRETEST_LLM_TIMEOUT_SECONDS", "999")
 

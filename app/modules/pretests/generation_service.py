@@ -24,7 +24,7 @@ from app.modules.pretests.question_validator import QuestionValidator, VALID_QUE
 from app.modules.review.flagger import enqueue_flag
 
 PACK_PROMPT_VERSION = "adaptive_node_pack_v6_flexible_subject_tasks"
-FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v10_minimal_contract"
+FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v11_exclusive_options"
 DEFAULT_PACK_GENERATION_MAX_ATTEMPTS = 4
 DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 270.0
 
@@ -1064,6 +1064,18 @@ Correct — merge all steps belonging to that concept into one entry:
   {{"concept_code": "{concept.code}", "criterion": "Determine the critical points and use derivative signs to identify the increasing intervals."}}
 ]
 
+Mutually-exclusive option example:
+Incorrect — two options are simultaneously true descriptions of the same curve:
+- "Concave up outside the two inflection points."
+- "Concave down between the two inflection points."
+These are complementary descriptions, not competing answers.
+
+Correct — make every option a complete classification over the same intervals, with
+exactly one complete classification true. If the stem asks for the whole curve, each
+option must cover the same extrema, increasing/decreasing intervals, and concavity
+claims. An incorrect option must contradict at least one claim; it cannot merely omit
+a true claim that another option states.
+
 Difficulty rules:
 - Easy: direct recognition or basic one-step application.
 - Medium: application in context, simple word problem, equation representation, or choosing the correct operation/strategy; usually 1-2 reasoning steps.
@@ -1074,6 +1086,7 @@ Difficulty rules:
 
 Before returning JSON, internally verify:
 - exactly one correct answer
+- no second option is also true, including an equivalent or complementary description
 - no duplicate questions
 - requested language is followed
 - questions are ordered according to the requested difficulty sequence
