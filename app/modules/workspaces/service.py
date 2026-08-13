@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -8,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.language import normalize_language_code, preferred_language_code
+from app.db.session import SessionLocal
 from app.modules.accounts.models import UserAccount
 from app.modules.curriculum.kurikulum_merdeka import (
     translate_curriculum_label_to_english,
@@ -18,7 +20,13 @@ from app.modules.evidence.canvas_upload_service import (
     load_owned_image_asset,
 )
 from app.modules.inputs.service import create_workspace_input_event
-from app.modules.learning.models import LearningTrack, MediaArtifact, MediaJob, TrackModule
+from app.modules.learning.models import (
+    AssessmentSession,
+    LearningTrack,
+    MediaArtifact,
+    MediaJob,
+    TrackModule,
+)
 from app.modules.learning.schemas import AnimationQueueResponse
 from app.modules.learning.service import (
     media_artifact_to_schema,
@@ -52,6 +60,7 @@ VALID_EVENT_TYPES = {
 VALID_ACTOR_TYPES = {"learner", "tutor", "system"}
 _mastery_service = WorkspaceMasteryService()
 _posttest_service = AdaptivePosttestService()
+logger = logging.getLogger(__name__)
 
 _PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
 _MAX_HINT_LEVEL = 6
@@ -384,6 +393,7 @@ def start_posttest(
             learning_goal_id=track.learning_goal_id,
             track_id=track.id,
             module_id=module.id,
+            generate_questions=False,
         )
     except ValueError as exc:
         # Drop anything the failed generation left pending before recording the
@@ -395,14 +405,19 @@ def start_posttest(
         message = "Posttest could not be created for this module."
         _record_trigger({"status": "error", "reason": "posttest_unavailable", "error": message})
         raise ValueError(message)
+    generation_ready = (
+        posttest.status in {"active", "awaiting_answer"}
+        and int(posttest.total_questions) > 0
+    )
     refreshed_metadata = _ensure_phase_metadata(
         dict(workspace.metadata_json or {}),
         created_at=workspace.created_at,
     )
-    refreshed_metadata["posttest_eligible"] = False
-    refreshed_metadata["phase_transition_pending"] = False
+    refreshed_metadata["posttest_eligible"] = not generation_ready
+    if generation_ready:
+        refreshed_metadata["phase_transition_pending"] = False
     refreshed_metadata["posttest_trigger"] = {
-        "status": "ready",
+        "status": "ready" if generation_ready else "generating",
         "reason": "evaluate_evidence_verified",
         "learning_goal_id": str(track.learning_goal_id),
         "track_id": str(track.id),
@@ -423,6 +438,117 @@ def start_posttest(
     if workspace is None:
         return None
     return workspace_to_schema(session, workspace, user=user)
+
+
+def process_queued_posttest_generation(
+    *,
+    user_id: UUID,
+    workspace_id: UUID,
+    posttest_session_id: UUID,
+) -> None:
+    """Finish a queued workspace post-test outside the request lifecycle."""
+    with SessionLocal() as session:
+        _process_queued_posttest_generation(
+            session,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            posttest_session_id=posttest_session_id,
+        )
+
+
+def _process_queued_posttest_generation(
+    session: Session,
+    *,
+    user_id: UUID,
+    workspace_id: UUID,
+    posttest_session_id: UUID,
+) -> bool:
+    user = session.get(UserAccount, user_id)
+    workspace = session.get(WorkspaceSession, workspace_id)
+    assessment = session.get(AssessmentSession, posttest_session_id)
+    if user is None or workspace is None or assessment is None:
+        logger.warning(
+            "Queued posttest context disappeared: user_id=%s workspace_id=%s session_id=%s",
+            user_id,
+            workspace_id,
+            posttest_session_id,
+        )
+        return False
+
+    generation_state = dict(
+        (assessment.metadata_json or {}).get("generation_state") or {}
+    )
+    if str(generation_state.get("status") or "") != "queued":
+        return False
+    assessment.metadata_json = {
+        **dict(assessment.metadata_json or {}),
+        "generation_state": {**generation_state, "status": "processing"},
+    }
+    session.commit()
+
+    trigger = dict((workspace.metadata_json or {}).get("posttest_trigger") or {})
+    try:
+        posttest = _posttest_service.start(
+            session,
+            user=user,
+            workspace_session_id=workspace.id,
+            learning_goal_id=UUID(str(trigger["learning_goal_id"])),
+            track_id=workspace.track_id,
+            module_id=workspace.module_id,
+            generate_questions=True,
+        )
+        if posttest is None:
+            raise ValueError("Posttest could not be created for this module.")
+    except Exception as exc:  # Background task boundary: persist a retryable failure.
+        session.rollback()
+        workspace = session.get(WorkspaceSession, workspace_id)
+        assessment = session.get(AssessmentSession, posttest_session_id)
+        if assessment is not None:
+            failed_state = dict(
+                (assessment.metadata_json or {}).get("generation_state") or {}
+            )
+            assessment.metadata_json = {
+                **dict(assessment.metadata_json or {}),
+                "generation_state": {**failed_state, "status": "error"},
+            }
+        if workspace is not None:
+            metadata = dict(workspace.metadata_json or {})
+            current_trigger = dict(metadata.get("posttest_trigger") or trigger)
+            metadata["posttest_trigger"] = {
+                **current_trigger,
+                "status": "error",
+                "reason": "posttest_generation_failed",
+                "error": str(exc)[:1000],
+            }
+            metadata["posttest_eligible"] = True
+            workspace.metadata_json = metadata
+            workspace.updated_at = datetime.now(UTC)
+        session.commit()
+        logger.exception(
+            "Queued posttest generation failed: workspace_id=%s session_id=%s",
+            workspace_id,
+            posttest_session_id,
+        )
+        return False
+
+    workspace = session.get(WorkspaceSession, workspace_id)
+    if workspace is None:
+        return False
+    metadata = dict(workspace.metadata_json or {})
+    current_trigger = dict(metadata.get("posttest_trigger") or trigger)
+    metadata["posttest_eligible"] = False
+    metadata["phase_transition_pending"] = False
+    metadata["posttest_trigger"] = {
+        **current_trigger,
+        "status": "ready",
+        "posttest_session_id": str(posttest.session_id),
+        "question_count": int(posttest.total_questions),
+        "error": None,
+    }
+    workspace.metadata_json = metadata
+    workspace.updated_at = datetime.now(UTC)
+    session.commit()
+    return True
 
 
 async def append_workspace_event(

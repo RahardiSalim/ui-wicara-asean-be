@@ -79,6 +79,7 @@ class AdaptivePosttestService:
         learning_goal_id: UUID | None = None,
         track_id: UUID | None = None,
         module_id: UUID | None = None,
+        generate_questions: bool = True,
     ) -> PosttestSessionRead | None:
         context = _resolve_posttest_context(
             session,
@@ -134,7 +135,7 @@ class AdaptivePosttestService:
                 target_concept_id=target.id,
                 session_type="posttest",
                 title=f"Posttest: {target_title}",
-                status="active",
+                status="generating",
                 source="workspace_history",
                 metadata_json={
                     "source": "workspace_history",
@@ -169,6 +170,23 @@ class AdaptivePosttestService:
             session.refresh(assessment)
         else:
             assessment = existing
+
+        if not generate_questions:
+            generation_state = dict(
+                (assessment.metadata_json or {}).get("generation_state") or {}
+            )
+            assessment.status = "generating"
+            assessment.metadata_json = {
+                **dict(assessment.metadata_json or {}),
+                "generation_state": {
+                    **generation_state,
+                    "status": "queued",
+                    "completed_questions": len(assessment.questions),
+                    "total_questions": len(POSTTEST_DIFFICULTIES),
+                },
+            }
+            session.commit()
+            return self.read(session, user=user, session_id=assessment.id)
 
         questions = _create_posttest_questions(
             self.generation_service,
@@ -213,6 +231,7 @@ class AdaptivePosttestService:
                 "total_questions": len(POSTTEST_DIFFICULTIES),
             },
         }
+        assessment.status = "active"
         session.commit()
         return self.read(session, user=user, session_id=assessment.id)
 
@@ -1231,7 +1250,7 @@ def _active_posttest_for_goal(
             AssessmentSession.user_id == user.id,
             AssessmentSession.learning_goal_id == goal_id,
             AssessmentSession.session_type == "posttest",
-            AssessmentSession.status.in_({"active", "awaiting_answer"}),
+            AssessmentSession.status.in_({"generating", "active", "awaiting_answer"}),
         )
         .options(selectinload(AssessmentSession.questions).selectinload(AssessmentQuestion.options))
         .order_by(AssessmentSession.created_at.desc())

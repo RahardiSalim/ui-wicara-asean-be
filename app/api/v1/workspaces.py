@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_session
@@ -130,9 +130,14 @@ def advance_workspace_phase(
     return response
 
 
-@router.post("/{workspace_id}/start-posttest", response_model=schemas.WorkspaceRead)
+@router.post(
+    "/{workspace_id}/start-posttest",
+    response_model=schemas.WorkspaceRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def start_workspace_posttest(
     workspace_id: UUID,
+    background_tasks: BackgroundTasks,
     account: UserAccount = Depends(get_current_account),
     session: Session = Depends(get_session),
 ) -> schemas.WorkspaceRead:
@@ -149,6 +154,16 @@ def start_workspace_posttest(
 
     if response is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace was not found.")
+    trigger = response.posttest_trigger or {}
+    if str(trigger.get("status") or "") == "generating":
+        raw_session_id = trigger.get("posttest_session_id")
+        if raw_session_id:
+            background_tasks.add_task(
+                service.process_queued_posttest_generation,
+                user_id=account.id,
+                workspace_id=workspace_id,
+                posttest_session_id=UUID(str(raw_session_id)),
+            )
     return response
 
 

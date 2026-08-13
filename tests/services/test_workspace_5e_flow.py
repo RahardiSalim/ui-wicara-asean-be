@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
+from sqlalchemy import select
 
 from app.modules.accounts.models import UserAccount
 from app.modules.curriculum.models import KnowledgeConcept, Subject
 from app.modules.learning.models import (
+    AssessmentSession,
     LearningGoal,
     LearningTrack,
     MediaArtifact,
@@ -18,11 +22,13 @@ from app.modules.learning.spec_generator import WorkspaceGeneratedSpec
 from app.modules.workspaces.models import WorkspaceEvent, WorkspaceSession
 from app.modules.workspaces.schemas import TutorResponseRead
 from app.modules.workspaces.service import (
+    _process_queued_posttest_generation,
     advance_workspace_phase,
     append_workspace_event,
     create_or_resume_workspace,
     queue_workspace_video_generation,
     read_workspace,
+    start_posttest,
 )
 
 
@@ -242,6 +248,113 @@ def test_ready_media_adds_one_reflection_prompt_without_phase_evidence(db_sessio
     assert follow_ups[0].metadata["mastery_delta"] == 0.0
     assert second.current_phase == "explain"
     assert second.phase_evidence == phase_evidence_before
+
+
+def test_workspace_posttest_start_only_queues_generation(db_session, monkeypatch):
+    scenario = _create_workspace_scenario(db_session)
+    workspace = db_session.get(WorkspaceSession, scenario["workspace"].id)
+    assert workspace is not None
+    workspace.metadata_json = {
+        **dict(workspace.metadata_json or {}),
+        "current_phase": "evaluate",
+        "posttest_eligible": True,
+    }
+    db_session.commit()
+
+    def unexpected_generation(*_args, **_kwargs):
+        raise AssertionError("HTTP request path must not generate posttest questions")
+
+    monkeypatch.setattr(
+        "app.modules.workspaces.service._posttest_service.generation_service.create_fresh_questions",
+        unexpected_generation,
+    )
+
+    result = start_posttest(
+        db_session,
+        user=scenario["user"],
+        workspace_id=workspace.id,
+    )
+
+    assert result is not None
+    assert result.posttest_trigger is not None
+    assert result.posttest_trigger["status"] == "generating"
+    assert result.posttest_trigger["question_count"] == 0
+    assert result.posttest_eligible is True
+    assessment = db_session.scalar(
+        select(AssessmentSession).where(
+            AssessmentSession.id
+            == UUID(result.posttest_trigger["posttest_session_id"])
+        )
+    )
+    assert assessment is not None
+    assert assessment.status == "generating"
+    assert assessment.metadata_json["generation_state"]["status"] == "queued"
+    assert assessment.questions == []
+
+
+def test_queued_posttest_worker_marks_workspace_ready_once(db_session, monkeypatch):
+    scenario = _create_workspace_scenario(db_session)
+    workspace = db_session.get(WorkspaceSession, scenario["workspace"].id)
+    assert workspace is not None
+    workspace.metadata_json = {
+        **dict(workspace.metadata_json or {}),
+        "current_phase": "evaluate",
+        "posttest_eligible": True,
+    }
+    db_session.commit()
+    queued = start_posttest(
+        db_session,
+        user=scenario["user"],
+        workspace_id=workspace.id,
+    )
+    assert queued is not None
+    assert queued.posttest_trigger is not None
+    assessment_id = UUID(queued.posttest_trigger["posttest_session_id"])
+
+    calls = 0
+
+    def complete_generation(session, **_kwargs):
+        nonlocal calls
+        calls += 1
+        assessment = session.get(AssessmentSession, assessment_id)
+        assert assessment is not None
+        assessment.status = "active"
+        assessment.metadata_json = {
+            **dict(assessment.metadata_json or {}),
+            "generation_state": {
+                "status": "ready",
+                "completed_questions": 10,
+                "total_questions": 10,
+            },
+        }
+        session.commit()
+        return SimpleNamespace(session_id=assessment.id, total_questions=10)
+
+    monkeypatch.setattr(
+        "app.modules.workspaces.service._posttest_service.start",
+        complete_generation,
+    )
+
+    first = _process_queued_posttest_generation(
+        db_session,
+        user_id=scenario["user"].id,
+        workspace_id=workspace.id,
+        posttest_session_id=assessment_id,
+    )
+    second = _process_queued_posttest_generation(
+        db_session,
+        user_id=scenario["user"].id,
+        workspace_id=workspace.id,
+        posttest_session_id=assessment_id,
+    )
+
+    db_session.refresh(workspace)
+    assert first is True
+    assert second is False
+    assert calls == 1
+    assert workspace.metadata_json["posttest_eligible"] is False
+    assert workspace.metadata_json["posttest_trigger"]["status"] == "ready"
+    assert workspace.metadata_json["posttest_trigger"]["question_count"] == 10
 
 
 def test_context_visual_request_defers_spec_generation_to_worker(db_session, monkeypatch):
