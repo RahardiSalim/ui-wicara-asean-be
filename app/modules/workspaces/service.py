@@ -53,7 +53,6 @@ VALID_ACTOR_TYPES = {"learner", "tutor", "system"}
 _mastery_service = WorkspaceMasteryService()
 _posttest_service = AdaptivePosttestService()
 
-_PILOT_TEMPLATE_ID = "manim.number_line_quantity.v1"
 _PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
 _MAX_HINT_LEVEL = 6
 _HINT_DECAY_PER_SUCCESS = 2
@@ -1605,6 +1604,7 @@ def _apply_workspace_context(
     metadata = dict(workspace.metadata_json or {})
     language = _preferred_language(user)
     concept = session.get(KnowledgeConcept, module.concept_id) if module.concept_id else None
+    concept_metadata = dict(concept.metadata_json or {}) if concept is not None else {}
     prerequisite_codes: list[str] = []
     if concept is not None:
         prerequisite_codes = list(
@@ -1682,23 +1682,43 @@ def _apply_workspace_context(
         {
             "active_node_id": concept.code if concept is not None else metadata.get("active_node_id"),
             "active_concept_type": (
-                str((concept.metadata_json or {}).get("concept_type") or "").strip().lower()
+                str(concept_metadata.get("concept_type") or "").strip().lower()
                 if concept is not None
                 else str(metadata.get("active_concept_type") or "").strip().lower()
             )
             or "general_steam",
+            "active_concept_subtype": (
+                str(concept_metadata.get("concept_subtype") or "").strip().lower()
+                if concept is not None
+                else str(metadata.get("active_concept_subtype") or "").strip().lower()
+            ),
+            "active_concept_visual_pattern": (
+                str(concept_metadata.get("concept_visual_pattern") or "").strip()
+                if concept is not None
+                else str(metadata.get("active_concept_visual_pattern") or "").strip()
+            ),
+            "active_visual_engine": (
+                str(
+                    concept_metadata.get("recommended_visual_engine")
+                    or concept_metadata.get("media_engine_family")
+                    or ""
+                )
+                .strip()
+                .lower()
+                if concept is not None
+                else str(metadata.get("active_visual_engine") or "").strip().lower()
+            ),
             "active_template_id": (
                 str(
-                    (concept.metadata_json or {}).get("template_id")
-                    or (concept.metadata_json or {}).get("default_template_id")
+                    concept_metadata.get("template_id")
+                    or concept_metadata.get("default_template_id")
                     or ""
                 )
                 .strip()
                 .lower()
                 if concept is not None
                 else str(metadata.get("active_template_id") or "").strip().lower()
-            )
-            or _PILOT_TEMPLATE_ID,
+            ),
             "active_prerequisites": prerequisite_codes,
             "context_source": "module_concept_context" if concept is not None else "workspace_module_fallback",
             "learning_flow": "5e_steam",

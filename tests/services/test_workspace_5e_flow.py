@@ -218,6 +218,39 @@ def test_context_visual_request_defers_spec_generation_to_worker(db_session, mon
     assert job.message == "Queued for animation spec generation."
 
 
+def test_workspace_context_preserves_semantic_template_routing_signals(db_session):
+    scenario = _create_workspace_scenario(db_session)
+    concept = scenario["concept"]
+    concept.metadata_json = {
+        "concept_type": "derivative_rate_change_model",
+        "concept_subtype": "derivative_rate_change_model.aturan_rantai",
+        "default_template_id": "manim.function_composition_transform.v1",
+        "recommended_visual_engine": "manim",
+        "concept_visual_pattern": "nested function machine and outer-inner decomposition",
+    }
+    db_session.commit()
+
+    workspace = create_or_resume_workspace(
+        db_session,
+        user=scenario["user"],
+        track_id=scenario["workspace"].track_id,
+        module_id=scenario["workspace"].module_id,
+        content_mode="chat",
+    )
+    metadata = workspace.learning_context
+    persisted = db_session.get(WorkspaceSession, workspace.id)
+    assert persisted is not None
+    route_context = persisted.metadata_json
+
+    assert metadata["current_module"]["concept_code"] == concept.code
+    assert route_context["active_concept_subtype"].endswith(".aturan_rantai")
+    assert route_context["active_concept_visual_pattern"].startswith("nested function")
+    assert route_context["active_visual_engine"] == "manim"
+    assert route_context["active_template_id"] == (
+        "manim.function_composition_transform.v1"
+    )
+
+
 def test_media_worker_generates_context_spec_before_validation(db_session, monkeypatch):
     scenario = _create_workspace_scenario(db_session)
     monkeypatch.setattr(

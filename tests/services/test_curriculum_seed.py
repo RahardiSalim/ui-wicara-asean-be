@@ -211,6 +211,10 @@ def test_default_seed_uses_revised_golden_flow_metadata(db_session):
         "medium",
         "hard",
     }
+    assert (
+        chain_rule.metadata_json["default_template_id"]
+        == "manim.function_composition_transform.v1"
+    )
     assert "applicability" not in chain_rule_edge.metadata_json
     assert "fungsi trigonometri komposit" in chain_rule_edge.metadata_json["reason_id"]
 
