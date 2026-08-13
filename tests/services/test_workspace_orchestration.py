@@ -1,3 +1,9 @@
+import json
+
+import pytest
+
+from app.modules.ai.schemas import AIGenerationResponse
+from app.modules.workspaces.models import WorkspaceSession
 from app.modules.workspaces.schemas import TutorResponseRead
 from app.modules.workspaces.service import (
     _ensure_phase_metadata,
@@ -16,7 +22,59 @@ from app.modules.workspaces.tutor import (
     _tutor_payload_is_usable,
     _tutor_response_format,
     _tutor_timeout_seconds,
+    generate_tutor_response,
 )
+
+
+@pytest.mark.asyncio
+async def test_successful_ai_tutor_generation_returns_structured_response(monkeypatch):
+    payload = {
+        "text": "Compare the derivative signs on the two intervals. What changes?",
+        "next_phase_ready": True,
+        "phase_reasoning": "The learner accepted the investigation.",
+        "evidence_tags": ["challenge_accepted"],
+        "correctness": "unknown",
+        "misconception_status": "none",
+        "confidence": 0.9,
+        "evaluation_outcome": None,
+        "evidence_request": None,
+        "explanation_card": None,
+        "tool_suggestion": None,
+    }
+
+    async def fake_generate(**_kwargs):
+        return AIGenerationResponse(
+            provider="test",
+            model="test-model",
+            text=json.dumps(payload),
+            finish_reason="stop",
+        )
+
+    monkeypatch.setattr(
+        "app.modules.workspaces.tutor.ai_client.generate",
+        fake_generate,
+    )
+    workspace = WorkspaceSession(
+        current_topic="Curve sketching using derivatives",
+        content_mode="chat",
+        status="active",
+        metadata_json={"current_phase": "engage"},
+    )
+
+    response, audit = await generate_tutor_response(
+        workspace=workspace,
+        event_type="text",
+        text_payload="I accept the challenge and want to investigate the signs.",
+        events=[],
+        current_phase="engage",
+        learner_language="en",
+    )
+
+    assert response is not None
+    assert response.evidence_tags == ["challenge_accepted"]
+    assert response.next_phase_ready is True
+    assert audit["ai_source"] == "test"
+    assert audit["structured_parse_ok"] is True
 
 
 def _response(

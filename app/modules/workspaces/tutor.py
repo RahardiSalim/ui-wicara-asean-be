@@ -518,70 +518,70 @@ async def generate_tutor_response(
             current_phase=phase,
         ), audit
 
-        audit.update(
-            {
-                "ai_source": ai_response.provider,
-                "ai_provider": ai_response.provider,
-                "ai_model": ai_response.model,
-                "finish_reason": ai_response.finish_reason,
-                "input_tokens": ai_response.usage.input_tokens if ai_response.usage else None,
-                "output_tokens": ai_response.usage.output_tokens if ai_response.usage else None,
-                "attempts": generation_attempt,
-                "generation_attempts": generation_attempt,
-            }
-        )
-        tutor_text = _normalize_tutor_text(parsed["text"])
-        next_phase_ready = parsed["next_phase_ready"]
-        phase_reasoning = parsed["phase_reasoning"]
-        if not tutor_text:
-            tutor_text = _fallback_text(event_type, language_code=language_code)
-            next_phase_ready = False
-            phase_reasoning = "fallback_due_to_empty_text"
-            audit["ai_source"] = "ai_empty_fallback"
-        tutor_text = _enforce_brevity(tutor_text, phase=phase)
-        previous_tutor_text = _latest_tutor_text(events)
-        if _is_repetitive_response(tutor_text, previous_tutor_text):
-            tutor_text = _anti_repeat_response(
-                language_code=language_code,
-                phase=phase,
-                student_message=text_payload,
-                topic=topic,
-            )
-            audit["anti_repeat_fallback"] = True
-        if phase == "explain" and "learner_explanation" in parsed["evidence_tags"]:
-            tutor_text, parsed["evidence_request"] = _ensure_explain_micro_check(
-                tutor_text=tutor_text,
-                evidence_request=parsed["evidence_request"],
-                language_code=language_code,
-            )
-        audit["structured_parse_ok"] = parsed["parse_ok"]
-        if not parsed["parse_ok"]:
-            audit["structured_parse_fallback"] = True
-        tool_suggestion = _resolve_tool_suggestion(
-            parsed=parsed,
+    audit.update(
+        {
+            "ai_source": ai_response.provider,
+            "ai_provider": ai_response.provider,
+            "ai_model": ai_response.model,
+            "finish_reason": ai_response.finish_reason,
+            "input_tokens": ai_response.usage.input_tokens if ai_response.usage else None,
+            "output_tokens": ai_response.usage.output_tokens if ai_response.usage else None,
+            "attempts": generation_attempt,
+            "generation_attempts": generation_attempt,
+        }
+    )
+    tutor_text = _normalize_tutor_text(parsed["text"])
+    next_phase_ready = parsed["next_phase_ready"]
+    phase_reasoning = parsed["phase_reasoning"]
+    if not tutor_text:
+        tutor_text = _fallback_text(event_type, language_code=language_code)
+        next_phase_ready = False
+        phase_reasoning = "fallback_due_to_empty_text"
+        audit["ai_source"] = "ai_empty_fallback"
+    tutor_text = _enforce_brevity(tutor_text, phase=phase)
+    previous_tutor_text = _latest_tutor_text(events)
+    if _is_repetitive_response(tutor_text, previous_tutor_text):
+        tutor_text = _anti_repeat_response(
+            language_code=language_code,
             phase=phase,
-            learner_message=text_payload,
-            workspace_metadata=workspace_metadata,
+            student_message=text_payload,
+            topic=topic,
+        )
+        audit["anti_repeat_fallback"] = True
+    if phase == "explain" and "learner_explanation" in parsed["evidence_tags"]:
+        tutor_text, parsed["evidence_request"] = _ensure_explain_micro_check(
+            tutor_text=tutor_text,
+            evidence_request=parsed["evidence_request"],
             language_code=language_code,
         )
-        next_actions = list(_STAGE_ACTIONS.get(phase, ["ask_followup"]))
-        if tool_suggestion is not None and "request_visualization" not in next_actions:
-            next_actions.append("request_visualization")
-        return TutorResponseRead(
-            text=tutor_text,
-            intent=_STAGE_INTENT.get(phase, "ask_followup"),
-            next_actions=next_actions,
-            next_phase_ready=bool(next_phase_ready) if phase != "evaluate" else False,
-            phase_reasoning=phase_reasoning,
-            evidence_tags=parsed["evidence_tags"],
-            correctness=parsed["correctness"],
-            misconception_status=parsed["misconception_status"],
-            confidence=parsed["confidence"],
-            evaluation_outcome=parsed["evaluation_outcome"],
-            evidence_request=parsed["evidence_request"],
-            explanation_card=parsed["explanation_card"],
-            tool_suggestion=tool_suggestion,
-        ), audit
+    audit["structured_parse_ok"] = parsed["parse_ok"]
+    if not parsed["parse_ok"]:
+        audit["structured_parse_fallback"] = True
+    tool_suggestion = _resolve_tool_suggestion(
+        parsed=parsed,
+        phase=phase,
+        learner_message=text_payload,
+        workspace_metadata=workspace_metadata,
+        language_code=language_code,
+    )
+    next_actions = list(_STAGE_ACTIONS.get(phase, ["ask_followup"]))
+    if tool_suggestion is not None and "request_visualization" not in next_actions:
+        next_actions.append("request_visualization")
+    return TutorResponseRead(
+        text=tutor_text,
+        intent=_STAGE_INTENT.get(phase, "ask_followup"),
+        next_actions=next_actions,
+        next_phase_ready=bool(next_phase_ready) if phase != "evaluate" else False,
+        phase_reasoning=phase_reasoning,
+        evidence_tags=parsed["evidence_tags"],
+        correctness=parsed["correctness"],
+        misconception_status=parsed["misconception_status"],
+        confidence=parsed["confidence"],
+        evaluation_outcome=parsed["evaluation_outcome"],
+        evidence_request=parsed["evidence_request"],
+        explanation_card=parsed["explanation_card"],
+        tool_suggestion=tool_suggestion,
+    ), audit
 
 def _tutor_timeout_seconds() -> float:
     raw_value = os.getenv("WICARA_WORKSPACE_TUTOR_TIMEOUT_SECONDS", "").strip()
