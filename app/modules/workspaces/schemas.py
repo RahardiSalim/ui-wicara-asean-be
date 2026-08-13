@@ -120,6 +120,7 @@ class TutorResponseRead(BaseModel):
     next_actions: list[str] = Field(default_factory=list)
     next_phase_ready: bool = False
     phase_reasoning: str | None = None
+    phase_checkpoint_question: str | None = None
     evidence_tags: list[str] = Field(default_factory=list)
     correctness: str = "unknown"
     misconception_status: str = "none"

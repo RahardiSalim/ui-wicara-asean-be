@@ -690,6 +690,9 @@ async def append_workspace_event(
                 "next_actions": list(tutor_response.next_actions),
                 "next_phase_ready": tutor_response.next_phase_ready,
                 "phase_reasoning": tutor_response.phase_reasoning,
+                "phase_checkpoint_question": (
+                    tutor_response.phase_checkpoint_question
+                ),
                 "evidence_tags": list(tutor_response.evidence_tags),
                 "correctness": tutor_response.correctness,
                 "misconception_status": tutor_response.misconception_status,

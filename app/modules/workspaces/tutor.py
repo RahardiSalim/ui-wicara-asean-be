@@ -105,6 +105,7 @@ _TUTOR_OUTPUT_SCHEMA: dict[str, Any] = {
         "text": {"type": "string"},
         "next_phase_ready": {"type": "boolean"},
         "phase_reasoning": {"type": "string"},
+        "phase_checkpoint_question": {"type": ["string", "null"]},
         "evidence_tags": {
             "type": "array",
             "items": {"type": "string", "enum": sorted(_ALLOWED_EVIDENCE_TAGS)},
@@ -176,6 +177,7 @@ _TUTOR_OUTPUT_SCHEMA: dict[str, Any] = {
         "text",
         "next_phase_ready",
         "phase_reasoning",
+        "phase_checkpoint_question",
         "evidence_tags",
         "correctness",
         "misconception_status",
@@ -340,6 +342,18 @@ def _build_user_instruction(
         f"- Transition criteria: {_PHASE_TRANSITION_CRITERIA.get(current_phase, _PHASE_TRANSITION_CRITERIA['engage'])}\n"
         "- Set next_phase_ready=true only if the learner is pedagogically ready for the next phase.\n"
         "- If current phase is evaluate, always return next_phase_ready=false.\n\n"
+        "Learner checkpoint:\n"
+        "- When next_phase_ready=true, phase_checkpoint_question must be one concise "
+        "yes/no question in the required response language.\n"
+        "- Ground it in the learner's actual evidence and the specific concept, "
+        "example, or task just discussed.\n"
+        "- Ask the learner to confirm what they personally understood, found, "
+        "explained, or applied.\n"
+        "- Do not mention 5E phase names and do not use generic readiness wording "
+        "such as 'Are you ready to continue?'.\n"
+        "- Bad: 'Have you understood the learning goal and its challenge?'\n"
+        "- Good: 'Setelah membandingkan dua interval tadi, apakah kamu sudah yakin kenapa tanda f\u2032(x) menentukan kurva naik atau turun?'\n"
+        "- When next_phase_ready=false, return phase_checkpoint_question=null.\n\n"
         "Evidence contract:\n"
         f"- Allowed evidence_tags: {', '.join(sorted(_ALLOWED_EVIDENCE_TAGS))}.\n"
         f"- Current-phase evidence rubric: {_PHASE_EVIDENCE_GUIDANCE.get(current_phase, '')}\n"
@@ -359,6 +373,7 @@ def _build_user_instruction(
         "or after an explicit learner request. It is never required for phase readiness.\n\n"
         "Output format requirement:\n"
         "Return one JSON object with keys: text, next_phase_ready, phase_reasoning, "
+        "phase_checkpoint_question, "
         "evidence_tags, correctness, misconception_status, confidence, "
         "evaluation_outcome, evidence_request, explanation_card, tool_suggestion."
     )
@@ -600,6 +615,9 @@ async def generate_tutor_response(
         next_actions=next_actions,
         next_phase_ready=bool(next_phase_ready) if phase != "evaluate" else False,
         phase_reasoning=phase_reasoning,
+        phase_checkpoint_question=(
+            parsed["phase_checkpoint_question"] if phase != "evaluate" else None
+        ),
         evidence_tags=parsed["evidence_tags"],
         correctness=parsed["correctness"],
         misconception_status=parsed["misconception_status"],
@@ -950,6 +968,14 @@ def _parse_structured_tutor_output(raw_text: str) -> dict[str, Any]:
     )
     if phase_reasoning == "":
         phase_reasoning = None
+    phase_checkpoint_value = payload.get("phase_checkpoint_question")
+    phase_checkpoint_question = (
+        str(phase_checkpoint_value).strip()
+        if phase_checkpoint_value is not None
+        else None
+    )
+    if not next_phase_ready or not phase_checkpoint_question:
+        phase_checkpoint_question = None
     raw_tags = payload.get("evidence_tags")
     evidence_tags = (
         [
@@ -989,6 +1015,7 @@ def _parse_structured_tutor_output(raw_text: str) -> dict[str, Any]:
         "text": parsed_text,
         "next_phase_ready": next_phase_ready,
         "phase_reasoning": phase_reasoning,
+        "phase_checkpoint_question": phase_checkpoint_question,
         "evidence_tags": evidence_tags,
         "correctness": correctness,
         "misconception_status": misconception_status,
@@ -1024,6 +1051,7 @@ def _unverified_tutor_payload(*, text: str) -> dict[str, Any]:
         "text": text,
         "next_phase_ready": False,
         "phase_reasoning": None,
+        "phase_checkpoint_question": None,
         "evidence_tags": [],
         "correctness": "unknown",
         "misconception_status": "none",

@@ -33,6 +33,10 @@ async def test_successful_ai_tutor_generation_returns_structured_response(monkey
         "text": "Compare the derivative signs on the two intervals. What changes?",
         "next_phase_ready": True,
         "phase_reasoning": "The learner accepted the investigation.",
+        "phase_checkpoint_question": (
+            "After comparing those intervals, are you confident why the derivative "
+            "sign determines whether the curve rises or falls?"
+        ),
         "evidence_tags": ["challenge_accepted"],
         "correctness": "unknown",
         "misconception_status": "none",
@@ -74,6 +78,7 @@ async def test_successful_ai_tutor_generation_returns_structured_response(monkey
     assert response is not None
     assert response.evidence_tags == ["challenge_accepted"]
     assert response.next_phase_ready is True
+    assert response.phase_checkpoint_question == payload["phase_checkpoint_question"]
     assert audit["ai_source"] == "test"
     assert audit["structured_parse_ok"] is True
 
@@ -92,6 +97,8 @@ def test_explore_prompt_defines_phase_specific_evidence_rubric():
     assert "Use exploration_attempt" in prompt
     assert "Use pattern_identified" in prompt
     assert "Both tags may be returned on the same turn" in prompt
+    assert "Ground it in the learner's actual evidence" in prompt
+    assert "Bad: 'Have you understood the learning goal" in prompt
 
 
 def _response(
