@@ -24,7 +24,7 @@ from app.modules.pretests.question_validator import QuestionValidator, VALID_QUE
 from app.modules.review.flagger import enqueue_flag
 
 PACK_PROMPT_VERSION = "adaptive_node_pack_v6_flexible_subject_tasks"
-FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v11_exclusive_options"
+FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v12_graph_coverage"
 DEFAULT_PACK_GENERATION_MAX_ATTEMPTS = 4
 DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 270.0
 
@@ -938,6 +938,13 @@ def _fresh_question_prompt(
         concept=concept,
         skill_candidates=skill_candidates,
     )
+    diagnostic_coverage_blueprint = _diagnostic_coverage_blueprint(
+        concept=concept,
+        difficulties=difficulties,
+        assessment_type=assessment_type,
+        node_role=node_role,
+        skill_candidates=skill_candidates,
+    )
     retry_instruction = ""
     if previous_errors:
         compact_errors = "\n".join(f"- {error}" for error in previous_errors[-6:])
@@ -1003,6 +1010,9 @@ Curriculum assessment contract:
 
 Allowed solution-skill catalog:
 {json.dumps(skill_catalog, ensure_ascii=False)}
+
+Diagnostic coverage blueprint:
+{diagnostic_coverage_blueprint}
 
 Diagnosis context:
 {diagnosis_context or 'none'}
@@ -1097,6 +1107,61 @@ Return exactly {len(difficulties)} question objects in the same order as the req
 Follow the provided strict response schema; do not repeat fields that are not in it.
 {retry_instruction}
 """.strip()
+
+
+def _diagnostic_coverage_blueprint(
+    *,
+    concept: KnowledgeConcept,
+    difficulties: list[str],
+    assessment_type: str,
+    node_role: str,
+    skill_candidates: list[dict[str, Any]] | None,
+) -> str:
+    if assessment_type != "pretest" or node_role != "goal" or "hard" not in difficulties:
+        return "No additional graph-coverage focus is required for this batch."
+
+    candidates = [
+        candidate
+        for candidate in skill_candidates or []
+        if int(candidate.get("path_count") or 0) > 1
+    ]
+    if not candidates:
+        return (
+            "No cross-cutting dependency is present. Build each question only from the "
+            "skills genuinely required by its task."
+        )
+
+    focus = max(
+        candidates,
+        key=lambda candidate: (
+            int(candidate.get("path_count") or 0),
+            int(candidate.get("depth") or 0),
+            str(candidate.get("concept_code") or ""),
+        ),
+    )
+    focus_code = str(focus.get("concept_code") or "").strip()
+    focus_title = str(focus.get("title") or focus_code).strip()
+    parent_codes = [
+        str(code).strip()
+        for code in focus.get("parent_codes") or []
+        if str(code).strip() and str(code).strip() != concept.code
+    ]
+    hard_positions = [
+        str(index)
+        for index, difficulty in enumerate(difficulties, start=1)
+        if difficulty == "hard"
+    ]
+    return "\n".join(
+        [
+            "This is an assessment-coverage blueprint, not an adaptive-routing decision.",
+            f"- For hard question position(s) {', '.join(hard_positions)}, construct an authentic {concept.code} task whose solution genuinely requires {focus_code} ({focus_title}).",
+            f"- The focus was selected because it supports {int(focus.get('path_count') or 0)} distinct curriculum paths into the target scope.",
+            f"- Use one coherent bridge skill from this graph-backed set when needed: {', '.join(parent_codes) or 'none'}.",
+            f"- The hard task must remain a target-level {concept.code} task; do not turn it into an isolated definition or direct-computation question about {focus_code}.",
+            f"- Include {focus_code} exactly once in that hard question's skill_trace because the actual solution requires it, not merely for routing.",
+            "- Easy and medium questions do not need to use this focus unless their own solution genuinely requires it.",
+        ]
+    )
 
 
 def _extract_fresh_questions_payload(payload: Any) -> list[Any]:

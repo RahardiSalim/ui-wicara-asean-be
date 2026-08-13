@@ -832,6 +832,12 @@ def _pretest_skill_candidates(
         for edge in graph_scope.get("edges", [])
         if isinstance(edge, dict)
     ]
+    parent_codes_by_candidate: dict[str, set[str]] = {}
+    for edge in edges:
+        parent_code = str(edge.get("from") or "").strip()
+        candidate_code = str(edge.get("to") or "").strip()
+        if parent_code and candidate_code:
+            parent_codes_by_candidate.setdefault(candidate_code, set()).add(parent_code)
     reachable = {concept_code}
     queue = [concept_code]
     ordered_codes: list[str] = []
@@ -853,6 +859,9 @@ def _pretest_skill_candidates(
             "description": str(nodes[code].get("description") or "").strip(),
             "assessment_evidence": nodes[code].get("assessment_evidence") or [],
             "common_misconceptions": nodes[code].get("common_misconceptions") or [],
+            "depth": int(nodes[code].get("depth") or 1),
+            "parent_codes": sorted(parent_codes_by_candidate.get(code, set())),
+            "path_count": len(parent_codes_by_candidate.get(code, set())),
         }
         for code in ordered_codes
         if code in nodes

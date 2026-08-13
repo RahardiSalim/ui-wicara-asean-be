@@ -7,6 +7,7 @@ from app.modules.pretests.adaptive_service import (
     _pretest_skill_candidates,
 )
 from app.modules.pretests.generation_service import (
+    _diagnostic_coverage_blueprint,
     _fresh_generation_max_tokens,
     _fresh_generation_timeout_seconds,
     _fresh_question_prompt,
@@ -341,6 +342,45 @@ def test_revised_golden_scope_exposes_chain_rule_as_question_skill_candidate(db_
         "Hanya menurunkan fungsi luar" in misconception
         for misconception in chain["common_misconceptions"]
     )
+    assert chain["path_count"] >= 2
+    assert chain["depth"] == 2
+
+
+def test_goal_hard_blueprint_selects_cross_cutting_dependency_without_target_hardcode():
+    concept = KnowledgeConcept(
+        code="curve.sketch",
+        title="Curve sketch",
+        en_desc="Analyze curve behavior using derivatives.",
+        metadata_json={},
+    )
+
+    blueprint = _diagnostic_coverage_blueprint(
+        concept=concept,
+        difficulties=["easy", "medium", "hard"],
+        assessment_type="pretest",
+        node_role="goal",
+        skill_candidates=[
+            {
+                "concept_code": "derivative.polynomial",
+                "title": "Polynomial derivative",
+                "depth": 1,
+                "parent_codes": ["curve.sketch"],
+                "path_count": 1,
+            },
+            {
+                "concept_code": "composition.rule",
+                "title": "Composition rule",
+                "depth": 2,
+                "parent_codes": ["derivative.polynomial", "derivative.trig"],
+                "path_count": 2,
+            },
+        ],
+    )
+
+    assert "hard question position(s) 3" in blueprint
+    assert "composition.rule (Composition rule)" in blueprint
+    assert "derivative.polynomial, derivative.trig" in blueprint
+    assert "exactly once" in blueprint
 
 
 def test_goal_prompt_requires_question_specific_skill_trace_without_forced_focus():
