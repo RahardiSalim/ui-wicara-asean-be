@@ -22,6 +22,7 @@ from app.modules.workspaces.service import (
     append_workspace_event,
     create_or_resume_workspace,
     queue_workspace_video_generation,
+    read_workspace,
 )
 
 
@@ -180,6 +181,67 @@ def test_repeated_visual_request_reuses_active_media_job(db_session, monkeypatch
     assert response.queue.job_id == job.id
     assert response.queue.artifact_id == artifact.id
     assert response.event.id == event.id
+
+
+def test_ready_media_adds_one_reflection_prompt_without_phase_evidence(db_session):
+    scenario = _create_workspace_scenario(db_session)
+    workspace = db_session.get(WorkspaceSession, scenario["workspace"].id)
+    assert workspace is not None
+    workspace.metadata_json = {
+        **dict(workspace.metadata_json or {}),
+        "current_phase": "explain",
+    }
+    phase_evidence_before = dict(workspace.metadata_json.get("phase_evidence") or {})
+
+    artifact = MediaArtifact(
+        user_id=scenario["user"].id,
+        track_id=workspace.track_id,
+        module_id=workspace.module_id,
+        workspace_id=workspace.id,
+        concept_id=scenario["concept"].id,
+        template_id="manim.function_composition_transform.v1",
+        spec_json={"title": "Outer and inner functions"},
+        language="en",
+        quality_profile="standard",
+        title="Outer and inner functions",
+        status="ready",
+    )
+    db_session.add(artifact)
+    db_session.flush()
+    db_session.add(
+        WorkspaceEvent(
+            workspace_session_id=workspace.id,
+            event_index=1,
+            event_type="media_generated",
+            actor_type="system",
+            text_payload="",
+            media_artifact_id=artifact.id,
+            metadata_json={"requested_phase": "explore"},
+        )
+    )
+    db_session.commit()
+
+    first = read_workspace(
+        db_session,
+        user=scenario["user"],
+        workspace_id=workspace.id,
+    )
+    second = read_workspace(
+        db_session,
+        user=scenario["user"],
+        workspace_id=workspace.id,
+    )
+
+    assert first is not None
+    assert second is not None
+    follow_ups = [event for event in second.events if event.event_type == "media_ready"]
+    assert len(follow_ups) == 1
+    assert follow_ups[0].actor_type == "tutor"
+    assert follow_ups[0].media_artifact_id == artifact.id
+    assert follow_ups[0].metadata["intent"] == "reflect_on_visualization"
+    assert follow_ups[0].metadata["mastery_delta"] == 0.0
+    assert second.current_phase == "explain"
+    assert second.phase_evidence == phase_evidence_before
 
 
 def test_context_visual_request_defers_spec_generation_to_worker(db_session, monkeypatch):
