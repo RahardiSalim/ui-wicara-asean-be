@@ -188,6 +188,12 @@ class PretestDecisionEngine:
         graph_scope: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         if last_difficulty == "medium":
+            if not last_is_correct and _is_evidence_directed_probe(
+                state,
+                concept_code=last_concept_code,
+            ):
+                state["stop_reason"] = "evidence_directed_gap_confirmed"
+                return state, {"type": "finalize", "reason": state["stop_reason"]}
             if last_is_correct:
                 return state, _ask(
                     last_concept_code,
@@ -301,6 +307,19 @@ def _ask(concept_code: str, difficulty: str, reason: str) -> dict[str, Any]:
         "difficulty": difficulty,
         "reason": reason,
     }
+
+
+def _is_evidence_directed_probe(
+    state: dict[str, Any],
+    *,
+    concept_code: str,
+) -> bool:
+    return any(
+        isinstance(route, dict)
+        and str(route.get("routed_prerequisite_code") or "") == concept_code
+        and str(route.get("from_concept_code") or "") != concept_code
+        for route in state.get("method_evidence_routes", [])
+    )
 
 
 def _probe_sort_key(item: dict[str, Any]) -> tuple[float, int, str]:

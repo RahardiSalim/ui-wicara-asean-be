@@ -181,6 +181,31 @@ def test_prerequisite_medium_wrong_then_easy_enters_next_prerequisite(
     assert easy_action["difficulty"] == "medium"
 
 
+def test_failed_evidence_directed_medium_probe_confirms_gap() -> None:
+    state = _state()
+    state["current_concept_code"] = PREREQUISITE_1
+    state["method_evidence_routes"] = [
+        {
+            "from_concept_code": TARGET,
+            "routed_prerequisite_code": PREREQUISITE_1,
+            "reason": "The learner omitted a required solution step.",
+        }
+    ]
+
+    next_state, action = _decide(
+        state,
+        concept_code=PREREQUISITE_1,
+        difficulty="medium",
+        is_correct=False,
+    )
+
+    assert action == {
+        "type": "finalize",
+        "reason": "evidence_directed_gap_confirmed",
+    }
+    assert next_state["stop_reason"] == "evidence_directed_gap_confirmed"
+
+
 @pytest.mark.parametrize("hard_is_correct", [True, False])
 def test_prerequisite_medium_correct_then_hard_finalizes(
     hard_is_correct: bool,
