@@ -361,6 +361,18 @@ def test_goal_hard_blueprint_selects_cross_cutting_dependency_without_target_har
         node_role="goal",
         skill_candidates=[
             {
+                "concept_code": "derivative.algebra",
+                "title": "Algebraic differentiation",
+                "depth": 1,
+                "parent_codes": [
+                    "curve.sketch",
+                    "derivative.exponential",
+                    "derivative.polynomial",
+                    "derivative.trig",
+                ],
+                "path_count": 4,
+            },
+            {
                 "concept_code": "derivative.polynomial",
                 "title": "Polynomial derivative",
                 "depth": 1,
@@ -381,6 +393,8 @@ def test_goal_hard_blueprint_selects_cross_cutting_dependency_without_target_har
     assert "composition.rule (Composition rule)" in blueprint
     assert "derivative.polynomial, derivative.trig" in blueprint
     assert "exactly once" in blueprint
+    assert "Incorrect mapping" in blueprint
+    assert "Correct mapping" in blueprint
 
 
 def test_goal_prompt_requires_question_specific_skill_trace_without_forced_focus():

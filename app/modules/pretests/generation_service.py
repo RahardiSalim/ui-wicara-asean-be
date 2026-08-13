@@ -1134,8 +1134,8 @@ def _diagnostic_coverage_blueprint(
     focus = max(
         candidates,
         key=lambda candidate: (
-            int(candidate.get("path_count") or 0),
             int(candidate.get("depth") or 0),
+            int(candidate.get("path_count") or 0),
             str(candidate.get("concept_code") or ""),
         ),
     )
@@ -1159,6 +1159,8 @@ def _diagnostic_coverage_blueprint(
             f"- Use one coherent bridge skill from this graph-backed set when needed: {', '.join(parent_codes) or 'none'}.",
             f"- The hard task must remain a target-level {concept.code} task; do not turn it into an isolated definition or direct-computation question about {focus_code}.",
             f"- Include {focus_code} exactly once in that hard question's skill_trace because the actual solution requires it, not merely for routing.",
+            f"- Incorrect mapping: mention {focus_title} inside another skill's criterion while omitting {focus_code} from skill_trace.",
+            f"- Correct mapping: give {focus_code} its own single skill_trace entry, and keep each bridge skill in its own entry with only that bridge's observable criterion.",
             "- Easy and medium questions do not need to use this focus unless their own solution genuinely requires it.",
         ]
     )
