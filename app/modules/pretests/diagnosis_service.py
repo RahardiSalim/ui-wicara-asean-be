@@ -577,6 +577,8 @@ def _recommended_path(*, nodes: list[dict[str, Any]], stop_reason: str) -> str:
         return "review_only"
     if stop_reason == "target_reinforcement":
         return "target_reinforcement"
+    if stop_reason == "evidence_directed_gap_confirmed":
+        return "repair_prerequisites"
     target = next((node for node in nodes if node["role"] == "target"), {})
     target_status = target.get("status")
     prerequisite_statuses = [
