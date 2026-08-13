@@ -1173,22 +1173,20 @@ def _ensure_explain_micro_check(
     evidence_request: dict[str, Any] | None,
     language_code: str,
 ) -> tuple[str, dict[str, Any]]:
-    if language_code == "id":
-        prompt = (
-            "Micro-check: terapkan aturan yang baru kamu jelaskan pada satu contoh baru, "
-            "lalu sebutkan faktor yang berasal dari fungsi dalam."
-        )
-    else:
-        prompt = (
-            "Micro-check: apply the rule you just explained to one new example, "
-            "then identify the factor contributed by the inner function."
-        )
     request = dict(evidence_request or {})
     request.setdefault("type", "micro_check")
-    request.setdefault("prompt", prompt)
+    request_prompt = str(request.get("prompt") or "").strip()
+    if not request_prompt:
+        request_prompt = (
+            "Terapkan ide yang baru kamu jelaskan pada satu contoh baru."
+            if language_code == "id"
+            else "Apply the idea you just explained to one new example."
+        )
+        request["prompt"] = request_prompt
     request.setdefault("expected_evidence", "correct application in a later learner turn")
+    prompt = f"Micro-check: {request_prompt}"
     normalized_text = tutor_text.strip()
-    if prompt.lower() not in normalized_text.lower():
+    if request_prompt.lower() not in normalized_text.lower():
         normalized_text = f"{normalized_text}\n\n{prompt}" if normalized_text else prompt
     return normalized_text, request
 

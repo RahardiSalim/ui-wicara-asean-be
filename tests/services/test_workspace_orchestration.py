@@ -357,6 +357,22 @@ def test_explain_response_always_requests_a_later_micro_check():
     assert "later learner turn" in request["expected_evidence"]
 
 
+def test_explain_micro_check_preserves_contextual_task_without_chain_rule_bias():
+    text, request = _ensure_explain_micro_check(
+        tutor_text="Your explanation is correct.",
+        evidence_request={
+            "type": "micro_check",
+            "prompt": "Classify x^4 at x=0 using derivative signs.",
+            "expected_evidence": "A negative-to-positive sign change.",
+        },
+        language_code="en",
+    )
+
+    assert "Classify x^4 at x=0 using derivative signs." in text
+    assert "inner function" not in text
+    assert request["prompt"] == "Classify x^4 at x=0 using derivative signs."
+
+
 def test_tutor_structured_contract_rejects_punctuation_only_text():
     assert _tutor_payload_is_usable(
         _parse_structured_tutor_output(
