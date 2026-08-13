@@ -45,7 +45,11 @@ from app.modules.workspaces.schemas import (
     WorkspaceSessionHistoryRead,
     WorkspaceSessionSummaryRead,
 )
-from app.modules.workspaces.tutor import TutorImageInput, generate_tutor_response
+from app.modules.workspaces.tutor import (
+    TutorImageInput,
+    fallback_phase_opening_prompt,
+    generate_tutor_response,
+)
 
 VALID_EVENT_TYPES = {
     "text",
@@ -67,7 +71,7 @@ _MAX_HINT_LEVEL = 6
 _HINT_DECAY_PER_SUCCESS = 2
 _EVIDENCE_CONFIDENCE_FLOOR = 0.55
 _DEFAULT_PHASE_MIN_TURNS: dict[str, int] = {
-    "engage": 1,
+    "engage": 2,
     "explore": 1,
     "explain": 1,
     "elaborate": 1,
@@ -81,7 +85,10 @@ _LEGACY_DEFAULT_PHASE_MIN_TURNS: dict[str, int] = {
     "evaluate": 1,
 }
 _PHASE_REQUIRED_EVIDENCE: dict[str, tuple[frozenset[str], ...]] = {
-    "engage": (frozenset({"challenge_accepted", "prior_knowledge_shared"}),),
+    "engage": (
+        frozenset({"challenge_accepted"}),
+        frozenset({"prior_knowledge_shared"}),
+    ),
     "explore": (
         frozenset({"exploration_attempt"}),
         frozenset({"pattern_identified", "misconception_shifted"}),
@@ -321,12 +328,53 @@ def advance_workspace_phase(
             f"Minimum {min_turns} learner turns required for phase '{current_phase}'."
         )
 
+    opening_prompt = _pending_phase_opening_prompt(
+        workspace,
+        current_phase=current_phase,
+    )
+    if not opening_prompt:
+        opening_prompt = fallback_phase_opening_prompt(
+            phase=next_phase,
+            topic=workspace.current_topic or "this module",
+            learner_language=_preferred_language(user),
+            learning_context=metadata.get("learning_context"),
+        )
     metadata = _advance_metadata_to_phase(metadata, next_phase=next_phase)
     workspace.metadata_json = _ensure_phase_metadata(
         metadata,
         created_at=workspace.created_at,
     )
     workspace.updated_at = datetime.now(UTC)
+    session.add(
+        WorkspaceEvent(
+            workspace_session_id=workspace.id,
+            event_index=_next_event_index(session, workspace_id=workspace.id),
+            event_type="text",
+            actor_type="tutor",
+            text_payload=opening_prompt,
+            image_asset_id=None,
+            media_artifact_id=None,
+            input_event_id=None,
+            metadata_json={
+                "source": "workspace_phase_opening",
+                "intent": "phase_opening",
+                "next_actions": [],
+                "next_phase_ready": False,
+                "phase_reasoning": f"learner_confirmed_transition_from_{current_phase}",
+                "phase_checkpoint_question": None,
+                "next_phase_opening_prompt": None,
+                "evidence_tags": [],
+                "correctness": "unknown",
+                "misconception_status": "none",
+                "confidence": 1.0,
+                "evaluation_outcome": None,
+                "evidence_request": None,
+                "explanation_card": None,
+                "tool_suggestion": None,
+                "phase": next_phase,
+            },
+        )
+    )
     session.commit()
 
     workspace = _load_workspace(session, user=user, workspace_id=workspace_id)
@@ -693,6 +741,9 @@ async def append_workspace_event(
                 "phase_checkpoint_question": (
                     tutor_response.phase_checkpoint_question
                 ),
+                "next_phase_opening_prompt": (
+                    tutor_response.next_phase_opening_prompt
+                ),
                 "evidence_tags": list(tutor_response.evidence_tags),
                 "correctness": tutor_response.correctness,
                 "misconception_status": tutor_response.misconception_status,
@@ -745,6 +796,26 @@ async def append_workspace_event(
         metadata_json["phase_transition_pending"] = phase_ready and current_turns >= min_turns
     elif tutor_response is not None:
         outcome = tutor_response.evaluation_outcome
+        if phase_ready and (
+            tutor_response.correctness != "incorrect"
+            and tutor_response.misconception_status != "active"
+        ):
+            outcome = "passed"
+        elif outcome == "passed":
+            outcome = "continue"
+        tutor_response = tutor_response.model_copy(
+            update={
+                "evaluation_outcome": outcome,
+                "evidence_request": (
+                    None if outcome == "passed" else tutor_response.evidence_request
+                ),
+                "next_actions": (
+                    ["continue_next_module"]
+                    if outcome == "passed"
+                    else tutor_response.next_actions
+                ),
+            }
+        )
         if phase_ready and outcome == "passed":
             metadata_json["posttest_eligible"] = True
             metadata_json["phase_transition_pending"] = False
@@ -765,9 +836,33 @@ async def append_workspace_event(
 
     tutor_degraded = bool(ai_audit.get("degraded", False))
     if tutor_response is not None:
+        next_phase_opening_prompt = tutor_response.next_phase_opening_prompt
+        if phase_ready and current_phase != "evaluate" and not next_phase_opening_prompt:
+            phase_index = _PHASE_SEQUENCE.index(current_phase)
+            next_phase_opening_prompt = fallback_phase_opening_prompt(
+                phase=_PHASE_SEQUENCE[phase_index + 1],
+                topic=workspace.current_topic or "this module",
+                learner_language=_preferred_language(user),
+                learning_context=metadata_json.get("learning_context"),
+            )
         tutor_response = tutor_response.model_copy(
             update={
                 "next_phase_ready": phase_ready and current_phase != "evaluate",
+                "phase_checkpoint_question": (
+                    tutor_response.phase_checkpoint_question
+                    if phase_ready and current_phase != "evaluate"
+                    else None
+                ),
+                "next_phase_opening_prompt": (
+                    next_phase_opening_prompt
+                    if phase_ready and current_phase != "evaluate"
+                    else None
+                ),
+                "evidence_request": (
+                    None
+                    if phase_ready or tutor_response.evaluation_outcome == "passed"
+                    else tutor_response.evidence_request
+                ),
                 "scaffold_level": max(
                     0, _safe_int(metadata_json.get("hint_level"), 0)
                 ),
@@ -780,6 +875,30 @@ async def append_workspace_event(
             **dict(tutor_event.metadata_json or {}),
             "next_phase_ready": (
                 tutor_response.next_phase_ready if tutor_response is not None else False
+            ),
+            "next_actions": (
+                list(tutor_response.next_actions) if tutor_response is not None else []
+            ),
+            "phase_checkpoint_question": (
+                tutor_response.phase_checkpoint_question
+                if tutor_response is not None
+                else None
+            ),
+            "next_phase_opening_prompt": (
+                tutor_response.next_phase_opening_prompt
+                if tutor_response is not None
+                else None
+            ),
+            "evidence_tags": (
+                list(tutor_response.evidence_tags) if tutor_response is not None else []
+            ),
+            "evaluation_outcome": (
+                tutor_response.evaluation_outcome
+                if tutor_response is not None
+                else None
+            ),
+            "evidence_request": (
+                tutor_response.evidence_request if tutor_response is not None else None
             ),
             "scaffold_level": max(
                 0, _safe_int(metadata_json.get("hint_level"), 0)
@@ -1138,6 +1257,29 @@ def _next_event_index(session: Session, *, workspace_id: UUID) -> int:
     return int(max_index or 0) + 1
 
 
+def _pending_phase_opening_prompt(
+    workspace: WorkspaceSession,
+    *,
+    current_phase: str,
+) -> str | None:
+    for event in sorted(
+        workspace.events,
+        key=lambda item: item.event_index,
+        reverse=True,
+    ):
+        if event.actor_type != "tutor":
+            continue
+        metadata = event.metadata_json if isinstance(event.metadata_json, dict) else {}
+        if str(metadata.get("phase") or "") != current_phase:
+            continue
+        if not bool(metadata.get("next_phase_ready", False)):
+            continue
+        prompt = str(metadata.get("next_phase_opening_prompt") or "").strip()
+        if prompt:
+            return prompt
+    return None
+
+
 def _normalize_event_type(event_type: str) -> str:
     normalized = event_type.strip().lower().replace("-", "_").replace(" ", "_")
     if normalized not in VALID_EVENT_TYPES:
@@ -1352,6 +1494,12 @@ def _record_phase_evidence(
     evidence_tags = [
         tag for tag in tutor_response.evidence_tags if tag in allowed_tags
     ]
+    if (
+        phase == "engage"
+        and _current_phase_turns(metadata) == 0
+        and "prior_knowledge_shared" in evidence_tags
+    ):
+        evidence_tags.remove("prior_knowledge_shared")
     if phase == "elaborate" and "transfer_correct" in evidence_tags:
         evidence_tags.insert(0, "transfer_attempt")
         evidence_tags = list(dict.fromkeys(evidence_tags))
@@ -1365,6 +1513,8 @@ def _record_phase_evidence(
         )
     ):
         evidence_tags.remove("micro_check_correct")
+    if phase == "evaluate":
+        evidence_tags = _current_evaluate_evidence_tags(metadata, evidence_tags)
     if tutor_response.confidence < _EVIDENCE_CONFIDENCE_FLOOR or not evidence_tags:
         return updated
     evidence_by_phase = dict(updated.get("phase_evidence") or {})
@@ -1400,6 +1550,12 @@ def _sanitize_tutor_response_for_phase(
     evidence_tags = [
         tag for tag in tutor_response.evidence_tags if tag in allowed_tags
     ]
+    if (
+        phase == "engage"
+        and _current_phase_turns(metadata) == 0
+        and "prior_knowledge_shared" in evidence_tags
+    ):
+        evidence_tags.remove("prior_knowledge_shared")
     if event_type == "media_viewed" and not text_payload.strip():
         evidence_tags = []
     if phase == "elaborate" and "transfer_correct" in evidence_tags:
@@ -1415,6 +1571,8 @@ def _sanitize_tutor_response_for_phase(
         )
     ):
         evidence_tags.remove("micro_check_correct")
+    if phase == "evaluate":
+        evidence_tags = _current_evaluate_evidence_tags(metadata, evidence_tags)
 
     has_explanation = (
         phase == "explain"
@@ -1510,13 +1668,13 @@ def _phase_has_recorded_tag(
     )
 
 
-def _phase_is_ready(metadata: dict[str, Any], *, phase: str) -> bool:
+def _recorded_phase_tags(metadata: dict[str, Any], *, phase: str) -> set[str]:
     evidence_by_phase = metadata.get("phase_evidence")
     if not isinstance(evidence_by_phase, dict):
-        return False
+        return set()
     records = evidence_by_phase.get(phase)
     if not isinstance(records, list):
-        return False
+        return set()
     tags: set[str] = set()
     for record in records:
         if not isinstance(record, dict):
@@ -1528,6 +1686,27 @@ def _phase_is_ready(metadata: dict[str, Any], *, phase: str) -> bool:
         raw_tags = record.get("tags")
         if isinstance(raw_tags, list):
             tags.update(str(tag) for tag in raw_tags)
+    return tags
+
+
+def _current_evaluate_evidence_tags(
+    metadata: dict[str, Any],
+    proposed_tags: list[str],
+) -> list[str]:
+    recorded_tags = _recorded_phase_tags(metadata, phase="evaluate")
+    if "independent_attempt" not in recorded_tags:
+        required_tag = "independent_attempt"
+    elif "error_analysis" not in recorded_tags:
+        required_tag = "error_analysis"
+    elif "reflection" not in recorded_tags:
+        required_tag = "reflection"
+    else:
+        return []
+    return [tag for tag in proposed_tags if tag == required_tag]
+
+
+def _phase_is_ready(metadata: dict[str, Any], *, phase: str) -> bool:
+    tags = _recorded_phase_tags(metadata, phase=phase)
     requirements = _PHASE_REQUIRED_EVIDENCE.get(phase, ())
     return bool(requirements) and all(bool(tags & alternatives) for alternatives in requirements)
 

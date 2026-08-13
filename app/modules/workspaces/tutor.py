@@ -24,7 +24,7 @@ class TutorImageInput(NamedTuple):
     mime_type: str
 
 
-PROMPT_VERSION = "wicara_5e_evidence_context_v7_visual_and_image"
+PROMPT_VERSION = "wicara_5e_contextual_phase_handoff_v8"
 PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
 DEFAULT_TUTOR_TIMEOUT_SECONDS = 240.0
 MAX_SCAFFOLD_LEVEL = 6
@@ -52,8 +52,8 @@ _ALLOWED_EVALUATION_OUTCOMES = {"passed", "partial", "misconception", "continue"
 
 _PHASE_TRANSITION_CRITERIA: dict[str, str] = {
     "engage": (
-        "Learner has shown initial curiosity or prior knowledge related to the topic, "
-        "and is ready to do a discovery task."
+        "Learner has explicitly accepted the investigation and shared relevant prior "
+        "knowledge or an initial idea about the diagnosed learning gap."
     ),
     "explore": (
         "Learner has attempted exploration/discovery and shared observations, "
@@ -75,7 +75,8 @@ _PHASE_TRANSITION_CRITERIA: dict[str, str] = {
 _PHASE_EVIDENCE_GUIDANCE: dict[str, str] = {
     "engage": (
         "Use challenge_accepted when the learner explicitly accepts or commits to the "
-        "investigation. Use prior_knowledge_shared when they state relevant prior knowledge."
+        "investigation. Use prior_knowledge_shared only when they state relevant prior "
+        "knowledge or an initial idea; readiness alone is not prior knowledge."
     ),
     "explore": (
         "Use exploration_attempt when the learner tries a calculation, comparison, example, "
@@ -106,6 +107,7 @@ _TUTOR_OUTPUT_SCHEMA: dict[str, Any] = {
         "next_phase_ready": {"type": "boolean"},
         "phase_reasoning": {"type": "string"},
         "phase_checkpoint_question": {"type": ["string", "null"]},
+        "next_phase_opening_prompt": {"type": ["string", "null"]},
         "evidence_tags": {
             "type": "array",
             "items": {"type": "string", "enum": sorted(_ALLOWED_EVIDENCE_TAGS)},
@@ -178,6 +180,7 @@ _TUTOR_OUTPUT_SCHEMA: dict[str, Any] = {
         "next_phase_ready",
         "phase_reasoning",
         "phase_checkpoint_question",
+        "next_phase_opening_prompt",
         "evidence_tags",
         "correctness",
         "misconception_status",
@@ -207,6 +210,8 @@ Teaching rules:
 - Avoid repeating the same opening pattern (for example repeated "Imagine..." hooks).
 - Treat the supplied learning context as authoritative. Ground the activity in the
   diagnosed evidence and remember the learner's original target.
+- Keep every task inside its current 5E phase. Never display a task for the next phase
+  before the learner confirms the transition.
 - Report evidence only when the latest learner message actually demonstrates it.
 - Never claim mastery merely because the learner says they understand or watches media.
 - When an image accompanies the turn it is the learner's own drawing or worked solution:
@@ -225,9 +230,12 @@ _PROMPTS: dict[str, str] = {
         "Conversation so far:\n{history}\n\n"
         "Student latest message: {message}\n\n"
         "Respond in {response_language} with 1-2 short sentences.\n"
-        "If this is the first engage turn, use one brief real-world hook.\n"
+        "If this is the first engage turn, explicitly connect the diagnosed prerequisite "
+        "gap to the original learning target before using one brief hook. Do not invent a "
+        "specific mistake that is absent from the diagnosis.\n"
         "If this is not the first engage turn, do NOT start a new generic scenario; directly respond to the student's message.\n"
-        "End with one focused question to activate prior knowledge.\n"
+        "Until the learner has shared prior knowledge, end with one focused question that "
+        "bridges the hook directly to a concrete example of the current topic.\n"
         "Do NOT explain the full concept yet."
     ),
     "explore": (
@@ -235,8 +243,11 @@ _PROMPTS: dict[str, str] = {
         "Stage: Explore\n"
         "Conversation so far:\n{history}\n\n"
         "Student: {message}\n\n"
-        "Give one probing challenge or mini experiment in {response_language} that pushes discovery. "
-        "Keep it 1-2 sentences and avoid repeating prior tutor wording."
+        "Assess the learner's response to the current Explore task. While Explore is not "
+        "complete, give one probing challenge or mini experiment in {response_language} "
+        "that pushes discovery. Do not call an Explore activity transfer. When Explore is "
+        "complete, give feedback only; put the Explain opening in "
+        "next_phase_opening_prompt. Keep it 1-2 sentences."
     ),
     "explain": (
         "Topic: {topic}\n"
@@ -249,7 +260,9 @@ _PROMPTS: dict[str, str] = {
         "that task in evidence_request with type=micro_check. Do not mark micro_check_correct "
         "until the learner answers it in a later turn. If phase_evidence already contains "
         "learner_explanation and the latest learner message correctly applies the concept to "
-        "the requested new example, return micro_check_correct and next_phase_ready=true."
+        "the requested new example, return micro_check_correct and next_phase_ready=true. "
+        "When ready, give feedback only and put the Elaborate application in "
+        "next_phase_opening_prompt."
     ),
     "elaborate": (
         "Topic: {topic}\n"
@@ -261,17 +274,22 @@ _PROMPTS: dict[str, str] = {
         "task. For a correct solution return both transfer_attempt and transfer_correct and set "
         "next_phase_ready=true. If it is an incorrect attempt, return transfer_attempt and one "
         "focused hint. Only when there is no substantive solution yet, give one new application "
-        "task in {response_language}. Keep it concise and tied to the current concept."
+        "task in {response_language}. Call it an application task, never a micro-check. When "
+        "ready, give feedback only and put the independent Evaluate task in "
+        "next_phase_opening_prompt."
     ),
     "evaluate": (
         "Topic: {topic}\n"
         "Stage: Evaluate\n"
         "Conversation so far:\n{history}\n\n"
         "Student answer: {message}\n\n"
-        "Respond in {response_language}. "
-        "If correct or partially correct: affirm and correct gently, suggest a next step. "
-        "If incorrect: give a hint without revealing the answer. Ask them to try again. "
-        "Keep it to 2-3 sentences and avoid repeating old feedback text."
+        "Respond in {response_language}. Collect evaluation evidence naturally across turns. "
+        "First assess an independent solution. On the next turn ask the learner to identify "
+        "and correct one plausible error. Only after that ask for a short reflection on the "
+        "strategy they will reuse. Request only the next missing item shown by phase_evidence; "
+        "do not ask the learner to recite evidence labels. If incorrect, give a hint without "
+        "revealing the answer. When evaluation_outcome=passed, give final feedback without a "
+        "question and return evidence_request=null."
     ),
     "chat": (
         "Topic: {topic}\n"
@@ -354,6 +372,19 @@ def _build_user_instruction(
         "- Bad: 'Have you understood the learning goal and its challenge?'\n"
         "- Good: 'Setelah membandingkan dua interval tadi, apakah kamu sudah yakin kenapa tanda f\u2032(x) menentukan kurva naik atau turun?'\n"
         "- When next_phase_ready=false, return phase_checkpoint_question=null.\n\n"
+        "Phase handoff:\n"
+        "- When next_phase_ready=true, text must contain feedback about the learner's "
+        "completed current-phase work only. It must not ask another learning question.\n"
+        "- When next_phase_ready=true, next_phase_opening_prompt must contain exactly one "
+        "concrete question or task that starts the next phase. It is stored until the learner "
+        "confirms the transition, so do not repeat it in text or evidence_request.\n"
+        "- The opening prompt must connect the evidence just demonstrated to the diagnosed "
+        "gap and current concept.\n"
+        "- For Explore, give a concrete discovery task. For Explain, ask for an own-words "
+        "explanation. For Elaborate, give an application task and never label it micro-check. "
+        "For Evaluate, give one independent problem without hints or its answer.\n"
+        "- When next_phase_ready=false or current phase is Evaluate, return "
+        "next_phase_opening_prompt=null.\n\n"
         "Evidence contract:\n"
         f"- Allowed evidence_tags: {', '.join(sorted(_ALLOWED_EVIDENCE_TAGS))}.\n"
         f"- Current-phase evidence rubric: {_PHASE_EVIDENCE_GUIDANCE.get(current_phase, '')}\n"
@@ -363,7 +394,8 @@ def _build_user_instruction(
         "error analysis, and reflection; otherwise use partial, misconception, or continue.\n"
         "- In Elaborate, whenever transfer_correct is returned, also return transfer_attempt; "
         "a correct transfer necessarily includes an attempt.\n"
-        "- evidence_request describes the next task/tool but must not claim a result.\n"
+        "- evidence_request describes a task in the current phase only and must not claim a "
+        "result. Return it as null when next_phase_ready=true or evaluation_outcome=passed.\n"
         "- explanation_card is allowed only in Explain after learner_explanation evidence.\n\n"
         "Tool suggestion contract:\n"
         "- Return tool_suggestion=null unless an optional scaffold is currently justified.\n"
@@ -373,7 +405,7 @@ def _build_user_instruction(
         "or after an explicit learner request. It is never required for phase readiness.\n\n"
         "Output format requirement:\n"
         "Return one JSON object with keys: text, next_phase_ready, phase_reasoning, "
-        "phase_checkpoint_question, "
+        "phase_checkpoint_question, next_phase_opening_prompt, "
         "evidence_tags, correctness, misconception_status, confidence, "
         "evaluation_outcome, evidence_request, explanation_card, tool_suggestion."
     )
@@ -590,11 +622,26 @@ async def generate_tutor_response(
             topic=topic,
         )
         audit["anti_repeat_fallback"] = True
-    if phase == "explain" and "learner_explanation" in parsed["evidence_tags"]:
+    if (
+        phase == "explain"
+        and "learner_explanation" in parsed["evidence_tags"]
+        and "micro_check_correct" not in parsed["evidence_tags"]
+    ):
         tutor_text, parsed["evidence_request"] = _ensure_explain_micro_check(
             tutor_text=tutor_text,
             evidence_request=parsed["evidence_request"],
             language_code=language_code,
+        )
+    if next_phase_ready:
+        parsed["evidence_request"] = None
+    else:
+        tutor_text = _ensure_current_phase_request_visible(
+            tutor_text=tutor_text,
+            evidence_request=parsed["evidence_request"],
+            phase=phase,
+            topic=topic,
+            language_code=language_code,
+            learning_context=learning_context,
         )
     audit["structured_parse_ok"] = parsed["parse_ok"]
     if not parsed["parse_ok"]:
@@ -617,6 +664,9 @@ async def generate_tutor_response(
         phase_reasoning=phase_reasoning,
         phase_checkpoint_question=(
             parsed["phase_checkpoint_question"] if phase != "evaluate" else None
+        ),
+        next_phase_opening_prompt=(
+            parsed["next_phase_opening_prompt"] if phase != "evaluate" else None
         ),
         evidence_tags=parsed["evidence_tags"],
         correctness=parsed["correctness"],
@@ -976,6 +1026,14 @@ def _parse_structured_tutor_output(raw_text: str) -> dict[str, Any]:
     )
     if not next_phase_ready or not phase_checkpoint_question:
         phase_checkpoint_question = None
+    next_phase_opening_value = payload.get("next_phase_opening_prompt")
+    next_phase_opening_prompt = (
+        str(next_phase_opening_value).strip()
+        if next_phase_opening_value is not None
+        else None
+    )
+    if not next_phase_ready or not next_phase_opening_prompt:
+        next_phase_opening_prompt = None
     raw_tags = payload.get("evidence_tags")
     evidence_tags = (
         [
@@ -1016,6 +1074,7 @@ def _parse_structured_tutor_output(raw_text: str) -> dict[str, Any]:
         "next_phase_ready": next_phase_ready,
         "phase_reasoning": phase_reasoning,
         "phase_checkpoint_question": phase_checkpoint_question,
+        "next_phase_opening_prompt": next_phase_opening_prompt,
         "evidence_tags": evidence_tags,
         "correctness": correctness,
         "misconception_status": misconception_status,
@@ -1028,6 +1087,58 @@ def _parse_structured_tutor_output(raw_text: str) -> dict[str, Any]:
     }
 
 
+def fallback_phase_opening_prompt(
+    *,
+    phase: str,
+    topic: str,
+    learner_language: str | None,
+    learning_context: dict[str, Any] | None = None,
+) -> str:
+    """Return a phase-local opening only for legacy handoffs without an AI prompt."""
+    normalized = _normalize_phase(phase)
+    language_code = normalize_language_code(learner_language)
+    context = learning_context if isinstance(learning_context, dict) else {}
+    original = context.get("original_target")
+    original = original if isinstance(original, dict) else {}
+    target = str(original.get("title") or "").strip()
+    if language_code == "id":
+        prompts = {
+            "explore": (
+                f"Sebelum kembali ke {target}, coba satu contoh {topic}: pisahkan "
+                "bagian-bagiannya dan ceritakan pola yang kamu temukan."
+                if target
+                else f"Coba satu contoh {topic}: pisahkan bagian-bagiannya dan ceritakan pola yang kamu temukan."
+            ),
+            "explain": (
+                f"Dari pola yang baru kamu temukan, bagaimana kamu menjelaskan {topic} dengan kata-katamu sendiri?"
+            ),
+            "elaborate": (
+                f"Sekarang terapkan {topic} pada satu contoh baru dan tunjukkan alasan untuk setiap langkahmu."
+            ),
+            "evaluate": (
+                f"Kerjakan satu contoh baru tentang {topic} secara mandiri dan tuliskan langkah lengkapmu tanpa petunjuk."
+            ),
+        }
+    else:
+        prompts = {
+            "explore": (
+                f"Before returning to {target}, try one {topic} example: separate its parts and describe the pattern you find."
+                if target
+                else f"Try one {topic} example: separate its parts and describe the pattern you find."
+            ),
+            "explain": (
+                f"From the pattern you just found, how would you explain {topic} in your own words?"
+            ),
+            "elaborate": (
+                f"Now apply {topic} to one new example and justify each step."
+            ),
+            "evaluate": (
+                f"Solve one new {topic} example independently and show your complete reasoning without hints."
+            ),
+        }
+    return prompts.get(normalized, f"What do you already know about {topic}?")
+
+
 def _tutor_response_format() -> dict[str, Any]:
     return {
         "type": "json_schema",
@@ -1037,6 +1148,67 @@ def _tutor_response_format() -> dict[str, Any]:
             "schema": _TUTOR_OUTPUT_SCHEMA,
         },
     }
+
+
+def _ensure_current_phase_request_visible(
+    *,
+    tutor_text: str,
+    evidence_request: dict[str, Any] | None,
+    phase: str,
+    topic: str,
+    language_code: str,
+    learning_context: dict[str, Any],
+) -> str:
+    request = evidence_request if isinstance(evidence_request, dict) else {}
+    prompt = str(request.get("prompt") or "").strip()
+    if prompt and prompt.casefold() not in tutor_text.casefold():
+        return f"{tutor_text.rstrip()}\n\n{prompt}".strip()
+    if prompt or "?" in tutor_text:
+        return tutor_text
+    fallback = _fallback_current_phase_request(
+        phase=phase,
+        topic=topic,
+        language_code=language_code,
+        learning_context=learning_context,
+    )
+    return f"{tutor_text.rstrip()}\n\n{fallback}".strip()
+
+
+def _fallback_current_phase_request(
+    *,
+    phase: str,
+    topic: str,
+    language_code: str,
+    learning_context: dict[str, Any],
+) -> str:
+    original = learning_context.get("original_target")
+    original = original if isinstance(original, dict) else {}
+    target = str(original.get("title") or "").strip()
+    if language_code == "id":
+        prompts = {
+            "engage": (
+                f"Sebelum kembali ke {target}, bagaimana kamu sekarang menangani satu fungsi bertingkat sederhana, dan bagian mana yang masih membuatmu ragu?"
+                if target
+                else f"Bagaimana kamu sekarang menangani satu contoh sederhana {topic}, dan bagian mana yang masih membuatmu ragu?"
+            ),
+            "explore": f"Coba satu contoh {topic} dan ceritakan pola yang kamu amati.",
+            "explain": f"Bagaimana kamu menjelaskan ide utama {topic} dengan kata-katamu sendiri?",
+            "elaborate": f"Bagaimana kamu menerapkan {topic} pada satu contoh baru?",
+            "evaluate": f"Langkah apa yang masih perlu kamu periksa dalam solusi {topic} ini?",
+        }
+    else:
+        prompts = {
+            "engage": (
+                f"Before returning to {target}, how would you currently handle one simple nested function, and where are you still unsure?"
+                if target
+                else f"How would you currently handle one simple {topic} example, and where are you still unsure?"
+            ),
+            "explore": f"Try one {topic} example and describe the pattern you observe.",
+            "explain": f"How would you explain the key idea of {topic} in your own words?",
+            "elaborate": f"How would you apply {topic} to one new example?",
+            "evaluate": f"Which step in this {topic} solution still needs checking?",
+        }
+    return prompts.get(_normalize_phase(phase), f"What would you try next with {topic}?")
 
 
 def _tutor_payload_is_usable(payload: dict[str, Any]) -> bool:
@@ -1052,6 +1224,7 @@ def _unverified_tutor_payload(*, text: str) -> dict[str, Any]:
         "next_phase_ready": False,
         "phase_reasoning": None,
         "phase_checkpoint_question": None,
+        "next_phase_opening_prompt": None,
         "evidence_tags": [],
         "correctness": "unknown",
         "misconception_status": "none",
@@ -1214,7 +1387,7 @@ def _ensure_explain_micro_check(
     request.setdefault("expected_evidence", "correct application in a later learner turn")
     prompt = f"Micro-check: {request_prompt}"
     normalized_text = tutor_text.strip()
-    if request_prompt.lower() not in normalized_text.lower():
+    if "?" not in normalized_text and request_prompt.lower() not in normalized_text.lower():
         normalized_text = f"{normalized_text}\n\n{prompt}" if normalized_text else prompt
     return normalized_text, request
 
