@@ -41,14 +41,46 @@ async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_chec
     responses = iter(
         [
             _tutor(tags=["challenge_accepted"]),
+            _tutor(
+                tags=["prior_knowledge_shared"],
+                next_phase_opening_prompt=(
+                    "Try differentiating (2x + 1)^3 and tell me what changes at each layer."
+                ),
+            ),
             _tutor(tags=["exploration_attempt"]),
-            _tutor(tags=["pattern_identified"]),
+            _tutor(
+                tags=["pattern_identified"],
+                next_phase_opening_prompt=(
+                    "Using the pattern you found, explain the chain rule in your own words."
+                ),
+            ),
             _tutor(tags=["learner_explanation", "micro_check_correct"]),
-            _tutor(tags=["micro_check_correct"]),
-            _tutor(tags=["transfer_attempt", "transfer_correct"]),
+            _tutor(
+                tags=["micro_check_correct"],
+                next_phase_opening_prompt=(
+                    "Application: differentiate (3x - 2)^5 and justify each factor."
+                ),
+            ),
+            _tutor(
+                tags=["transfer_attempt", "transfer_correct"],
+                next_phase_opening_prompt=(
+                    "Independently differentiate (x^2 + 4)^3 without hints."
+                ),
+            ),
             _tutor(
                 tags=["independent_attempt", "error_analysis", "reflection"],
                 evaluation_outcome="passed",
+                evidence_request={"type": "next_module"},
+            ),
+            _tutor(
+                tags=["error_analysis", "reflection"],
+                evaluation_outcome="passed",
+                evidence_request={"type": "next_module"},
+            ),
+            _tutor(
+                tags=["reflection"],
+                evaluation_outcome="passed",
+                evidence_request={"type": "next_module"},
             ),
         ]
     )
@@ -61,12 +93,15 @@ async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_chec
     phases = []
     for message in (
         "I will investigate the missing factor.",
+        "I know a composite function puts one function inside another.",
         "I compared the inner and outer changes.",
         "The inner change also affects the result.",
         "The outer derivative must be multiplied by the inner derivative.",
         "The missing factor is the derivative of the inner function.",
         "For a new composite function I multiply both derivative layers.",
-        "Independent answer, error correction, and reflection.",
+        "My independent derivative is 6x(x^2+4)^2.",
+        "A likely error is forgetting the 2x inner derivative; that would remove the 6x factor.",
+        "Next time I will name both layers before differentiating so I remember both factors.",
     ):
         result = await append_workspace_event(
             db_session,
@@ -92,11 +127,14 @@ async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_chec
             phases.append(result.workspace.current_phase)
 
     assert phases == [
+        "engage",
         "explore",
         "explore",
         "explain",
         "explain",
         "elaborate",
+        "evaluate",
+        "evaluate",
         "evaluate",
         "evaluate",
     ]
@@ -113,13 +151,39 @@ async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_chec
     ]
     assert [event.metadata["phase"] for event in learner_events] == [
         "engage",
+        "engage",
         "explore",
         "explore",
         "explain",
         "explain",
         "elaborate",
         "evaluate",
+        "evaluate",
+        "evaluate",
     ]
+    phase_openings = [
+        event
+        for event in final_workspace.events
+        if event.metadata.get("source") == "workspace_phase_opening"
+    ]
+    assert [event.metadata["phase"] for event in phase_openings] == [
+        "explore",
+        "explain",
+        "elaborate",
+        "evaluate",
+    ]
+    assert [event.text_payload for event in phase_openings] == [
+        "Try differentiating (2x + 1)^3 and tell me what changes at each layer.",
+        "Using the pattern you found, explain the chain rule in your own words.",
+        "Application: differentiate (3x - 2)^5 and justify each factor.",
+        "Independently differentiate (x^2 + 4)^3 without hints.",
+    ]
+    assert [
+        record["tags"] for record in final_workspace.phase_evidence["evaluate"]
+    ] == [["independent_attempt"], ["error_analysis"], ["reflection"]]
+    assert result.tutor_response is not None
+    assert result.tutor_response.evaluation_outcome == "passed"
+    assert result.tutor_response.evidence_request is None
 
 
 def test_repeated_visual_request_reuses_active_media_job(db_session, monkeypatch):
@@ -474,6 +538,8 @@ def _tutor(
     *,
     tags: list[str],
     evaluation_outcome: str | None = None,
+    next_phase_opening_prompt: str | None = None,
+    evidence_request: dict | None = None,
 ) -> TutorResponseRead:
     return TutorResponseRead(
         text="Continue with the next evidence task.",
@@ -483,6 +549,8 @@ def _tutor(
         misconception_status="none",
         confidence=0.95,
         evaluation_outcome=evaluation_outcome,
+        next_phase_opening_prompt=next_phase_opening_prompt,
+        evidence_request=evidence_request,
     )
 
 

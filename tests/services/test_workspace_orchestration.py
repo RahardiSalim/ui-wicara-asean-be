@@ -15,6 +15,7 @@ from app.modules.workspaces.service import (
 )
 from app.modules.workspaces.tutor import (
     _ensure_explain_micro_check,
+    _ensure_current_phase_request_visible,
     _build_user_instruction,
     _normalize_tutor_text,
     _parse_structured_tutor_output,
@@ -30,14 +31,17 @@ from app.modules.workspaces.tutor import (
 @pytest.mark.asyncio
 async def test_successful_ai_tutor_generation_returns_structured_response(monkeypatch):
     payload = {
-        "text": "Compare the derivative signs on the two intervals. What changes?",
+        "text": "Your comparison correctly connects the derivative signs to the curve's direction.",
         "next_phase_ready": True,
         "phase_reasoning": "The learner accepted the investigation.",
         "phase_checkpoint_question": (
             "After comparing those intervals, are you confident why the derivative "
             "sign determines whether the curve rises or falls?"
         ),
-        "evidence_tags": ["challenge_accepted"],
+        "next_phase_opening_prompt": (
+            "Compare the derivative signs on two intervals and describe what changes."
+        ),
+        "evidence_tags": ["challenge_accepted", "prior_knowledge_shared"],
         "correctness": "unknown",
         "misconception_status": "none",
         "confidence": 0.9,
@@ -76,11 +80,58 @@ async def test_successful_ai_tutor_generation_returns_structured_response(monkey
     )
 
     assert response is not None
-    assert response.evidence_tags == ["challenge_accepted"]
+    assert response.evidence_tags == ["challenge_accepted", "prior_knowledge_shared"]
     assert response.next_phase_ready is True
     assert response.phase_checkpoint_question == payload["phase_checkpoint_question"]
+    assert response.next_phase_opening_prompt == payload["next_phase_opening_prompt"]
     assert audit["ai_source"] == "test"
     assert audit["structured_parse_ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_completed_explain_micro_check_does_not_assign_another_one(monkeypatch):
+    payload = {
+        "text": "Your derivative and explanation are both correct.",
+        "next_phase_ready": True,
+        "phase_reasoning": "Explanation and later micro-check are complete.",
+        "phase_checkpoint_question": "Does the inner factor now make sense?",
+        "next_phase_opening_prompt": "Application: differentiate (x²-1)³.",
+        "evidence_tags": ["learner_explanation", "micro_check_correct"],
+        "correctness": "correct",
+        "misconception_status": "resolved",
+        "confidence": 0.95,
+        "evaluation_outcome": None,
+        "evidence_request": None,
+        "explanation_card": None,
+        "tool_suggestion": None,
+    }
+
+    async def fake_generate(**_kwargs):
+        return AIGenerationResponse(
+            provider="test",
+            model="test-model",
+            text=json.dumps(payload),
+            finish_reason="stop",
+        )
+
+    monkeypatch.setattr("app.modules.workspaces.tutor.ai_client.generate", fake_generate)
+    response, _audit = await generate_tutor_response(
+        workspace=WorkspaceSession(
+            current_topic="Chain rule",
+            content_mode="chat",
+            status="active",
+            metadata_json={"current_phase": "explain"},
+        ),
+        event_type="text",
+        text_payload="The derivative is 1/sqrt(2x+1).",
+        events=[],
+        current_phase="explain",
+        learner_language="en",
+    )
+
+    assert response is not None
+    assert "Micro-check:" not in response.text
+    assert response.evidence_request is None
 
 
 def test_explore_prompt_defines_phase_specific_evidence_rubric():
@@ -99,6 +150,66 @@ def test_explore_prompt_defines_phase_specific_evidence_rubric():
     assert "Both tags may be returned on the same turn" in prompt
     assert "Ground it in the learner's actual evidence" in prompt
     assert "Bad: 'Have you understood the learning goal" in prompt
+    assert "Do not call an Explore activity transfer" in prompt
+    assert "put the Explain opening in next_phase_opening_prompt" in prompt
+
+
+def test_engage_prompt_uses_diagnosis_and_keeps_explore_task_hidden():
+    prompt = _build_user_instruction(
+        "engage",
+        "Chain rule",
+        "(no prior conversation)",
+        "I am ready to learn.",
+        learner_language="en",
+        response_language="English",
+        learning_context={
+            "scaffold_level": 0,
+            "original_target": {"title": "Curve sketching using derivatives"},
+            "current_module": {"title": "Chain rule", "role": "prerequisite_gap"},
+            "diagnosis": {"diagnostic_signals": ["concept_gap_likely"]},
+        },
+    )
+
+    assert "connect the diagnosed prerequisite gap" in prompt
+    assert "bridges the hook directly to a concrete example" in prompt
+    assert "text must contain feedback" in prompt
+    assert "must not ask another learning question" in prompt
+
+
+def test_engage_readiness_requires_acceptance_and_prior_knowledge():
+    metadata = _ensure_phase_metadata({})
+    metadata = _record_phase_evidence(
+        metadata,
+        phase="engage",
+        tutor_response=_response(tags=["challenge_accepted"]),
+        event_type="text",
+    )
+    assert _phase_is_ready(metadata, phase="engage") is False
+
+    metadata["phase_history"][-1]["turn_count"] = 1
+    metadata = _record_phase_evidence(
+        metadata,
+        phase="engage",
+        tutor_response=_response(tags=["prior_knowledge_shared"]),
+        event_type="text",
+    )
+    assert _phase_is_ready(metadata, phase="engage") is True
+
+
+def test_first_engage_turn_cannot_claim_prior_knowledge():
+    metadata = _ensure_phase_metadata({})
+    sanitized = _sanitize_tutor_response_for_phase(
+        metadata,
+        phase="engage",
+        event_type="text",
+        text_payload="I am ready to revisit this topic.",
+        tutor_response=_response(
+            tags=["challenge_accepted", "prior_knowledge_shared"]
+        ),
+    )
+
+    assert sanitized is not None
+    assert sanitized.evidence_tags == ["challenge_accepted"]
 
 
 def _response(
@@ -246,6 +357,53 @@ def test_evaluate_gate_is_reachable_with_attempt_and_analysis():
     assert _phase_is_ready(metadata, phase="evaluate") is True
 
 
+def test_evaluate_collects_attempt_analysis_and_reflection_across_turns():
+    metadata = _ensure_phase_metadata({"current_phase": "evaluate"})
+    first = _sanitize_tutor_response_for_phase(
+        metadata,
+        phase="evaluate",
+        event_type="text",
+        text_payload="A complete answer with analysis and reflection.",
+        tutor_response=_response(
+            tags=["independent_attempt", "error_analysis", "reflection"]
+        ),
+    )
+    assert first is not None
+    assert first.evidence_tags == ["independent_attempt"]
+    metadata = _record_phase_evidence(
+        metadata,
+        phase="evaluate",
+        tutor_response=first,
+        event_type="text",
+    )
+
+    second = _sanitize_tutor_response_for_phase(
+        metadata,
+        phase="evaluate",
+        event_type="text",
+        text_payload="I found and corrected a plausible error, then reflected.",
+        tutor_response=_response(tags=["error_analysis", "reflection"]),
+    )
+    assert second is not None
+    assert second.evidence_tags == ["error_analysis"]
+    metadata = _record_phase_evidence(
+        metadata,
+        phase="evaluate",
+        tutor_response=second,
+        event_type="text",
+    )
+
+    third = _sanitize_tutor_response_for_phase(
+        metadata,
+        phase="evaluate",
+        event_type="text",
+        text_payload="Next time I will name both layers before differentiating.",
+        tutor_response=_response(tags=["reflection"]),
+    )
+    assert third is not None
+    assert third.evidence_tags == ["reflection"]
+
+
 def test_workspace_tutor_default_timeout_allows_reasoning_model(monkeypatch):
     monkeypatch.delenv("WICARA_WORKSPACE_TUTOR_TIMEOUT_SECONDS", raising=False)
     assert _tutor_timeout_seconds() == 240.0
@@ -380,6 +538,41 @@ def test_explain_micro_check_preserves_contextual_task_without_chain_rule_bias()
     assert request["prompt"] == "Classify x^4 at x=0 using derivative signs."
 
 
+def test_current_phase_request_survives_tutor_brevity_truncation():
+    text = _ensure_current_phase_request_visible(
+        tutor_text="This prerequisite matters for your original curve-sketching goal.",
+        evidence_request={
+            "type": "open_response",
+            "prompt": "How would you differentiate sin(x²) right now?",
+            "expected_evidence": "prior_knowledge_shared",
+        },
+        phase="engage",
+        topic="Chain rule",
+        language_code="en",
+        learning_context={
+            "original_target": {"title": "Curve sketching using derivatives"}
+        },
+    )
+
+    assert text.endswith("How would you differentiate sin(x²) right now?")
+
+
+def test_engage_adds_contextual_question_when_model_omits_request():
+    text = _ensure_current_phase_request_visible(
+        tutor_text="The chain rule supports the curve-sketching goal from your pretest.",
+        evidence_request=None,
+        phase="engage",
+        topic="Chain rule",
+        language_code="en",
+        learning_context={
+            "original_target": {"title": "Curve sketching using derivatives"}
+        },
+    )
+
+    assert "Before returning to Curve sketching using derivatives" in text
+    assert text.endswith("where are you still unsure?")
+
+
 def test_tutor_structured_contract_rejects_punctuation_only_text():
     assert _tutor_payload_is_usable(
         _parse_structured_tutor_output(
@@ -393,6 +586,10 @@ def test_tutor_structured_contract_rejects_punctuation_only_text():
     response_format = _tutor_response_format()
     assert response_format["type"] == "json_schema"
     assert response_format["json_schema"]["strict"] is True
+    assert (
+        "next_phase_opening_prompt"
+        in response_format["json_schema"]["schema"]["required"]
+    )
 
 
 def test_visual_suggestion_is_only_exposed_for_justified_explore_scaffold():
