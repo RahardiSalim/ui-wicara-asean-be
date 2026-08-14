@@ -660,6 +660,8 @@ async def generate_tutor_response(
             event_type,
             language_code=language_code,
             current_phase=phase,
+            student_message=text_payload,
+            topic=topic,
         ), audit
 
     audit.update(
@@ -896,11 +898,18 @@ def _fallback_response(
     *,
     language_code: str,
     current_phase: str,
+    student_message: str = "",
+    topic: str = "this topic",
 ) -> TutorResponseRead:
     stage = _normalize_phase(current_phase)
 
     return TutorResponseRead(
-        text=_fallback_text(event_type, language_code=language_code),
+        text=_anti_repeat_response(
+            language_code=language_code,
+            phase=stage,
+            student_message=student_message,
+            topic=topic,
+        ),
         intent=_STAGE_INTENT.get(stage, "ask_followup"),
         next_actions=_STAGE_ACTIONS.get(stage, ["ask_followup"]),
         next_phase_ready=False,

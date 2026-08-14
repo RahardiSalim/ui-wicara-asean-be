@@ -17,6 +17,7 @@ from app.modules.workspaces.service import (
 from app.modules.workspaces.tutor import (
     _SYSTEM_INSTRUCTION,
     _evaluate_turn_completes_evidence,
+    _fallback_response,
     _ensure_explain_micro_check,
     _ensure_current_phase_request_visible,
     _ground_checkpoint_question,
@@ -765,6 +766,30 @@ async def test_checkpoint_decline_metadata_reaches_ai_prompt(monkeypatch):
 def test_workspace_tutor_default_timeout_keeps_retries_below_frontend_cap(monkeypatch):
     monkeypatch.delenv("WICARA_WORKSPACE_TUTOR_TIMEOUT_SECONDS", raising=False)
     assert _tutor_timeout_seconds() == 140.0
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected_fragment"),
+    [
+        ("engage", "focus on your answer about Chain rule"),
+        ("explore", "small input change"),
+        ("explain", "two consecutive stages"),
+        ("elaborate", "recompute only the uncertain inner step"),
+        ("evaluate", "inspect only the step you trust least"),
+    ],
+)
+def test_generation_exhaustion_fallback_is_phase_aware(phase, expected_fragment):
+    response = _fallback_response(
+        "text",
+        language_code="en",
+        current_phase=phase,
+        student_message="I am stuck on this step.",
+        topic="Chain rule",
+    )
+
+    assert expected_fragment in response.text
+    assert "canvas" not in response.text.lower()
+    assert response.evidence_tags == []
 
 
 def test_explain_requires_explanation_before_micro_check_can_pass():
