@@ -613,8 +613,15 @@ async def generate_tutor_response(
         phase_reasoning = "fallback_due_to_empty_text"
         audit["ai_source"] = "ai_empty_fallback"
     tutor_text = _enforce_brevity(tutor_text, phase=phase)
+    completes_evaluate = _evaluate_turn_completes_evidence(
+        learning_context=learning_context,
+        evidence_tags=parsed["evidence_tags"],
+    )
     previous_tutor_text = _latest_tutor_text(events)
-    if _is_repetitive_response(tutor_text, previous_tutor_text):
+    if (
+        not (phase == "evaluate" and completes_evaluate)
+        and _is_repetitive_response(tutor_text, previous_tutor_text)
+    ):
         tutor_text = _anti_repeat_response(
             language_code=language_code,
             phase=phase,
@@ -632,7 +639,7 @@ async def generate_tutor_response(
             evidence_request=parsed["evidence_request"],
             language_code=language_code,
         )
-    if next_phase_ready:
+    if next_phase_ready or (phase == "evaluate" and completes_evaluate):
         parsed["evidence_request"] = None
     else:
         tutor_text = _ensure_current_phase_request_visible(
@@ -1161,9 +1168,11 @@ def _ensure_current_phase_request_visible(
 ) -> str:
     request = evidence_request if isinstance(evidence_request, dict) else {}
     prompt = str(request.get("prompt") or "").strip()
+    if "?" in tutor_text:
+        return tutor_text
     if prompt and prompt.casefold() not in tutor_text.casefold():
         return f"{tutor_text.rstrip()}\n\n{prompt}".strip()
-    if prompt or "?" in tutor_text:
+    if prompt:
         return tutor_text
     fallback = _fallback_current_phase_request(
         phase=phase,
@@ -1172,6 +1181,30 @@ def _ensure_current_phase_request_visible(
         learning_context=learning_context,
     )
     return f"{tutor_text.rstrip()}\n\n{fallback}".strip()
+
+
+def _evaluate_turn_completes_evidence(
+    *,
+    learning_context: dict[str, Any],
+    evidence_tags: list[str],
+) -> bool:
+    if "reflection" not in evidence_tags:
+        return False
+    phase_evidence = learning_context.get("phase_evidence")
+    records = (
+        phase_evidence.get("evaluate")
+        if isinstance(phase_evidence, dict)
+        else phase_evidence
+    )
+    if not isinstance(records, list):
+        return False
+    recorded_tags = {
+        str(tag)
+        for record in records
+        if isinstance(record, dict)
+        for tag in record.get("tags", [])
+    }
+    return {"independent_attempt", "error_analysis"}.issubset(recorded_tags)
 
 
 def _fallback_current_phase_request(
@@ -1191,9 +1224,9 @@ def _fallback_current_phase_request(
                 if target
                 else f"Bagaimana kamu sekarang menangani satu contoh sederhana {topic}, dan bagian mana yang masih membuatmu ragu?"
             ),
-            "explore": f"Coba satu contoh {topic} dan ceritakan pola yang kamu amati.",
-            "explain": f"Bagaimana kamu menjelaskan ide utama {topic} dengan kata-katamu sendiri?",
-            "elaborate": f"Bagaimana kamu menerapkan {topic} pada satu contoh baru?",
+            "explore": "Pada contoh yang baru kamu coba, langkah atau hasil mana yang bisa kamu bandingkan untuk menemukan polanya?",
+            "explain": "Bagian mana dari idenya yang masih belum jelas, dan bagaimana kamu akan menjelaskan bagian itu sekarang?",
+            "elaborate": "Pada contoh yang baru kamu kerjakan, langkah mana yang belum selesai dan hasil apa yang kamu dapat setelah memeriksanya?",
             "evaluate": f"Langkah apa yang masih perlu kamu periksa dalam solusi {topic} ini?",
         }
     else:
@@ -1203,9 +1236,9 @@ def _fallback_current_phase_request(
                 if target
                 else f"How would you currently handle one simple {topic} example, and where are you still unsure?"
             ),
-            "explore": f"Try one {topic} example and describe the pattern you observe.",
-            "explain": f"How would you explain the key idea of {topic} in your own words?",
-            "elaborate": f"How would you apply {topic} to one new example?",
+            "explore": "In the example you just tried, which step or result could you compare to reveal the pattern?",
+            "explain": "Which part of the idea is still unclear, and how would you explain that part now?",
+            "elaborate": "In the example you just attempted, which unfinished step will you check next, and what result do you get?",
             "evaluate": f"Which step in this {topic} solution still needs checking?",
         }
     return prompts.get(_normalize_phase(phase), f"What would you try next with {topic}?")
@@ -1387,7 +1420,15 @@ def _ensure_explain_micro_check(
     request.setdefault("expected_evidence", "correct application in a later learner turn")
     prompt = f"Micro-check: {request_prompt}"
     normalized_text = tutor_text.strip()
-    if "?" not in normalized_text and request_prompt.lower() not in normalized_text.lower():
+    first_instruction = re.split(r"[.!?]", request_prompt, maxsplit=1)[0].strip()
+    request_is_visible = (
+        request_prompt.casefold() in normalized_text.casefold()
+        or (
+            len(first_instruction) >= 12
+            and first_instruction.casefold() in normalized_text.casefold()
+        )
+    )
+    if "?" not in normalized_text and not request_is_visible:
         normalized_text = f"{normalized_text}\n\n{prompt}" if normalized_text else prompt
     return normalized_text, request
 

@@ -801,6 +801,14 @@ async def append_workspace_event(
             and tutor_response.misconception_status != "active"
         ):
             outcome = "passed"
+        elif (
+            tutor_response.correctness == "correct"
+            and tutor_response.misconception_status == "none"
+        ):
+            # A correct staged Evaluate response is incomplete until the later
+            # error-analysis and reflection turns arrive. Providers sometimes
+            # label that incompleteness as "partial"; it is not a transfer gap.
+            outcome = "continue"
         elif outcome == "passed":
             outcome = "continue"
         tutor_response = tutor_response.model_copy(
@@ -1481,7 +1489,10 @@ def _record_phase_evidence(
     if failed:
         failures = max(0, _safe_int(updated.get("consecutive_failures"), 0)) + 1
         updated["consecutive_failures"] = failures
-        updated["hint_level"] = min(_MAX_HINT_LEVEL, failures)
+        updated["hint_level"] = max(
+            max(0, _safe_int(updated.get("hint_level"), 0)),
+            min(_MAX_HINT_LEVEL, failures),
+        )
     elif tutor_response.correctness == "correct":
         # Unwind at the same rate the ladder can climb, so a learner who recovers
         # is not stuck at a high scaffold level for the rest of the session.
