@@ -441,6 +441,26 @@ def _build_user_instruction(
         "evidence_tags, correctness, misconception_status, confidence, "
         "evaluation_outcome, evidence_request, explanation_card, tool_suggestion."
     )
+    checkpoint_instruction = ""
+    if learning_context.get("checkpoint_decision") == "stay":
+        checkpoint_instruction = (
+            "Checkpoint response:\n"
+            "- The learner explicitly chose to stay in the current phase. This click is "
+            "not learning evidence and must not be treated as an incorrect answer.\n"
+            "- Set next_phase_ready=false, return no evidence_tags, and return "
+            "phase_checkpoint_question=null.\n"
+            "- Respond with a different scaffold that directly addresses the concept or "
+            "task named by the checkpoint and conversation. Do not repeat the checkpoint, "
+            "ask whether they are ready, or merely ask them to explain again."
+        )
+    elif learning_context.get("readiness_recheck_required"):
+        checkpoint_instruction = (
+            "Checkpoint recheck:\n"
+            "- The learner previously chose to stay in this phase. Judge only the latest "
+            "substantive response for renewed readiness.\n"
+            "- Return phase evidence again only if this new response demonstrates it; do "
+            "not rely on the older completed evidence by itself."
+        )
     language_context = (
         f"Learner profile language: {learner_language or 'unknown'}\n"
         f"Required response language: {response_language}\n\n"
@@ -463,6 +483,7 @@ def _build_user_instruction(
                 learner_language=learner_language,
                 response_language=response_language,
             ),
+            checkpoint_instruction,
             transition_instruction,
         ]
     )
@@ -476,6 +497,7 @@ async def generate_tutor_response(
     current_phase: str,
     learner_language: str | None = None,
     image_input: TutorImageInput | None = None,
+    learner_event_metadata: dict[str, Any] | None = None,
 ) -> tuple[TutorResponseRead | None, dict[str, Any]]:
     """
     Call the configured AI provider to generate a tutor response.
@@ -504,8 +526,17 @@ async def generate_tutor_response(
             "hint_level": int(workspace_metadata.get("hint_level") or 0),
             "scaffold_level": int(workspace_metadata.get("hint_level") or 0),
             "recent_event_count": len(events),
+            "readiness_recheck_required": (
+                workspace_metadata.get("phase_readiness_recheck_required") == phase
+            ),
         }
     )
+    safe_event_metadata = learner_event_metadata or {}
+    if (
+        safe_event_metadata.get("interaction_type") == "phase_checkpoint"
+        and safe_event_metadata.get("checkpoint_decision") == "stay"
+    ):
+        learning_context["checkpoint_decision"] = "stay"
 
     if event_type == "text" and _is_brief_greeting(text_payload):
         return (
@@ -1234,8 +1265,6 @@ def _evaluate_turn_completes_evidence(
     learning_context: dict[str, Any],
     evidence_tags: list[str],
 ) -> bool:
-    if "reflection" not in evidence_tags:
-        return False
     phase_evidence = learning_context.get("phase_evidence")
     records = (
         phase_evidence.get("evaluate")
@@ -1250,7 +1279,9 @@ def _evaluate_turn_completes_evidence(
         if isinstance(record, dict)
         for tag in record.get("tags", [])
     }
-    return {"independent_attempt", "error_analysis"}.issubset(recorded_tags)
+    return {"independent_attempt", "error_analysis"}.issubset(
+        recorded_tags.union(evidence_tags)
+    )
 
 
 def _fallback_current_phase_request(

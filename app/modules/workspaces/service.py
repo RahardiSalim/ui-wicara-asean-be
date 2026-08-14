@@ -70,6 +70,8 @@ _PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
 _MAX_HINT_LEVEL = 6
 _HINT_DECAY_PER_SUCCESS = 2
 _EVIDENCE_CONFIDENCE_FLOOR = 0.55
+_CHECKPOINT_INTERACTION_TYPE = "phase_checkpoint"
+_CHECKPOINT_STAY_DECISION = "stay"
 _DEFAULT_PHASE_MIN_TURNS: dict[str, int] = {
     "engage": 2,
     "explore": 1,
@@ -104,13 +106,15 @@ _PHASE_REQUIRED_EVIDENCE: dict[str, tuple[frozenset[str], ...]] = {
     "evaluate": (
         frozenset({"independent_attempt"}),
         frozenset({"error_analysis"}),
-        frozenset({"reflection"}),
     ),
 }
 _PHASE_ALLOWED_EVIDENCE: dict[str, frozenset[str]] = {
     phase: frozenset().union(*requirements)
     for phase, requirements in _PHASE_REQUIRED_EVIDENCE.items()
 }
+_PHASE_ALLOWED_EVIDENCE["evaluate"] = (
+    _PHASE_ALLOWED_EVIDENCE["evaluate"] | frozenset({"reflection"})
+)
 
 
 def create_or_resume_workspace(
@@ -621,6 +625,8 @@ async def append_workspace_event(
     normalized_actor_type = _normalize_actor_type(actor_type)
     if normalized_actor_type != "learner":
         raise ValueError("Public workspace events must be authored by the learner.")
+    learner_metadata = _sanitize_learner_metadata(metadata)
+    checkpoint_declined = _is_checkpoint_stay_event(learner_metadata)
     if media_artifact_id is not None:
         _resolve_owned_media_artifact(session, user=user, media_artifact_id=media_artifact_id)
     tutor_image = _resolve_tutor_image_input(session, user=user, image_asset_id=image_asset_id)
@@ -639,8 +645,13 @@ async def append_workspace_event(
         dict(workspace.metadata_json or {}),
         created_at=workspace.created_at,
     )
-    workspace.metadata_json = phase_metadata
     current_phase = str(phase_metadata.get("current_phase") or "engage")
+    if checkpoint_declined:
+        if not bool(phase_metadata.get("phase_transition_pending", False)):
+            raise ValueError("There is no pending phase checkpoint to decline.")
+        phase_metadata["phase_transition_pending"] = False
+        phase_metadata["phase_readiness_recheck_required"] = current_phase
+    workspace.metadata_json = phase_metadata
 
     # Call AI before saving so audit info goes into event metadata.
     tutor_response, ai_audit = await generate_tutor_response(
@@ -651,6 +662,7 @@ async def append_workspace_event(
         current_phase=current_phase,
         learner_language=_preferred_language(user),
         image_input=tutor_image,
+        learner_event_metadata=learner_metadata,
     )
     tutor_response = _sanitize_tutor_response_for_phase(
         phase_metadata,
@@ -658,8 +670,8 @@ async def append_workspace_event(
         event_type=normalized_event_type,
         text_payload=text_payload,
         tutor_response=tutor_response,
+        checkpoint_declined=checkpoint_declined,
     )
-    learner_metadata = _sanitize_learner_metadata(metadata)
     event_metadata = {
         **learner_metadata,
         "phase": current_phase,
@@ -770,6 +782,15 @@ async def append_workspace_event(
         tutor_response=tutor_response,
         event_type=normalized_event_type,
     )
+    if (
+        not checkpoint_declined
+        and metadata_json.get("phase_readiness_recheck_required") == current_phase
+        and _response_reestablishes_phase_readiness(
+            phase=current_phase,
+            tutor_response=tutor_response,
+        )
+    ):
+        metadata_json["phase_readiness_recheck_required"] = None
     history = list(metadata_json.get("phase_history", []))
     if normalized_actor_type == "learner" and normalized_event_type != "system":
         if history:
@@ -1317,12 +1338,22 @@ def _sanitize_learner_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "client_5e_state",
         "client_tutor_override",
         "skip_server_tutor",
+        "phase_readiness_recheck_required",
     }
     return {
         key: value
         for key, value in dict(metadata or {}).items()
         if key not in protected
     }
+
+
+def _is_checkpoint_stay_event(metadata: dict[str, Any]) -> bool:
+    return (
+        str(metadata.get("interaction_type") or "").strip().lower()
+        == _CHECKPOINT_INTERACTION_TYPE
+        and str(metadata.get("checkpoint_decision") or "").strip().lower()
+        == _CHECKPOINT_STAY_DECISION
+    )
 
 
 def _normalize_content_mode(content_mode: str) -> str:
@@ -1419,6 +1450,11 @@ def _ensure_phase_metadata(
     phase_evidence = safe.get("phase_evidence")
     if not isinstance(phase_evidence, dict):
         phase_evidence = {}
+    recheck_phase = str(
+        safe.get("phase_readiness_recheck_required") or ""
+    ).strip().lower()
+    if recheck_phase not in _PHASE_SEQUENCE or recheck_phase != current_phase:
+        recheck_phase = None
     safe.update(
         {
             "current_phase": current_phase,
@@ -1429,6 +1465,7 @@ def _ensure_phase_metadata(
             "phase_min_turns": min_turns,
             "visited_5e_phases": visited_phases,
             "phase_evidence": phase_evidence,
+            "phase_readiness_recheck_required": recheck_phase,
             "hint_level": max(
                 0, min(_MAX_HINT_LEVEL, _safe_int(safe.get("hint_level"), 0))
             ),
@@ -1553,6 +1590,7 @@ def _sanitize_tutor_response_for_phase(
     event_type: str,
     text_payload: str,
     tutor_response: TutorResponseRead | None,
+    checkpoint_declined: bool = False,
 ) -> TutorResponseRead | None:
     if tutor_response is None:
         return None
@@ -1561,6 +1599,8 @@ def _sanitize_tutor_response_for_phase(
     evidence_tags = [
         tag for tag in tutor_response.evidence_tags if tag in allowed_tags
     ]
+    if checkpoint_declined:
+        evidence_tags = []
     if (
         phase == "engage"
         and _current_phase_turns(metadata) == 0
@@ -1599,6 +1639,22 @@ def _sanitize_tutor_response_for_phase(
     return tutor_response.model_copy(
         update={
             "evidence_tags": evidence_tags,
+            "correctness": (
+                "unknown" if checkpoint_declined else tutor_response.correctness
+            ),
+            "next_phase_ready": (
+                False if checkpoint_declined else tutor_response.next_phase_ready
+            ),
+            "phase_checkpoint_question": (
+                None
+                if checkpoint_declined
+                else tutor_response.phase_checkpoint_question
+            ),
+            "next_phase_opening_prompt": (
+                None
+                if checkpoint_declined
+                else tutor_response.next_phase_opening_prompt
+            ),
             "evaluation_outcome": (
                 tutor_response.evaluation_outcome if phase == "evaluate" else None
             ),
@@ -1609,6 +1665,21 @@ def _sanitize_tutor_response_for_phase(
                 tutor_response.tool_suggestion if phase == "explore" else None
             ),
         }
+    )
+
+
+def _response_reestablishes_phase_readiness(
+    *,
+    phase: str,
+    tutor_response: TutorResponseRead | None,
+) -> bool:
+    if tutor_response is None:
+        return False
+    allowed_tags = _PHASE_ALLOWED_EVIDENCE.get(phase, frozenset())
+    return bool(allowed_tags.intersection(tutor_response.evidence_tags)) and (
+        tutor_response.correctness == "correct"
+        and tutor_response.misconception_status in {"none", "resolved"}
+        and tutor_response.confidence >= _EVIDENCE_CONFIDENCE_FLOOR
     )
 
 
@@ -1710,13 +1781,17 @@ def _current_evaluate_evidence_tags(
     elif "error_analysis" not in recorded_tags:
         required_tag = "error_analysis"
     elif "reflection" not in recorded_tags:
-        required_tag = "reflection"
+        return [tag for tag in proposed_tags if tag == "reflection"]
     else:
         return []
-    return [tag for tag in proposed_tags if tag == required_tag]
+    return [
+        tag for tag in proposed_tags if tag in {required_tag, "reflection"}
+    ]
 
 
 def _phase_is_ready(metadata: dict[str, Any], *, phase: str) -> bool:
+    if metadata.get("phase_readiness_recheck_required") == phase:
+        return False
     tags = _recorded_phase_tags(metadata, phase=phase)
     requirements = _PHASE_REQUIRED_EVIDENCE.get(phase, ())
     return bool(requirements) and all(bool(tags & alternatives) for alternatives in requirements)
@@ -1743,6 +1818,7 @@ def _advance_metadata_to_phase(
     updated["current_phase"] = next_phase
     updated["phase_history"] = history
     updated["phase_transition_pending"] = False
+    updated["phase_readiness_recheck_required"] = None
     updated["posttest_eligible"] = False
     return _sync_learning_context_state(updated)
 

@@ -77,11 +77,6 @@ async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_chec
                 evaluation_outcome="passed",
                 evidence_request={"type": "next_module"},
             ),
-            _tutor(
-                tags=["reflection"],
-                evaluation_outcome="passed",
-                evidence_request={"type": "next_module"},
-            ),
         ]
     )
     monkeypatch.setattr(
@@ -101,7 +96,6 @@ async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_chec
         "For a new composite function I multiply both derivative layers.",
         "My independent derivative is 6x(x^2+4)^2.",
         "A likely error is forgetting the 2x inner derivative; that would remove the 6x factor.",
-        "Next time I will name both layers before differentiating so I remember both factors.",
     ):
         result = await append_workspace_event(
             db_session,
@@ -136,7 +130,6 @@ async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_chec
         "evaluate",
         "evaluate",
         "evaluate",
-        "evaluate",
     ]
     final_workspace = result.workspace
     assert final_workspace.posttest_eligible is True
@@ -159,7 +152,6 @@ async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_chec
         "elaborate",
         "evaluate",
         "evaluate",
-        "evaluate",
     ]
     phase_openings = [
         event
@@ -180,7 +172,10 @@ async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_chec
     ]
     assert [
         record["tags"] for record in final_workspace.phase_evidence["evaluate"]
-    ] == [["independent_attempt"], ["error_analysis"], ["reflection"]]
+    ] == [
+        ["independent_attempt", "reflection"],
+        ["error_analysis", "reflection"],
+    ]
     assert result.tutor_response is not None
     assert result.tutor_response.evaluation_outcome == "passed"
     assert result.tutor_response.evidence_request is None
@@ -488,6 +483,100 @@ def test_workspace_context_preserves_semantic_template_routing_signals(db_sessio
     assert route_context["active_template_id"] == (
         "manim.function_composition_transform.v1"
     )
+
+
+@pytest.mark.asyncio
+async def test_declining_checkpoint_stays_in_phase_until_fresh_evidence(
+    db_session,
+    monkeypatch,
+):
+    scenario = _create_workspace_scenario(db_session)
+    persisted = db_session.get(WorkspaceSession, scenario["workspace"].id)
+    assert persisted is not None
+    persisted.metadata_json = {
+        **dict(persisted.metadata_json or {}),
+        "current_phase": "explore",
+        "phase_history": [
+            {
+                "phase": "explore",
+                "entered_at": persisted.created_at.isoformat(),
+                "exited_at": None,
+                "turn_count": 2,
+            }
+        ],
+        "phase_transition_pending": True,
+        "phase_evidence": {
+            "explore": [
+                {
+                    "recorded_at": persisted.created_at.isoformat(),
+                    "event_type": "text",
+                    "tags": ["exploration_attempt", "pattern_identified"],
+                    "correctness": "correct",
+                    "misconception_status": "none",
+                    "confidence": 0.95,
+                    "evaluation_outcome": None,
+                }
+            ]
+        },
+    }
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.modules.workspaces.service.generate_tutor_response",
+        _fake_tutor(
+            iter(
+                [
+                    _tutor(tags=["exploration_attempt", "pattern_identified"]),
+                    _tutor(tags=["pattern_identified"]),
+                ]
+            )
+        ),
+    )
+
+    declined = await append_workspace_event(
+        db_session,
+        user=scenario["user"],
+        workspace_id=persisted.id,
+        event_type="text",
+        actor_type="learner",
+        text_payload="Not yet, I still need help with this part.",
+        image_asset_id=None,
+        media_artifact_id=None,
+        metadata={
+            "interaction_type": "phase_checkpoint",
+            "checkpoint_decision": "stay",
+        },
+    )
+
+    assert declined is not None
+    assert declined.workspace.current_phase == "explore"
+    assert declined.workspace.phase_transition_pending is False
+    assert declined.tutor_response is not None
+    assert declined.tutor_response.evidence_tags == []
+    assert declined.mastery_update is not None
+    assert declined.mastery_update.delta == 0
+    assert declined.mastery_update.reason == (
+        "unverified_activity_recorded_without_mastery_delta"
+    )
+    db_session.refresh(persisted)
+    assert persisted.metadata_json["phase_readiness_recheck_required"] == "explore"
+
+    retried = await append_workspace_event(
+        db_session,
+        user=scenario["user"],
+        workspace_id=persisted.id,
+        event_type="text",
+        actor_type="learner",
+        text_payload="Now I can track the change through both layers.",
+        image_asset_id=None,
+        media_artifact_id=None,
+        metadata={},
+    )
+
+    assert retried is not None
+    assert retried.workspace.current_phase == "explore"
+    assert retried.workspace.phase_transition_pending is True
+    db_session.refresh(persisted)
+    assert persisted.metadata_json["phase_readiness_recheck_required"] is None
 
 
 def test_media_worker_generates_context_spec_before_validation(db_session, monkeypatch):

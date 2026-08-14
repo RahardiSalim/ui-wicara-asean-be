@@ -9,6 +9,7 @@ from app.modules.workspaces.service import (
     _ensure_phase_metadata,
     _phase_is_ready,
     _record_phase_evidence,
+    _response_reestablishes_phase_readiness,
     _remediate_metadata_to_phase,
     _sanitize_tutor_response_for_phase,
     _sanitize_learner_metadata,
@@ -137,14 +138,14 @@ async def test_completed_explain_micro_check_does_not_assign_another_one(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_completed_evaluate_reflection_does_not_append_another_request(monkeypatch):
+async def test_completed_evaluate_error_analysis_does_not_append_another_request(monkeypatch):
     payload = {
-        "text": "That reflection gives you a reliable chain-rule checklist.",
+        "text": "That correction identifies the missing inner derivative.",
         "next_phase_ready": False,
         "phase_reasoning": "All staged Evaluate evidence is complete.",
         "phase_checkpoint_question": None,
         "next_phase_opening_prompt": None,
-        "evidence_tags": ["reflection"],
+        "evidence_tags": ["error_analysis"],
         "correctness": "correct",
         "misconception_status": "none",
         "confidence": 0.95,
@@ -194,7 +195,7 @@ async def test_completed_evaluate_reflection_does_not_append_another_request(mon
             },
         ),
         event_type="text",
-        text_payload="I will use that checklist next time.",
+        text_payload="The missing factor is the derivative of the inner function.",
         events=[],
         current_phase="evaluate",
         learner_language="en",
@@ -488,18 +489,10 @@ def test_evaluate_gate_is_reachable_with_attempt_and_analysis():
         tutor_response=_response(tags=["error_analysis"]),
         event_type="text",
     )
-    assert _phase_is_ready(metadata, phase="evaluate") is False
-
-    metadata = _record_phase_evidence(
-        metadata,
-        phase="evaluate",
-        tutor_response=_response(tags=["reflection"]),
-        event_type="text",
-    )
     assert _phase_is_ready(metadata, phase="evaluate") is True
 
 
-def test_evaluate_completion_suppresses_a_new_request_only_after_prior_evidence():
+def test_evaluate_completion_suppresses_new_request_after_attempt_and_analysis():
     incomplete_context = {
         "phase_evidence": {
             "evaluate": [
@@ -521,8 +514,8 @@ def test_evaluate_completion_suppresses_a_new_request_only_after_prior_evidence(
         evidence_tags=["reflection"],
     )
     assert _evaluate_turn_completes_evidence(
-        learning_context=complete_context,
-        evidence_tags=["reflection"],
+        learning_context=incomplete_context,
+        evidence_tags=["error_analysis"],
     )
     assert _evaluate_turn_completes_evidence(
         learning_context={
@@ -532,7 +525,7 @@ def test_evaluate_completion_suppresses_a_new_request_only_after_prior_evidence(
     )
 
 
-def test_evaluate_collects_attempt_analysis_and_reflection_across_turns():
+def test_evaluate_collects_attempt_and_analysis_while_reflection_is_optional():
     metadata = _ensure_phase_metadata({"current_phase": "evaluate"})
     first = _sanitize_tutor_response_for_phase(
         metadata,
@@ -544,7 +537,7 @@ def test_evaluate_collects_attempt_analysis_and_reflection_across_turns():
         ),
     )
     assert first is not None
-    assert first.evidence_tags == ["independent_attempt"]
+    assert first.evidence_tags == ["independent_attempt", "reflection"]
     metadata = _record_phase_evidence(
         metadata,
         phase="evaluate",
@@ -560,7 +553,7 @@ def test_evaluate_collects_attempt_analysis_and_reflection_across_turns():
         tutor_response=_response(tags=["error_analysis", "reflection"]),
     )
     assert second is not None
-    assert second.evidence_tags == ["error_analysis"]
+    assert second.evidence_tags == ["error_analysis", "reflection"]
     metadata = _record_phase_evidence(
         metadata,
         phase="evaluate",
@@ -576,7 +569,133 @@ def test_evaluate_collects_attempt_analysis_and_reflection_across_turns():
         tutor_response=_response(tags=["reflection"]),
     )
     assert third is not None
-    assert third.evidence_tags == ["reflection"]
+    assert third.evidence_tags == []
+
+
+def test_checkpoint_decline_suppresses_evidence_and_requires_fresh_readiness():
+    metadata = _ensure_phase_metadata(
+        {
+            "current_phase": "explore",
+            "phase_transition_pending": True,
+            "phase_readiness_recheck_required": "explore",
+            "phase_evidence": {
+                "explore": [
+                    {
+                        "tags": ["exploration_attempt", "pattern_identified"],
+                        "correctness": "correct",
+                        "misconception_status": "none",
+                        "confidence": 0.9,
+                    }
+                ]
+            },
+        }
+    )
+    response = _sanitize_tutor_response_for_phase(
+        metadata,
+        phase="explore",
+        event_type="text",
+        text_payload="Not yet.",
+        tutor_response=_response(
+            tags=["exploration_attempt", "pattern_identified"],
+            correctness="correct",
+        ),
+        checkpoint_declined=True,
+    )
+
+    assert response is not None
+    assert response.evidence_tags == []
+    assert response.correctness == "unknown"
+    assert response.next_phase_ready is False
+    assert _phase_is_ready(metadata, phase="explore") is False
+
+
+def test_only_fresh_correct_evidence_clears_checkpoint_recheck():
+    assert not _response_reestablishes_phase_readiness(
+        phase="explore",
+        tutor_response=_response(
+            tags=["exploration_attempt"],
+            correctness="partial",
+            misconception="suspected",
+        ),
+    )
+    assert _response_reestablishes_phase_readiness(
+        phase="explore",
+        tutor_response=_response(
+            tags=["pattern_identified"],
+            correctness="correct",
+            misconception="resolved",
+        ),
+    )
+
+
+def test_checkpoint_decline_prompt_requests_a_different_scaffold():
+    prompt = _build_user_instruction(
+        "explain",
+        "Chain rule",
+        "Tutor: Do the two scale factors now make sense?",
+        "Not yet.",
+        learner_language="en",
+        response_language="English",
+        learning_context={
+            "scaffold_level": 2,
+            "checkpoint_decision": "stay",
+        },
+    )
+
+    assert "explicitly chose to stay in the current phase" in prompt
+    assert "return no evidence_tags" in prompt
+    assert "Do not repeat the checkpoint" in prompt
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_decline_metadata_reaches_ai_prompt(monkeypatch):
+    payload = {
+        "text": "Let's switch to a small-change diagram.",
+        "next_phase_ready": False,
+        "phase_reasoning": "The learner chose to stay.",
+        "phase_checkpoint_question": None,
+        "next_phase_opening_prompt": None,
+        "evidence_tags": [],
+        "correctness": "unknown",
+        "misconception_status": "suspected",
+        "confidence": 0.8,
+        "evaluation_outcome": None,
+        "evidence_request": None,
+        "explanation_card": None,
+        "tool_suggestion": None,
+    }
+
+    async def fake_generate(**kwargs):
+        assert "Checkpoint response:" in kwargs["user_instruction"]
+        assert "return no evidence_tags" in kwargs["user_instruction"]
+        return AIGenerationResponse(
+            provider="test",
+            model="test-model",
+            text=json.dumps(payload),
+            finish_reason="stop",
+        )
+
+    monkeypatch.setattr("app.modules.workspaces.tutor.ai_client.generate", fake_generate)
+    response, _audit = await generate_tutor_response(
+        workspace=WorkspaceSession(
+            current_topic="Chain rule",
+            content_mode="chat",
+            status="active",
+            metadata_json={"current_phase": "explain"},
+        ),
+        event_type="text",
+        text_payload="Not yet, I need another way to see it.",
+        events=[],
+        current_phase="explain",
+        learner_language="en",
+        learner_event_metadata={
+            "interaction_type": "phase_checkpoint",
+            "checkpoint_decision": "stay",
+        },
+    )
+
+    assert response is not None
+    assert response.next_phase_ready is False
 
 
 def test_workspace_tutor_default_timeout_allows_reasoning_model(monkeypatch):
