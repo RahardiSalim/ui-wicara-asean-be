@@ -1364,12 +1364,25 @@ def _ensure_current_phase_request_visible(
         return f"{tutor_text.rstrip()}\n\n{prompt}".strip()
     if prompt:
         return tutor_text
-    fallback = _fallback_current_phase_request(
-        phase=phase,
-        topic=topic,
-        language_code=language_code,
-        learning_context=learning_context,
-    )
+    if _normalize_phase(phase) == "explore" and re.search(
+        r"\b(?:scaling factor|scale factor|twice as|faktor skala|dua kali|pola)\b",
+        tutor_text,
+        flags=re.IGNORECASE,
+    ):
+        fallback = (
+            "Sekarang terapkan faktor skala yang kamu temukan pada turunan di "
+            "contoh awalmu. Apa turunan lengkap yang kamu peroleh?"
+            if language_code == "id"
+            else "Now reapply that observed scale factor to the derivative in your "
+            "original example. What complete derivative do you get?"
+        )
+    else:
+        fallback = _fallback_current_phase_request(
+            phase=phase,
+            topic=topic,
+            language_code=language_code,
+            learning_context=learning_context,
+        )
     return f"{tutor_text.rstrip()}\n\n{fallback}".strip()
 
 

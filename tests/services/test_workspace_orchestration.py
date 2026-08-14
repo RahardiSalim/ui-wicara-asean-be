@@ -1005,6 +1005,23 @@ def test_explore_adds_a_fully_specified_numeric_question_when_model_stops_early(
     assert "by how much" in text
 
 
+def test_explore_moves_back_to_the_original_example_after_pattern_is_observed():
+    text = _ensure_current_phase_request_visible(
+        tutor_text=(
+            "Your latest comparison showed that the inside changes twice as fast. "
+            "That scaling factor is the pattern we needed."
+        ),
+        evidence_request=None,
+        phase="explore",
+        topic="Chain rule",
+        language_code="en",
+        learning_context={},
+    )
+
+    assert "reapply that observed scale factor" in text
+    assert "x=1 and x=1.1" not in text
+
+
 def test_elaborate_fallback_continues_the_current_attempt():
     text = _ensure_current_phase_request_visible(
         tutor_text="You identified the outer derivative but missed one factor.",
