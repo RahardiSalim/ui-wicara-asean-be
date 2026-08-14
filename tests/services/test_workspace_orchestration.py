@@ -895,6 +895,14 @@ def test_explain_response_always_requests_a_later_micro_check():
             "Excellent! The inner derivative is now 6x².",
             "The inner derivative is now 6x².",
         ),
+        (
+            "Great work! You compared both predictions.",
+            "You compared both predictions.",
+        ),
+        (
+            "Good try! The outer derivative is correct.",
+            "The outer derivative is correct.",
+        ),
     ],
 )
 def test_feedback_opening_is_specific_instead_of_generic_praise(raw, expected):

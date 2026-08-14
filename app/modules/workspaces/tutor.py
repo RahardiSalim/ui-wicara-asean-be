@@ -1006,7 +1006,7 @@ def _ground_feedback_opening(text: str) -> str:
     if not grounded:
         return grounded
     grounded = re.sub(
-        r"^(?:great|excellent|nice work|well done)[!,.\s:-]+",
+        r"^(?:great work|great try|good work|good try|nice work|well done|great|excellent)[!,.\s:-]+",
         "",
         grounded,
         count=1,
