@@ -539,10 +539,11 @@ async def generate_tutor_response(
         }
     )
     safe_event_metadata = learner_event_metadata or {}
-    if (
+    checkpoint_stay = (
         safe_event_metadata.get("interaction_type") == "phase_checkpoint"
         and safe_event_metadata.get("checkpoint_decision") == "stay"
-    ):
+    )
+    if checkpoint_stay:
         learning_context["checkpoint_decision"] = "stay"
 
     if event_type == "text" and _is_brief_greeting(text_payload):
@@ -702,6 +703,21 @@ async def generate_tutor_response(
             topic=topic,
         )
         audit["anti_repeat_fallback"] = True
+    if (
+        checkpoint_stay
+        and phase == "explore"
+        and re.search(
+            r"\b(?:inner|outer|inside|outside|bagian dalam|bagian luar)\b",
+            history,
+            flags=re.IGNORECASE,
+        )
+    ):
+        tutor_text = _checkpoint_stay_layer_scaffold(language_code=language_code)
+        parsed["evidence_request"] = None
+        parsed["phase_checkpoint_question"] = None
+        parsed["next_phase_opening_prompt"] = None
+        next_phase_ready = False
+        audit["checkpoint_stay_strategy"] = "layer_flow_representation"
     parsed["evidence_request"] = _limit_phase_evidence_request(
         parsed["evidence_request"],
         phase=phase,
@@ -1347,6 +1363,20 @@ def _parse_structured_tutor_output(raw_text: str) -> dict[str, Any]:
         "tool_suggestion": tool_suggestion,
         "parse_ok": True,
     }
+
+
+def _checkpoint_stay_layer_scaffold(*, language_code: str) -> str:
+    if language_code == "id":
+        return (
+            "Kita ganti representasi: tulis alurnya sebagai input → bagian dalam → "
+            "bagian luar, lalu beri label faktor perubahan pada setiap panah. Operasi apa "
+            "yang menggabungkan kedua faktor itu dari input sampai output?"
+        )
+    return (
+        "Let's switch representations: write the flow as input → inner → outer, then "
+        "label each arrow with its change factor. What operation combines those two "
+        "factors from input to output?"
+    )
 
 
 def fallback_phase_opening_prompt(

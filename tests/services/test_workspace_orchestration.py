@@ -23,6 +23,7 @@ from app.modules.workspaces.tutor import (
     _ground_checkpoint_question,
     _ground_feedback_opening,
     _build_user_instruction,
+    _checkpoint_stay_layer_scaffold,
     _limit_phase_evidence_request,
     _normalize_tutor_text,
     _parse_structured_tutor_output,
@@ -839,6 +840,14 @@ def test_generation_exhaustion_fallback_is_phase_aware(phase, expected_fragment)
     assert expected_fragment in response.text
     assert "canvas" not in response.text.lower()
     assert response.evidence_tags == []
+
+
+def test_checkpoint_stay_switches_to_a_layer_flow_representation():
+    text = _checkpoint_stay_layer_scaffold(language_code="en")
+
+    assert "input → inner → outer" in text
+    assert "change factor" in text
+    assert "x=1" not in text
 
 
 def test_explain_requires_explanation_before_micro_check_can_pass():
