@@ -267,7 +267,9 @@ _PROMPTS: dict[str, str] = {
         "complete, give one probing challenge or mini experiment in {response_language} "
         "that pushes discovery. If the learner is unsure why two effects combine, make the "
         "experiment concrete: choose a small input change, track how it changes at each "
-        "layer, compare the scale factors, and then ask the learner to reapply the observed "
+        "layer, and ask one fully specified numerical question the learner can answer. Do not "
+        "stop after merely announcing the input change. Compare the scale factors, and then "
+        "ask the learner to reapply the observed "
         "pattern to the original task. Do not jump to another analogous example when the "
         "missing issue is the causal link itself. Do not label a pattern as identified until "
         "the learner states or uses it. Do not call an Explore activity transfer. When Explore is "
@@ -1412,7 +1414,10 @@ def _fallback_current_phase_request(
                 if target
                 else f"Bagaimana kamu sekarang menangani satu contoh sederhana {topic}, dan bagian mana yang masih membuatmu ragu?"
             ),
-            "explore": "Pada contoh yang baru kamu coba, langkah atau hasil mana yang bisa kamu bandingkan untuk menemukan polanya?",
+            "explore": (
+                "Hitung nilai ekspresi bagian dalam pada x=1 dan x=1,1. "
+                "Ketika x berubah 0,1, berapa perubahan nilai bagian dalam itu?"
+            ),
             "explain": "Bagian mana dari idenya yang masih belum jelas, dan bagaimana kamu akan menjelaskan bagian itu sekarang?",
             "elaborate": "Pada contoh yang baru kamu kerjakan, langkah mana yang belum selesai dan hasil apa yang kamu dapat setelah memeriksanya?",
             "evaluate": f"Langkah apa yang masih perlu kamu periksa dalam solusi {topic} ini?",
@@ -1424,7 +1429,10 @@ def _fallback_current_phase_request(
                 if target
                 else f"How would you currently handle one simple {topic} example, and where are you still unsure?"
             ),
-            "explore": "In the example you just tried, which step or result could you compare to reveal the pattern?",
+            "explore": (
+                "Calculate the inner expression at x=1 and x=1.1. When x changes "
+                "by 0.1, by how much does that inner value change?"
+            ),
             "explain": "Which part of the idea is still unclear, and how would you explain that part now?",
             "elaborate": "In the example you just attempted, which unfinished step will you check next, and what result do you get?",
             "evaluate": f"Which step in this {topic} solution still needs checking?",

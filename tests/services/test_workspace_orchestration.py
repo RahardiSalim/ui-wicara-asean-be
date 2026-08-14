@@ -989,6 +989,20 @@ def test_engage_adds_contextual_question_when_model_omits_request():
     assert text.endswith("where are you still unsure?")
 
 
+def test_explore_adds_a_fully_specified_numeric_question_when_model_stops_early():
+    text = _ensure_current_phase_request_visible(
+        tutor_text="Let's test with a small change. Suppose x increases by 0.1 from x=1.",
+        evidence_request=None,
+        phase="explore",
+        topic="Chain rule",
+        language_code="en",
+        learning_context={},
+    )
+
+    assert "inner expression at x=1 and x=1.1" in text
+    assert "by how much" in text
+
+
 def test_elaborate_fallback_continues_the_current_attempt():
     text = _ensure_current_phase_request_visible(
         tutor_text="You identified the outer derivative but missed one factor.",
