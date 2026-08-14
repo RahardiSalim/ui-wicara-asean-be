@@ -977,6 +977,10 @@ def test_explain_response_always_requests_a_later_micro_check():
             "Good try! The outer derivative is correct.",
             "The outer derivative is correct.",
         ),
+        (
+            "Great! Let's start exploring the example.",
+            "Let's start exploring the example.",
+        ),
     ],
 )
 def test_feedback_opening_is_specific_instead_of_generic_praise(raw, expected):

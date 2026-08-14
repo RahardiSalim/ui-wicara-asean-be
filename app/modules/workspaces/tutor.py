@@ -771,6 +771,12 @@ async def generate_tutor_response(
             topic=topic,
             language_code=language_code,
         )
+    raw_opening_prompt = parsed["next_phase_opening_prompt"]
+    next_phase_opening_prompt = (
+        _ground_feedback_opening(str(raw_opening_prompt))
+        if raw_opening_prompt is not None
+        else None
+    )
     return TutorResponseRead(
         text=tutor_text,
         intent=_STAGE_INTENT.get(phase, "ask_followup"),
@@ -781,7 +787,7 @@ async def generate_tutor_response(
             phase_checkpoint_question if phase != "evaluate" else None
         ),
         next_phase_opening_prompt=(
-            parsed["next_phase_opening_prompt"] if phase != "evaluate" else None
+            next_phase_opening_prompt if phase != "evaluate" else None
         ),
         evidence_tags=parsed["evidence_tags"],
         correctness=parsed["correctness"],
