@@ -702,6 +702,13 @@ async def generate_tutor_response(
             topic=topic,
         )
         audit["anti_repeat_fallback"] = True
+    parsed["evidence_request"] = _limit_phase_evidence_request(
+        parsed["evidence_request"],
+        phase=phase,
+        topic=topic,
+        language_code=language_code,
+        learning_context=learning_context,
+    )
     has_recorded_explanation = _has_phase_evidence_tag(
         workspace_metadata,
         phase="explain",
@@ -1394,6 +1401,34 @@ def _ensure_current_phase_request_visible(
             learning_context=learning_context,
         )
     return f"{tutor_text.rstrip()}\n\n{fallback}".strip()
+
+
+def _limit_phase_evidence_request(
+    evidence_request: dict[str, Any] | None,
+    *,
+    phase: str,
+    topic: str,
+    language_code: str,
+    learning_context: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not isinstance(evidence_request, dict):
+        return evidence_request
+    request = dict(evidence_request)
+    prompt = str(request.get("prompt") or "").strip()
+    if _normalize_phase(phase) != "explore" or (
+        len(prompt) <= 280 and prompt.count("?") <= 1
+    ):
+        return request
+    request["prompt"] = _fallback_current_phase_request(
+        phase=phase,
+        topic=topic,
+        language_code=language_code,
+        learning_context=learning_context,
+    )
+    request["expected_evidence"] = (
+        "one concrete numerical observation from the current experiment"
+    )
+    return request
 
 
 def _evaluate_turn_completes_evidence(

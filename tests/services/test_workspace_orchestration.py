@@ -23,6 +23,7 @@ from app.modules.workspaces.tutor import (
     _ground_checkpoint_question,
     _ground_feedback_opening,
     _build_user_instruction,
+    _limit_phase_evidence_request,
     _normalize_tutor_text,
     _parse_structured_tutor_output,
     _resolve_tool_suggestion,
@@ -1053,6 +1054,29 @@ def test_explore_moves_back_to_the_original_example_after_pattern_is_observed():
 
     assert "reapply that observed scale factor" in text
     assert "x=1 and x=1.1" not in text
+
+
+def test_explore_splits_an_overloaded_evidence_request_into_one_action():
+    request = _limit_phase_evidence_request(
+        {
+            "type": "open_response",
+            "prompt": (
+                "Compute the inner change. What is its ratio? How does that relate to "
+                "the derivative? Then apply it to the original function and explain why "
+                "the factors multiply in your own words with another comparison."
+            ),
+            "expected_evidence": "all requested steps",
+        },
+        phase="explore",
+        topic="Chain rule",
+        language_code="en",
+        learning_context={},
+    )
+
+    assert request is not None
+    assert request["prompt"].count("?") == 1
+    assert "x=1 and x=1.1" in request["prompt"]
+    assert "original function" not in request["prompt"]
 
 
 def test_elaborate_fallback_continues_the_current_attempt():
