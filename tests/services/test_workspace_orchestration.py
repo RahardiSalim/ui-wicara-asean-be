@@ -762,9 +762,9 @@ async def test_checkpoint_decline_metadata_reaches_ai_prompt(monkeypatch):
     assert response.next_phase_ready is False
 
 
-def test_workspace_tutor_default_timeout_allows_reasoning_model(monkeypatch):
+def test_workspace_tutor_default_timeout_keeps_retries_below_frontend_cap(monkeypatch):
     monkeypatch.delenv("WICARA_WORKSPACE_TUTOR_TIMEOUT_SECONDS", raising=False)
-    assert _tutor_timeout_seconds() == 240.0
+    assert _tutor_timeout_seconds() == 140.0
 
 
 def test_explain_requires_explanation_before_micro_check_can_pass():

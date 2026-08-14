@@ -26,7 +26,8 @@ class TutorImageInput(NamedTuple):
 
 PROMPT_VERSION = "wicara_5e_natural_progression_v9"
 PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
-DEFAULT_TUTOR_TIMEOUT_SECONDS = 240.0
+# Two bounded attempts plus retry overhead must finish before the FE's 5-minute request cap.
+DEFAULT_TUTOR_TIMEOUT_SECONDS = 140.0
 MAX_SCAFFOLD_LEVEL = 6
 WORKED_EXAMPLE_SCAFFOLD_LEVEL = 3
 _TUTOR_MAX_ATTEMPTS = 2
