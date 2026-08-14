@@ -973,7 +973,7 @@ def test_current_phase_request_survives_tutor_brevity_truncation():
     assert text.endswith("How would you differentiate sin(x²) right now?")
 
 
-def test_engage_adds_contextual_question_when_model_omits_request():
+def test_engage_fallback_question_does_not_repeat_original_target():
     text = _ensure_current_phase_request_visible(
         tutor_text="The chain rule supports the curve-sketching goal from your pretest.",
         evidence_request=None,
@@ -985,7 +985,9 @@ def test_engage_adds_contextual_question_when_model_omits_request():
         },
     )
 
-    assert "Before returning to Curve sketching using derivatives" in text
+    assert text.count("curve-sketching") == 1
+    assert "Before returning" not in text
+    assert "one simple Chain rule example" in text
     assert text.endswith("where are you still unsure?")
 
 

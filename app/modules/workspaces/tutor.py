@@ -1404,16 +1404,9 @@ def _fallback_current_phase_request(
     language_code: str,
     learning_context: dict[str, Any],
 ) -> str:
-    original = learning_context.get("original_target")
-    original = original if isinstance(original, dict) else {}
-    target = str(original.get("title") or "").strip()
     if language_code == "id":
         prompts = {
-            "engage": (
-                f"Sebelum kembali ke {target}, bagaimana kamu sekarang menangani satu fungsi bertingkat sederhana, dan bagian mana yang masih membuatmu ragu?"
-                if target
-                else f"Bagaimana kamu sekarang menangani satu contoh sederhana {topic}, dan bagian mana yang masih membuatmu ragu?"
-            ),
+            "engage": f"Bagaimana kamu sekarang menangani satu contoh sederhana {topic}, dan bagian mana yang masih membuatmu ragu?",
             "explore": (
                 "Hitung nilai ekspresi bagian dalam pada x=1 dan x=1,1. "
                 "Ketika x berubah 0,1, berapa perubahan nilai bagian dalam itu?"
@@ -1424,11 +1417,7 @@ def _fallback_current_phase_request(
         }
     else:
         prompts = {
-            "engage": (
-                f"Before returning to {target}, how would you currently handle one simple nested function, and where are you still unsure?"
-                if target
-                else f"How would you currently handle one simple {topic} example, and where are you still unsure?"
-            ),
+            "engage": f"How would you currently handle one simple {topic} example, and where are you still unsure?",
             "explore": (
                 "Calculate the inner expression at x=1 and x=1.1. When x changes "
                 "by 0.1, by how much does that inner value change?"
