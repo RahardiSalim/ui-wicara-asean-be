@@ -14,6 +14,7 @@ from app.modules.workspaces.service import (
     _sanitize_learner_metadata,
 )
 from app.modules.workspaces.tutor import (
+    _evaluate_turn_completes_evidence,
     _ensure_explain_micro_check,
     _ensure_current_phase_request_visible,
     _build_user_instruction,
@@ -131,6 +132,75 @@ async def test_completed_explain_micro_check_does_not_assign_another_one(monkeyp
 
     assert response is not None
     assert "Micro-check:" not in response.text
+    assert response.evidence_request is None
+
+
+@pytest.mark.asyncio
+async def test_completed_evaluate_reflection_does_not_append_another_request(monkeypatch):
+    payload = {
+        "text": "That reflection gives you a reliable chain-rule checklist.",
+        "next_phase_ready": False,
+        "phase_reasoning": "All staged Evaluate evidence is complete.",
+        "phase_checkpoint_question": None,
+        "next_phase_opening_prompt": None,
+        "evidence_tags": ["reflection"],
+        "correctness": "correct",
+        "misconception_status": "none",
+        "confidence": 0.95,
+        "evaluation_outcome": "passed",
+        "evidence_request": {
+            "type": "open_response",
+            "prompt": "Which step still needs checking?",
+        },
+        "explanation_card": None,
+        "tool_suggestion": None,
+    }
+
+    async def fake_generate(**_kwargs):
+        return AIGenerationResponse(
+            provider="test",
+            model="test-model",
+            text=json.dumps(payload),
+            finish_reason="stop",
+        )
+
+    monkeypatch.setattr("app.modules.workspaces.tutor.ai_client.generate", fake_generate)
+    monkeypatch.setattr(
+        "app.modules.workspaces.tutor._is_repetitive_response",
+        lambda *_args: True,
+    )
+
+    def unexpected_anti_repeat(**_kwargs):
+        raise AssertionError("Completed Evaluate feedback must not become remediation.")
+
+    monkeypatch.setattr(
+        "app.modules.workspaces.tutor._anti_repeat_response",
+        unexpected_anti_repeat,
+    )
+    response, _audit = await generate_tutor_response(
+        workspace=WorkspaceSession(
+            current_topic="Chain rule",
+            content_mode="chat",
+            status="active",
+            metadata_json={
+                "current_phase": "evaluate",
+                "phase_evidence": {
+                    "evaluate": [
+                        {"tags": ["independent_attempt"]},
+                        {"tags": ["error_analysis"]},
+                    ]
+                },
+            },
+        ),
+        event_type="text",
+        text_payload="I will use that checklist next time.",
+        events=[],
+        current_phase="evaluate",
+        learner_language="en",
+    )
+
+    assert response is not None
+    assert response.text == payload["text"]
     assert response.evidence_request is None
 
 
@@ -269,6 +339,26 @@ def test_scaffold_escalates_after_repeated_verified_failure():
     assert metadata["consecutive_failures"] == 3
 
 
+def test_new_failure_does_not_lower_existing_scaffold_level():
+    metadata = _ensure_phase_metadata(
+        {"hint_level": 3, "consecutive_failures": 0}
+    )
+
+    metadata = _record_phase_evidence(
+        metadata,
+        phase="explain",
+        tutor_response=_response(
+            tags=[],
+            correctness="unknown",
+            misconception="suspected",
+        ),
+        event_type="text",
+    )
+
+    assert metadata["consecutive_failures"] == 1
+    assert metadata["hint_level"] == 3
+
+
 def test_scaffold_unwinds_after_recovery():
     metadata = _ensure_phase_metadata({})
     for _ in range(3):
@@ -355,6 +445,39 @@ def test_evaluate_gate_is_reachable_with_attempt_and_analysis():
         event_type="text",
     )
     assert _phase_is_ready(metadata, phase="evaluate") is True
+
+
+def test_evaluate_completion_suppresses_a_new_request_only_after_prior_evidence():
+    incomplete_context = {
+        "phase_evidence": {
+            "evaluate": [
+                {"tags": ["independent_attempt"]},
+            ]
+        }
+    }
+    complete_context = {
+        "phase_evidence": {
+            "evaluate": [
+                {"tags": ["independent_attempt"]},
+                {"tags": ["error_analysis"]},
+            ]
+        }
+    }
+
+    assert not _evaluate_turn_completes_evidence(
+        learning_context=incomplete_context,
+        evidence_tags=["reflection"],
+    )
+    assert _evaluate_turn_completes_evidence(
+        learning_context=complete_context,
+        evidence_tags=["reflection"],
+    )
+    assert _evaluate_turn_completes_evidence(
+        learning_context={
+            "phase_evidence": complete_context["phase_evidence"]["evaluate"]
+        },
+        evidence_tags=["reflection"],
+    )
 
 
 def test_evaluate_collects_attempt_analysis_and_reflection_across_turns():
@@ -522,6 +645,27 @@ def test_explain_response_always_requests_a_later_micro_check():
     assert "later learner turn" in request["expected_evidence"]
 
 
+def test_explain_micro_check_does_not_repeat_the_same_task_with_extra_detail():
+    tutor_text = (
+        "Now try this micro-check: differentiate cos(2x^3) using the chain rule."
+    )
+
+    text, request = _ensure_explain_micro_check(
+        tutor_text=tutor_text,
+        evidence_request={
+            "type": "micro_check",
+            "prompt": (
+                "Differentiate cos(2x^3) using the chain rule. "
+                "Write your answer step by step."
+            ),
+        },
+        language_code="en",
+    )
+
+    assert text == tutor_text
+    assert request["type"] == "micro_check"
+
+
 def test_explain_micro_check_preserves_contextual_task_without_chain_rule_bias():
     text, request = _ensure_explain_micro_check(
         tutor_text="Your explanation is correct.",
@@ -571,6 +715,41 @@ def test_engage_adds_contextual_question_when_model_omits_request():
 
     assert "Before returning to Curve sketching using derivatives" in text
     assert text.endswith("where are you still unsure?")
+
+
+def test_elaborate_fallback_continues_the_current_attempt():
+    text = _ensure_current_phase_request_visible(
+        tutor_text="You identified the outer derivative but missed one factor.",
+        evidence_request=None,
+        phase="elaborate",
+        topic="Chain rule",
+        language_code="en",
+        learning_context={},
+    )
+
+    assert "example you just attempted" in text
+    assert "one new example" not in text
+
+
+def test_current_phase_request_does_not_duplicate_an_existing_question():
+    tutor_text = (
+        "A small change passes through the inner function before the outer one. "
+        "Why does that make the two rates multiply?"
+    )
+
+    text = _ensure_current_phase_request_visible(
+        tutor_text=tutor_text,
+        evidence_request={
+            "type": "open_response",
+            "prompt": "Explain again why the inner and outer rates multiply.",
+        },
+        phase="explain",
+        topic="Chain rule",
+        language_code="en",
+        learning_context={},
+    )
+
+    assert text == tutor_text
 
 
 def test_tutor_structured_contract_rejects_punctuation_only_text():

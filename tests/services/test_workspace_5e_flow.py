@@ -69,7 +69,7 @@ async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_chec
             ),
             _tutor(
                 tags=["independent_attempt", "error_analysis", "reflection"],
-                evaluation_outcome="passed",
+                evaluation_outcome="partial",
                 evidence_request={"type": "next_module"},
             ),
             _tutor(
