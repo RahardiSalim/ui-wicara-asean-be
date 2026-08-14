@@ -1375,7 +1375,7 @@ def _ensure_current_phase_request_visible(
 ) -> str:
     request = evidence_request if isinstance(evidence_request, dict) else {}
     prompt = str(request.get("prompt") or "").strip()
-    if "?" in tutor_text:
+    if "?" in tutor_text or _contains_visible_action(tutor_text):
         return tutor_text
     if prompt and prompt.casefold() not in tutor_text.casefold():
         return f"{tutor_text.rstrip()}\n\n{prompt}".strip()
@@ -1401,6 +1401,16 @@ def _ensure_current_phase_request_visible(
             learning_context=learning_context,
         )
     return f"{tutor_text.rstrip()}\n\n{fallback}".strip()
+
+
+def _contains_visible_action(text: str) -> bool:
+    return bool(
+        re.search(
+            r"(?:^|[.!]\s+)(?:now\s+)?(?:calculate|compute|try|apply|explain|write|compare|state|identify|differentiate|solve|hitung|coba|terapkan|jelaskan|tulis|bandingkan|sebutkan|tentukan)\b",
+            str(text or ""),
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def _limit_phase_evidence_request(

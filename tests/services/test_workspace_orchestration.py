@@ -1130,6 +1130,27 @@ def test_current_phase_request_does_not_duplicate_an_existing_question():
     assert text == tutor_text
 
 
+def test_current_phase_request_does_not_duplicate_an_imperative_action():
+    tutor_text = (
+        "The inner value changed twice as fast. Now compute the actual change in "
+        "the outer function from x=1 to x=1.1."
+    )
+
+    text = _ensure_current_phase_request_visible(
+        tutor_text=tutor_text,
+        evidence_request={
+            "type": "open_response",
+            "prompt": "Calculate the inner expression again at x=1 and x=1.1.",
+        },
+        phase="explore",
+        topic="Chain rule",
+        language_code="en",
+        learning_context={},
+    )
+
+    assert text == tutor_text
+
+
 def test_tutor_structured_contract_rejects_punctuation_only_text():
     assert _tutor_payload_is_usable(
         _parse_structured_tutor_output(
