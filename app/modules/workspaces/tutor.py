@@ -1412,11 +1412,20 @@ def _ensure_current_phase_request_visible(
     prompt = str(request.get("prompt") or "").strip()
     if "?" in tutor_text or _contains_visible_action(tutor_text):
         return tutor_text
-    if prompt and prompt.casefold() not in tutor_text.casefold():
-        return f"{tutor_text.rstrip()}\n\n{prompt}".strip()
-    if prompt:
-        return tutor_text
-    if _normalize_phase(phase) == "explore" and re.search(
+    normalized_phase = _normalize_phase(phase)
+    if normalized_phase == "explore" and re.search(
+        r"\bouter (?:function|layer)\b",
+        tutor_text,
+        flags=re.IGNORECASE,
+    ):
+        fallback = (
+            "Gunakan dua nilai bagian dalam yang baru kamu temukan untuk menghitung "
+            "nilai fungsi luarnya. Berapa perubahan pada bagian luar?"
+            if language_code == "id"
+            else "Use the two inner values you just found to calculate the corresponding "
+            "outer-function values. What change do you get in the outer function?"
+        )
+    elif normalized_phase == "explore" and re.search(
         r"\b(?:scaling factor|scale factor|twice as|faktor skala|dua kali|pola)\b",
         tutor_text,
         flags=re.IGNORECASE,
@@ -1428,6 +1437,10 @@ def _ensure_current_phase_request_visible(
             else "Now reapply that observed scale factor to the derivative in your "
             "original example. What complete derivative do you get?"
         )
+    elif prompt and prompt.casefold() not in tutor_text.casefold():
+        return f"{tutor_text.rstrip()}\n\n{prompt}".strip()
+    elif prompt:
+        return tutor_text
     else:
         fallback = _fallback_current_phase_request(
             phase=phase,

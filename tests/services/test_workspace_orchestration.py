@@ -1108,6 +1108,27 @@ def test_explore_moves_back_to_the_original_example_after_pattern_is_observed():
     assert "x=1 and x=1.1" not in text
 
 
+def test_explore_moves_from_inner_change_to_outer_change_without_repeating_inner():
+    text = _ensure_current_phase_request_visible(
+        tutor_text=(
+            "The inner function changes twice as fast. Now let's see how that affects "
+            "the outer function."
+        ),
+        evidence_request={
+            "type": "open_response",
+            "prompt": "Calculate the inner expression again at x=1 and x=1.1.",
+        },
+        phase="explore",
+        topic="Chain rule",
+        language_code="en",
+        learning_context={},
+    )
+
+    assert "two inner values you just found" in text
+    assert "What change do you get in the outer function?" in text
+    assert "Calculate the inner expression" not in text
+
+
 def test_explore_splits_an_overloaded_evidence_request_into_one_action():
     request = _limit_phase_evidence_request(
         {
