@@ -1414,6 +1414,18 @@ def _ensure_current_phase_request_visible(
         return tutor_text
     normalized_phase = _normalize_phase(phase)
     if normalized_phase == "explore" and re.search(
+        r"\b(?:small (?:step|change)|input step|h\s*=|delta x|Δx)\b",
+        tutor_text,
+        flags=re.IGNORECASE,
+    ):
+        fallback = (
+            "Dengan langkah input yang baru disebut, hitung nilai bagian dalam sebelum "
+            "dan sesudah perubahan. Berapa besar perubahannya?"
+            if language_code == "id"
+            else "Using the input step just stated, calculate the inner-function value "
+            "before and after the change. By how much does it change?"
+        )
+    elif normalized_phase == "explore" and re.search(
         r"\bouter (?:function|layer)\b",
         tutor_text,
         flags=re.IGNORECASE,

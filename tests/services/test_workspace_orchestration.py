@@ -1087,8 +1087,9 @@ def test_explore_adds_a_fully_specified_numeric_question_when_model_stops_early(
         learning_context={},
     )
 
-    assert "inner expression at x=1 and x=1.1" in text
-    assert "by how much" in text
+    assert "Using the input step just stated" in text
+    assert "By how much" in text
+    assert "x=1.1" not in text
 
 
 def test_explore_moves_back_to_the_original_example_after_pattern_is_observed():
