@@ -202,6 +202,54 @@ async def test_same_turn_explanation_cannot_consume_later_micro_check(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_ready_phase_gets_contextual_checkpoint_when_model_omits_it(monkeypatch):
+    payload = {
+        "text": "You chose a simpler nested function and named what you already know.",
+        "next_phase_ready": True,
+        "phase_reasoning": "The learner accepted and shared prior knowledge.",
+        "phase_checkpoint_question": None,
+        "next_phase_opening_prompt": "Try one Chain rule example.",
+        "evidence_tags": ["challenge_accepted", "prior_knowledge_shared"],
+        "correctness": "unknown",
+        "misconception_status": "none",
+        "confidence": 0.9,
+        "evaluation_outcome": None,
+        "evidence_request": None,
+        "explanation_card": None,
+        "tool_suggestion": None,
+    }
+
+    async def fake_generate(**_kwargs):
+        return AIGenerationResponse(
+            provider="test",
+            model="test-model",
+            text=json.dumps(payload),
+            finish_reason="stop",
+        )
+
+    monkeypatch.setattr("app.modules.workspaces.tutor.ai_client.generate", fake_generate)
+    response, _audit = await generate_tutor_response(
+        workspace=WorkspaceSession(
+            current_topic="Chain rule",
+            content_mode="chat",
+            status="active",
+            metadata_json={"current_phase": "engage"},
+        ),
+        event_type="text",
+        text_payload="I want to investigate a simpler example.",
+        events=[],
+        current_phase="engage",
+        learner_language="en",
+    )
+
+    assert response is not None
+    assert response.next_phase_ready is True
+    assert response.phase_checkpoint_question == (
+        "Does this starting point for Chain rule match what you want to investigate?"
+    )
+
+
+@pytest.mark.asyncio
 async def test_completed_evaluate_error_analysis_does_not_append_another_request(monkeypatch):
     payload = {
         "text": "That correction identifies the missing inner derivative.",

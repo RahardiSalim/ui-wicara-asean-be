@@ -761,6 +761,16 @@ async def generate_tutor_response(
     next_actions = list(_STAGE_ACTIONS.get(phase, ["ask_followup"]))
     if tool_suggestion is not None and "request_visualization" not in next_actions:
         next_actions.append("request_visualization")
+    phase_checkpoint_question = _ground_checkpoint_question(
+        parsed["phase_checkpoint_question"],
+        language_code=language_code,
+    )
+    if next_phase_ready and phase != "evaluate" and not phase_checkpoint_question:
+        phase_checkpoint_question = _fallback_phase_checkpoint_question(
+            phase=phase,
+            topic=topic,
+            language_code=language_code,
+        )
     return TutorResponseRead(
         text=tutor_text,
         intent=_STAGE_INTENT.get(phase, "ask_followup"),
@@ -768,12 +778,7 @@ async def generate_tutor_response(
         next_phase_ready=bool(next_phase_ready) if phase != "evaluate" else False,
         phase_reasoning=phase_reasoning,
         phase_checkpoint_question=(
-            _ground_checkpoint_question(
-                parsed["phase_checkpoint_question"],
-                language_code=language_code,
-            )
-            if phase != "evaluate"
-            else None
+            phase_checkpoint_question if phase != "evaluate" else None
         ),
         next_phase_opening_prompt=(
             parsed["next_phase_opening_prompt"] if phase != "evaluate" else None
@@ -1098,6 +1103,30 @@ def _ground_checkpoint_question(
         flags=re.IGNORECASE,
     )
     return grounded
+
+
+def _fallback_phase_checkpoint_question(
+    *,
+    phase: str,
+    topic: str,
+    language_code: str,
+) -> str:
+    normalized = _normalize_phase(phase)
+    if language_code == "id":
+        prompts = {
+            "engage": f"Apakah titik awal tentang {topic} ini sesuai dengan yang ingin kamu selidiki?",
+            "explore": f"Apakah perbandingan terakhirmu mendukung pola yang kamu temukan untuk {topic}?",
+            "explain": f"Apakah contoh terpisah tadi mendukung penjelasanmu sendiri tentang {topic}?",
+            "elaborate": f"Apakah penerapan yang baru kamu koreksi menunjukkan cara memakai {topic} pada contoh baru?",
+        }
+    else:
+        prompts = {
+            "engage": f"Does this starting point for {topic} match what you want to investigate?",
+            "explore": f"Does your latest comparison support the pattern you found for {topic}?",
+            "explain": f"Did the separate example support your own explanation of {topic}?",
+            "elaborate": f"Does your corrected application show how to use {topic} on a new example?",
+        }
+    return prompts.get(normalized, f"Does your latest work support moving forward with {topic}?")
 
 
 def _enforce_brevity(text: str, *, phase: str) -> str:
