@@ -679,6 +679,14 @@ async def generate_tutor_response(
     )
     tutor_text = _normalize_tutor_text(parsed["text"])
     tutor_text = _ground_feedback_opening(tutor_text)
+    tutor_text = _ensure_initial_target_bridge(
+        tutor_text,
+        phase=phase,
+        events=events,
+        topic=topic,
+        language_code=language_code,
+        learning_context=learning_context,
+    )
     next_phase_ready = parsed["next_phase_ready"]
     phase_reasoning = parsed["phase_reasoning"]
     if not tutor_text:
@@ -1076,6 +1084,52 @@ def _ground_feedback_opening(text: str) -> str:
     if grounded:
         grounded = grounded[0].upper() + grounded[1:]
     return grounded
+
+
+def _ensure_initial_target_bridge(
+    text: str,
+    *,
+    phase: str,
+    events: list[WorkspaceEvent],
+    topic: str,
+    language_code: str,
+    learning_context: dict[str, Any],
+) -> str:
+    if _normalize_phase(phase) != "engage" or any(
+        event.actor_type == "tutor" for event in events
+    ):
+        return text
+    original = learning_context.get("original_target")
+    original = original if isinstance(original, dict) else {}
+    target = str(original.get("title") or "").strip()
+    if not target or _concept_is_mentioned(target, text):
+        return text
+    bridge = (
+        f"{topic} ini nantinya akan mendukung {target}."
+        if language_code == "id"
+        else f"This work on {topic} will support {target} later."
+    )
+    return f"{bridge} {text}".strip()
+
+
+def _concept_is_mentioned(concept: str, text: str) -> bool:
+    concept_terms = [
+        term for term in re.findall(r"[a-z0-9]+", concept.casefold()) if len(term) >= 4
+    ]
+    text_terms = re.findall(r"[a-z0-9]+", text.casefold())
+    if not concept_terms:
+        return concept.casefold() in text.casefold()
+    matches = sum(
+        1
+        for concept_term in concept_terms
+        if any(
+            text_term.startswith(concept_term[:5])
+            or concept_term.startswith(text_term[:5])
+            for text_term in text_terms
+            if len(text_term) >= 4
+        )
+    )
+    return matches / len(concept_terms) >= 0.6
 
 
 def _ground_checkpoint_question(

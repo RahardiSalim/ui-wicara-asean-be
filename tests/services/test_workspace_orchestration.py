@@ -22,6 +22,7 @@ from app.modules.workspaces.tutor import (
     _ensure_current_phase_request_visible,
     _ground_checkpoint_question,
     _ground_feedback_opening,
+    _ensure_initial_target_bridge,
     _build_user_instruction,
     _checkpoint_stay_layer_scaffold,
     _limit_phase_evidence_request,
@@ -994,6 +995,36 @@ def test_explain_response_always_requests_a_later_micro_check():
 )
 def test_feedback_opening_is_specific_instead_of_generic_praise(raw, expected):
     assert _ground_feedback_opening(raw) == expected
+
+
+def test_first_engage_response_gets_data_driven_target_bridge_when_missing():
+    text = _ensure_initial_target_bridge(
+        "Let's inspect what changes inside the composition.",
+        phase="engage",
+        events=[],
+        topic="Chain rule",
+        language_code="en",
+        learning_context={
+            "original_target": {"title": "Curve sketching using derivatives"}
+        },
+    )
+
+    assert text.startswith(
+        "This work on Chain rule will support Curve sketching using derivatives later."
+    )
+    assert text.count("Curve sketching using derivatives") == 1
+
+    paraphrased = _ensure_initial_target_bridge(
+        "This will help us sketch curves using derivatives later.",
+        phase="engage",
+        events=[],
+        topic="Chain rule",
+        language_code="en",
+        learning_context={
+            "original_target": {"title": "Curve sketching using derivatives"}
+        },
+    )
+    assert paraphrased == "This will help us sketch curves using derivatives later."
 
 
 def test_confidence_checkpoint_is_rewritten_as_evidence_check():
