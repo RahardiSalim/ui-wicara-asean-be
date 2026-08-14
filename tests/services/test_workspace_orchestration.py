@@ -19,6 +19,8 @@ from app.modules.workspaces.tutor import (
     _evaluate_turn_completes_evidence,
     _ensure_explain_micro_check,
     _ensure_current_phase_request_visible,
+    _ground_checkpoint_question,
+    _ground_feedback_opening,
     _build_user_instruction,
     _normalize_tutor_text,
     _parse_structured_tutor_output,
@@ -123,7 +125,18 @@ async def test_completed_explain_micro_check_does_not_assign_another_one(monkeyp
             current_topic="Chain rule",
             content_mode="chat",
             status="active",
-            metadata_json={"current_phase": "explain"},
+            metadata_json={
+                "current_phase": "explain",
+                "phase_evidence": {
+                    "explain": [
+                        {
+                            "tags": ["learner_explanation"],
+                            "confidence": 0.9,
+                            "misconception_status": "none",
+                        }
+                    ]
+                },
+            },
         ),
         event_type="text",
         text_payload="The derivative is 1/sqrt(2x+1).",
@@ -135,6 +148,55 @@ async def test_completed_explain_micro_check_does_not_assign_another_one(monkeyp
     assert response is not None
     assert "Micro-check:" not in response.text
     assert response.evidence_request is None
+
+
+@pytest.mark.asyncio
+async def test_same_turn_explanation_cannot_consume_later_micro_check(monkeypatch):
+    payload = {
+        "text": "Your explanation connects both rates.",
+        "next_phase_ready": True,
+        "phase_reasoning": "The learner explained and applied the rule.",
+        "phase_checkpoint_question": "Are you confident that both rates multiply?",
+        "next_phase_opening_prompt": "Apply it to another problem.",
+        "evidence_tags": ["learner_explanation", "micro_check_correct"],
+        "correctness": "correct",
+        "misconception_status": "resolved",
+        "confidence": 0.95,
+        "evaluation_outcome": None,
+        "evidence_request": None,
+        "explanation_card": None,
+        "tool_suggestion": None,
+    }
+
+    async def fake_generate(**_kwargs):
+        return AIGenerationResponse(
+            provider="test",
+            model="test-model",
+            text=json.dumps(payload),
+            finish_reason="stop",
+        )
+
+    monkeypatch.setattr("app.modules.workspaces.tutor.ai_client.generate", fake_generate)
+    response, _audit = await generate_tutor_response(
+        workspace=WorkspaceSession(
+            current_topic="Chain rule",
+            content_mode="chat",
+            status="active",
+            metadata_json={"current_phase": "explain"},
+        ),
+        event_type="text",
+        text_payload="Sequential scale factors multiply, so the derivative is 6x.",
+        events=[],
+        current_phase="explain",
+        learner_language="en",
+    )
+
+    assert response is not None
+    assert response.evidence_tags == ["learner_explanation"]
+    assert response.next_phase_ready is False
+    assert "Micro-check:" in response.text
+    assert response.evidence_request is not None
+    assert response.evidence_request["type"] == "micro_check"
 
 
 @pytest.mark.asyncio
@@ -258,6 +320,8 @@ def test_elaborate_prompt_preserves_demonstrated_method_and_isolates_new_error()
     assert "Preserve any method the learner already demonstrated" in prompt
     assert "recompute only that step" in prompt
     assert "do not claim the earlier concept was forgotten" in prompt
+    assert "do not add analysis or skills from the original target" in prompt
+    assert "Never mention or test the original target in a phase opening" in prompt
 
 
 def test_feedback_policy_forbids_generic_or_ungrounded_mastery_claims():
@@ -814,6 +878,43 @@ def test_explain_response_always_requests_a_later_micro_check():
     assert "Micro-check:" in text
     assert request["type"] == "micro_check"
     assert "later learner turn" in request["expected_evidence"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            "Great, comparing both examples reveals the missing factor.",
+            "Comparing both examples reveals the missing factor.",
+        ),
+        (
+            "You've correctly applied the chain rule to this example.",
+            "Your latest response applied the chain rule to this example.",
+        ),
+        (
+            "Excellent! The inner derivative is now 6x².",
+            "The inner derivative is now 6x².",
+        ),
+    ],
+)
+def test_feedback_opening_is_specific_instead_of_generic_praise(raw, expected):
+    assert _ground_feedback_opening(raw) == expected
+
+
+def test_confidence_checkpoint_is_rewritten_as_evidence_check():
+    assert _ground_checkpoint_question(
+        "Are you confident that the derivative is 2x cos(x²) and you can explain why?",
+        language_code="en",
+    ) == (
+        "Does your latest work support this conclusion: the derivative is "
+        "2x cos(x²)?"
+    )
+    assert _ground_checkpoint_question(
+        "After correcting 2x, are you confident in using the rule independently?",
+        language_code="en",
+    ) == (
+        "After correcting 2x, does that evidence support using the rule independently?"
+    )
 
 
 def test_explain_micro_check_does_not_repeat_the_same_task_with_extra_detail():

@@ -225,6 +225,9 @@ Teaching rules:
 - Avoid repeating the same opening pattern (for example repeated "Imagine..." hooks).
 - Treat the supplied learning context as authoritative. Ground the activity in the
   diagnosed evidence and remember the learner's original target.
+- Mention the original target only in the first Engage response and in final passed
+  Evaluate feedback. Explore, Explain, Elaborate, micro-checks, and phase-opening tasks
+  must stay inside the current module and must not test original-target subskills.
 - Keep every task inside its current 5E phase. Never display a task for the next phase
   before the learner confirms the transition.
 - Report evidence only when the latest learner message actually demonstrates it.
@@ -304,7 +307,8 @@ _PROMPTS: dict[str, str] = {
         "For a correct solution return both transfer_attempt and transfer_correct and set "
         "next_phase_ready=true. If it is an incorrect attempt, return transfer_attempt and one "
         "focused hint. Only when there is no substantive solution yet, give one new application "
-        "task in {response_language}. Call it an application task, never a micro-check. When "
+        "task in {response_language}. Keep it strictly within the current topic; do not add "
+        "analysis or skills from the original target. Call it an application task, never a micro-check. When "
         "ready, give feedback only and put the independent Evaluate task in "
         "next_phase_opening_prompt."
     ),
@@ -410,8 +414,8 @@ def _build_user_instruction(
         "- When next_phase_ready=true, next_phase_opening_prompt must contain exactly one "
         "concrete question or task that starts the next phase. It is stored until the learner "
         "confirms the transition, so do not repeat it in text or evidence_request.\n"
-        "- The opening prompt must connect the evidence just demonstrated to the diagnosed "
-        "gap and current concept.\n"
+        "- The opening prompt must connect the evidence just demonstrated to the current "
+        "concept only. Never mention or test the original target in a phase opening.\n"
         "- For Explore, give a concrete discovery task. For Explain, ask for an own-words "
         "explanation. For Elaborate, give an application task and never label it micro-check. "
         "For Evaluate, give one independent problem without hints or its answer.\n"
@@ -668,6 +672,7 @@ async def generate_tutor_response(
         }
     )
     tutor_text = _normalize_tutor_text(parsed["text"])
+    tutor_text = _ground_feedback_opening(tutor_text)
     next_phase_ready = parsed["next_phase_ready"]
     phase_reasoning = parsed["phase_reasoning"]
     if not tutor_text:
@@ -692,6 +697,24 @@ async def generate_tutor_response(
             topic=topic,
         )
         audit["anti_repeat_fallback"] = True
+    has_recorded_explanation = _has_phase_evidence_tag(
+        workspace_metadata,
+        phase="explain",
+        tag="learner_explanation",
+    )
+    if (
+        phase == "explain"
+        and "micro_check_correct" in parsed["evidence_tags"]
+        and not has_recorded_explanation
+    ):
+        parsed["evidence_tags"] = [
+            tag
+            for tag in parsed["evidence_tags"]
+            if tag != "micro_check_correct"
+        ]
+        next_phase_ready = False
+        parsed["phase_checkpoint_question"] = None
+        parsed["next_phase_opening_prompt"] = None
     if (
         phase == "explain"
         and "learner_explanation" in parsed["evidence_tags"]
@@ -733,7 +756,12 @@ async def generate_tutor_response(
         next_phase_ready=bool(next_phase_ready) if phase != "evaluate" else False,
         phase_reasoning=phase_reasoning,
         phase_checkpoint_question=(
-            parsed["phase_checkpoint_question"] if phase != "evaluate" else None
+            _ground_checkpoint_question(
+                parsed["phase_checkpoint_question"],
+                language_code=language_code,
+            )
+            if phase != "evaluate"
+            else None
         ),
         next_phase_opening_prompt=(
             parsed["next_phase_opening_prompt"] if phase != "evaluate" else None
@@ -968,6 +996,89 @@ def _greeting_response(*, language_code: str, topic: str) -> str:
     if language_code == "id":
         return f"Halo, siap belajar {topic}. Apa yang sudah kamu ketahui tentang topik ini?"
     return f"Hi, ready to learn {topic}. What do you already know about this topic?"
+
+
+def _ground_feedback_opening(text: str) -> str:
+    grounded = str(text or "").strip()
+    if not grounded:
+        return grounded
+    grounded = re.sub(
+        r"^(?:great|excellent|nice work|well done)[!,.\s:-]+",
+        "",
+        grounded,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    replacements = (
+        (r"^you(?:'|’)ve correctly seen\s+", "Your latest comparison showed "),
+        (r"^you(?:'|’)ve correctly applied\s+", "Your latest response applied "),
+        (r"^you(?:'|’)ve correctly identified\s+", "Your latest response identified "),
+        (r"^you(?:'|’)ve correctly explained\s+", "Your latest response explained "),
+        (r"^you(?:'|’)ve correctly corrected\s+", "Your latest response corrected "),
+    )
+    for pattern, replacement in replacements:
+        updated = re.sub(
+            pattern,
+            replacement,
+            grounded,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if updated != grounded:
+            grounded = updated
+            break
+    if grounded:
+        grounded = grounded[0].upper() + grounded[1:]
+    return grounded
+
+
+def _ground_checkpoint_question(
+    question: str | None,
+    *,
+    language_code: str,
+) -> str | None:
+    grounded = str(question or "").strip()
+    if not grounded:
+        return None
+    if language_code == "id":
+        leading = re.match(
+            r"^apakah kamu (?:sudah |merasa )?yakin bahwa\s+(.+?)\??$",
+            grounded,
+            flags=re.IGNORECASE,
+        )
+        if leading:
+            statement = leading.group(1).rstrip(" ?.")
+            return f"Apakah hasil terakhirmu mendukung kesimpulan bahwa {statement}?"
+        grounded = re.sub(
+            r",\s*apakah kamu (?:sudah |merasa )?yakin (?:bahwa|untuk)\s+",
+            ", apakah bukti itu mendukung ",
+            grounded,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        return grounded
+
+    leading = re.match(
+        r"^(?:are you|do you feel) (?:now )?confident that\s+(.+?)\??$",
+        grounded,
+        flags=re.IGNORECASE,
+    )
+    if leading:
+        statement = re.sub(
+            r"\s+and (?:that )?you can explain why$",
+            "",
+            leading.group(1).rstrip(" ?."),
+            flags=re.IGNORECASE,
+        )
+        return f"Does your latest work support this conclusion: {statement}?"
+    grounded = re.sub(
+        r",\s*(?:are you|do you feel) (?:now )?confident (?:that|in)\s+",
+        ", does that evidence support ",
+        grounded,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    return grounded
 
 
 def _enforce_brevity(text: str, *, phase: str) -> str:
