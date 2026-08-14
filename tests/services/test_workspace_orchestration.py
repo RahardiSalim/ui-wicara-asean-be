@@ -14,6 +14,7 @@ from app.modules.workspaces.service import (
     _sanitize_learner_metadata,
 )
 from app.modules.workspaces.tutor import (
+    _SYSTEM_INSTRUCTION,
     _evaluate_turn_completes_evidence,
     _ensure_explain_micro_check,
     _ensure_current_phase_request_visible,
@@ -222,6 +223,56 @@ def test_explore_prompt_defines_phase_specific_evidence_rubric():
     assert "Bad: 'Have you understood the learning goal" in prompt
     assert "Do not call an Explore activity transfer" in prompt
     assert "put the Explain opening in next_phase_opening_prompt" in prompt
+    assert "choose a small input change" in prompt
+    assert "Do not label a pattern as identified" in prompt
+
+
+def test_explain_prompt_teaches_after_repeated_conceptual_confusion():
+    prompt = _build_user_instruction(
+        "explain",
+        "Chain rule",
+        "Student: I know both derivatives, but multiplication feels arbitrary.",
+        "I still cannot explain why the rates multiply instead of add.",
+        learner_language="en",
+        response_language="English",
+        learning_context={"scaffold_level": 2},
+    )
+
+    assert "stop eliciting and teach the missing conceptual model" in prompt
+    assert "rather than asking for the same explanation again" in prompt
+    assert "Treat a learner hypothesis" in _SYSTEM_INSTRUCTION
+
+
+def test_elaborate_prompt_preserves_demonstrated_method_and_isolates_new_error():
+    prompt = _build_user_instruction(
+        "elaborate",
+        "Chain rule",
+        "Student: I multiplied the outer and inner derivatives correctly before.",
+        "The inner derivative of 2x^3 is 2x^2.",
+        learner_language="en",
+        response_language="English",
+        learning_context={"scaffold_level": 1},
+    )
+
+    assert "Preserve any method the learner already demonstrated" in prompt
+    assert "recompute only that step" in prompt
+    assert "do not claim the earlier concept was forgotten" in prompt
+
+
+def test_feedback_policy_forbids_generic_or_ungrounded_mastery_claims():
+    prompt = _build_user_instruction(
+        "explore",
+        "Chain rule",
+        "(no prior conversation)",
+        "Maybe the inner derivative should multiply, but I need to test it.",
+        learner_language="en",
+        response_language="English",
+        learning_context={"scaffold_level": 0},
+    )
+
+    assert "Ground feedback in the latest learner action" in _SYSTEM_INSTRUCTION
+    assert 'Do not open with generic praise such as "Excellent!"' in _SYSTEM_INSTRUCTION
+    assert "tentative" in _SYSTEM_INSTRUCTION
 
 
 def test_engage_prompt_uses_diagnosis_and_keeps_explore_task_hidden():
@@ -240,7 +291,8 @@ def test_engage_prompt_uses_diagnosis_and_keeps_explore_task_hidden():
         },
     )
 
-    assert "connect the diagnosed prerequisite gap" in prompt
+    assert "current prerequisite will later support the original target" in prompt
+    assert "Mention the original target only on that first turn" in prompt
     assert "bridges the hook directly to a concrete example" in prompt
     assert "text must contain feedback" in prompt
     assert "must not ask another learning question" in prompt
@@ -729,6 +781,22 @@ def test_elaborate_fallback_continues_the_current_attempt():
 
     assert "example you just attempted" in text
     assert "one new example" not in text
+
+
+def test_phase_opening_fallback_does_not_repeat_original_target_mid_lesson():
+    from app.modules.workspaces.tutor import fallback_phase_opening_prompt
+
+    text = fallback_phase_opening_prompt(
+        phase="explore",
+        topic="Chain rule",
+        learner_language="en",
+        learning_context={
+            "original_target": {"title": "Curve sketching using derivatives"}
+        },
+    )
+
+    assert "Curve sketching" not in text
+    assert text.startswith("Try one Chain rule example")
 
 
 def test_current_phase_request_does_not_duplicate_an_existing_question():

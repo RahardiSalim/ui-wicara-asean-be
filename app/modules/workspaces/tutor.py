@@ -24,7 +24,7 @@ class TutorImageInput(NamedTuple):
     mime_type: str
 
 
-PROMPT_VERSION = "wicara_5e_contextual_phase_handoff_v8"
+PROMPT_VERSION = "wicara_5e_natural_progression_v9"
 PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
 DEFAULT_TUTOR_TIMEOUT_SECONDS = 240.0
 MAX_SCAFFOLD_LEVEL = 6
@@ -203,10 +203,25 @@ Language rule:
 
 Teaching rules:
 - Be concise: avoid long generic monologues.
-- End with one guiding question or clear next action.
+- Use 1-3 short sentences and end with at most one guiding question or clear next action.
 - Lead the student to discover the answer. Obey the scaffold policy supplied with each
   turn: it states the current backend scaffold level and what you may reveal at it.
 - Be warm, encouraging, and precise.
+- Treat a learner hypothesis, guess, or request for a simpler example as tentative. Do
+  not call it understanding, mastery, or a correctly identified rule until the learner
+  has supported it with reasoning or a successful application.
+- Ground feedback in the latest learner action. Name only what changed or was
+  demonstrated in that message. Do not open with generic praise such as "Excellent!",
+  "You've correctly identified...", or "You've shown a solid understanding...".
+- Preserve demonstrated progress. If earlier evidence shows that one skill is already
+  working, keep that skill stable in the next task and isolate the remaining error. Do
+  not reintroduce a resolved misconception unless the latest learner work actually
+  demonstrates it again.
+- If the learner repeats the same conceptual confusion, change teaching strategy instead
+  of paraphrasing the same question: move from diagnosis to a concrete small-change,
+  input-output, comparison, or visual model. For a calculation error, preserve the
+  correct structure and isolate only the uncertain calculation. For terminology
+  confusion, give one short definition plus an example.
 - Avoid repeating the same opening pattern (for example repeated "Imagine..." hooks).
 - Treat the supplied learning context as authoritative. Ground the activity in the
   diagnosed evidence and remember the learner's original target.
@@ -230,10 +245,12 @@ _PROMPTS: dict[str, str] = {
         "Conversation so far:\n{history}\n\n"
         "Student latest message: {message}\n\n"
         "Respond in {response_language} with 1-2 short sentences.\n"
-        "If this is the first engage turn, explicitly connect the diagnosed prerequisite "
-        "gap to the original learning target before using one brief hook. Do not invent a "
-        "specific mistake that is absent from the diagnosis.\n"
-        "If this is not the first engage turn, do NOT start a new generic scenario; directly respond to the student's message.\n"
+        "If this is the first engage turn, use one natural sentence explaining that the "
+        "current prerequisite will later support the original target. Do not claim the "
+        "learner said they wanted that target, and do not invent a mistake absent from the "
+        "diagnosis. Mention the original target only on that first turn.\n"
+        "If this is not the first engage turn, do NOT mention the original target again or "
+        "start a new generic scenario; respond directly to the student's message.\n"
         "Until the learner has shared prior knowledge, end with one focused question that "
         "bridges the hook directly to a concrete example of the current topic.\n"
         "Do NOT explain the full concept yet."
@@ -245,7 +262,12 @@ _PROMPTS: dict[str, str] = {
         "Student: {message}\n\n"
         "Assess the learner's response to the current Explore task. While Explore is not "
         "complete, give one probing challenge or mini experiment in {response_language} "
-        "that pushes discovery. Do not call an Explore activity transfer. When Explore is "
+        "that pushes discovery. If the learner is unsure why two effects combine, make the "
+        "experiment concrete: choose a small input change, track how it changes at each "
+        "layer, compare the scale factors, and then ask the learner to reapply the observed "
+        "pattern to the original task. Do not jump to another analogous example when the "
+        "missing issue is the causal link itself. Do not label a pattern as identified until "
+        "the learner states or uses it. Do not call an Explore activity transfer. When Explore is "
         "complete, give feedback only; put the Explain opening in "
         "next_phase_opening_prompt. Keep it 1-2 sentences."
     ),
@@ -254,7 +276,12 @@ _PROMPTS: dict[str, str] = {
         "Stage: Explain\n"
         "Conversation so far:\n{history}\n\n"
         "Student: {message}\n\n"
-        "First elicit the learner's explanation in their own words. If the latest message "
+        "First elicit the learner's explanation in their own words only after the history "
+        "shows they successfully applied the discovered model. If they explicitly say they "
+        "still cannot explain the reason, stop eliciting and teach the missing conceptual "
+        "model concisely (for example, sequential changes act as consecutive scale factors), "
+        "then ask one concrete application question rather than asking for the same "
+        "explanation again. If the latest message "
         "itself demonstrates learner_explanation, give a concise grounded formal explanation "
         "and end with exactly one concrete micro-check for the next learner turn. Also return "
         "that task in evidence_request with type=micro_check. Do not mark micro_check_correct "
@@ -271,7 +298,10 @@ _PROMPTS: dict[str, str] = {
         "Student: {message}\n\n"
         "First inspect the latest student message. If it is a substantive solution to the "
         "previous application task, assess that exact solution; do not replace it with another "
-        "task. For a correct solution return both transfer_attempt and transfer_correct and set "
+        "task. Preserve any method the learner already demonstrated. If the method structure "
+        "is right but one calculation is wrong, say that the structure remains right and ask "
+        "the learner to recompute only that step; do not claim the earlier concept was forgotten. "
+        "For a correct solution return both transfer_attempt and transfer_correct and set "
         "next_phase_ready=true. If it is an incorrect attempt, return transfer_attempt and one "
         "focused hint. Only when there is no substantive solution yet, give one new application "
         "task in {response_language}. Call it an application task, never a micro-check. When "
@@ -285,11 +315,13 @@ _PROMPTS: dict[str, str] = {
         "Student answer: {message}\n\n"
         "Respond in {response_language}. Collect evaluation evidence naturally across turns. "
         "First assess an independent solution. On the next turn ask the learner to identify "
-        "and correct one plausible error. Only after that ask for a short reflection on the "
-        "strategy they will reuse. Request only the next missing item shown by phase_evidence; "
+        "and correct one plausible error. Independent work plus error analysis completes the "
+        "evaluation; reflection is optional and must never be requested as a required extra "
+        "turn. Request only the next missing item shown by phase_evidence; "
         "do not ask the learner to recite evidence labels. If incorrect, give a hint without "
-        "revealing the answer. When evaluation_outcome=passed, give final feedback without a "
-        "question and return evidence_request=null."
+        "revealing the answer. When evaluation_outcome=passed, give concise final feedback "
+        "without a question, connect the demonstrated prerequisite back to the original "
+        "learning target once, and return evidence_request=null."
     ),
     "chat": (
         "Topic: {topic}\n"
@@ -390,8 +422,8 @@ def _build_user_instruction(
         f"- Current-phase evidence rubric: {_PHASE_EVIDENCE_GUIDANCE.get(current_phase, '')}\n"
         "- correctness: correct|partial|incorrect|unknown.\n"
         "- misconception_status: none|suspected|active|resolved.\n"
-        "- In Evaluate, evaluation_outcome is passed only with an independent attempt, "
-        "error analysis, and reflection; otherwise use partial, misconception, or continue.\n"
+        "- In Evaluate, evaluation_outcome is passed only with an independent attempt and "
+        "error analysis; reflection is optional. Otherwise use partial, misconception, or continue.\n"
         "- In Elaborate, whenever transfer_correct is returned, also return transfer_attempt; "
         "a correct transfer necessarily includes an attempt.\n"
         "- evidence_request describes a task in the current phase only and must not claim a "
@@ -961,10 +993,24 @@ def _anti_repeat_response(
     if language_code == "id":
         prompts = {
             "engage": f"Kita fokus pada jawabanmu tentang {topic}. Bagian mana yang paling ingin kamu uji?",
-            "explore": "Coba satu pendekatan berbeda dan sebutkan pola yang kamu temukan.",
-            "explain": "Jelaskan idenya dengan kata-katamu sendiri, lalu beri satu alasan.",
-            "elaborate": "Terapkan ide yang sama pada situasi baru dan jelaskan perubahan langkahnya.",
-            "evaluate": "Periksa langkah yang paling kamu ragukan, lalu revisi dengan alasan.",
+            "explore": (
+                "Kita ganti cara: pilih perubahan kecil pada input, ikuti perubahan itu "
+                "melewati setiap lapisan, lalu bandingkan faktor skalanya. Apa yang berubah "
+                "pada lapisan pertama?"
+            ),
+            "explain": (
+                "Jangan ulangi rumusnya dulu: satu perubahan melewati dua tahap berurutan, "
+                "jadi skala tahap pertama memengaruhi input tahap kedua. Coba terapkan model "
+                "dua tahap itu pada contoh yang baru dibahas."
+            ),
+            "elaborate": (
+                "Pertahankan struktur yang sudah benar dan periksa hanya hitungan bagian "
+                "dalam yang masih meragukan. Berapa hasil langkah itu setelah dihitung ulang?"
+            ),
+            "evaluate": (
+                "Pertahankan jawabanmu dan periksa satu langkah yang paling meragukan tanpa "
+                "mengganti seluruh metode. Apa koreksi spesifiknya?"
+            ),
         }
         return prompts.get(
             phase,
@@ -974,10 +1020,23 @@ def _anti_repeat_response(
         )
     prompts = {
         "engage": f"Let's focus on your answer about {topic}. Which part would you test first?",
-        "explore": "Try a different approach and name the pattern you observe.",
-        "explain": "State the idea in your own words and give one reason.",
-        "elaborate": "Apply the idea to a new situation and explain what changes.",
-        "evaluate": "Recheck the step you trust least, then revise it with a reason.",
+        "explore": (
+            "Let's switch methods: choose a small input change, track it through each "
+            "layer, and compare the scale factors. What changes at the first layer?"
+        ),
+        "explain": (
+            "Pause the formula: one change passes through two consecutive stages, so the "
+            "first scale changes what reaches the second. Apply that two-stage model to "
+            "the example we just discussed."
+        ),
+        "elaborate": (
+            "Keep the structure that already works and recompute only the uncertain inner "
+            "step. What does that step give after you check it?"
+        ),
+        "evaluate": (
+            "Keep your solution and inspect only the step you trust least instead of "
+            "replacing the whole method. What specific correction is needed?"
+        ),
     }
     return prompts.get(
         phase,
@@ -1104,18 +1163,9 @@ def fallback_phase_opening_prompt(
     """Return a phase-local opening only for legacy handoffs without an AI prompt."""
     normalized = _normalize_phase(phase)
     language_code = normalize_language_code(learner_language)
-    context = learning_context if isinstance(learning_context, dict) else {}
-    original = context.get("original_target")
-    original = original if isinstance(original, dict) else {}
-    target = str(original.get("title") or "").strip()
     if language_code == "id":
         prompts = {
-            "explore": (
-                f"Sebelum kembali ke {target}, coba satu contoh {topic}: pisahkan "
-                "bagian-bagiannya dan ceritakan pola yang kamu temukan."
-                if target
-                else f"Coba satu contoh {topic}: pisahkan bagian-bagiannya dan ceritakan pola yang kamu temukan."
-            ),
+            "explore": f"Coba satu contoh {topic}: pisahkan bagian-bagiannya dan ceritakan pola yang kamu temukan.",
             "explain": (
                 f"Dari pola yang baru kamu temukan, bagaimana kamu menjelaskan {topic} dengan kata-katamu sendiri?"
             ),
@@ -1128,11 +1178,7 @@ def fallback_phase_opening_prompt(
         }
     else:
         prompts = {
-            "explore": (
-                f"Before returning to {target}, try one {topic} example: separate its parts and describe the pattern you find."
-                if target
-                else f"Try one {topic} example: separate its parts and describe the pattern you find."
-            ),
+            "explore": f"Try one {topic} example: separate its parts and describe the pattern you find.",
             "explain": (
                 f"From the pattern you just found, how would you explain {topic} in your own words?"
             ),
