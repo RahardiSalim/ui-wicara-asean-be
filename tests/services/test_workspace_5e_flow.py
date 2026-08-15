@@ -33,7 +33,7 @@ from app.modules.workspaces.service import (
 
 
 @pytest.mark.asyncio
-async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_check(
+async def test_workspace_runs_guided_elaborate_then_hands_to_posttest(
     db_session,
     monkeypatch,
 ):
@@ -58,24 +58,17 @@ async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_chec
             _tutor(
                 tags=["micro_check_correct"],
                 next_phase_opening_prompt=(
-                    "Application: differentiate (3x - 2)^5 and justify each factor."
+                    "Guided application 1: differentiate (3x - 2)^5 and justify each factor."
                 ),
             ),
             _tutor(
                 tags=["transfer_attempt", "transfer_correct"],
-                next_phase_opening_prompt=(
-                    "Independently differentiate (x^2 + 4)^3 without hints."
-                ),
             ),
             _tutor(
-                tags=["independent_attempt", "error_analysis", "reflection"],
-                evaluation_outcome="partial",
-                evidence_request={"type": "next_module"},
+                tags=["transfer_attempt", "transfer_correct"],
             ),
             _tutor(
-                tags=["error_analysis", "reflection"],
-                evaluation_outcome="passed",
-                evidence_request={"type": "next_module"},
+                tags=["transfer_attempt", "transfer_correct"],
             ),
         ]
     )
@@ -91,11 +84,11 @@ async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_chec
         "I know a composite function puts one function inside another.",
         "I compared the inner and outer changes.",
         "The inner change also affects the result.",
-        "The outer derivative must be multiplied by the inner derivative.",
-        "The missing factor is the derivative of the inner function.",
-        "For a new composite function I multiply both derivative layers.",
-        "My independent derivative is 6x(x^2+4)^2.",
-        "A likely error is forgetting the 2x inner derivative; that would remove the 6x factor.",
+            "The outer derivative must be multiplied by the inner derivative.",
+            "The missing factor is the derivative of the inner function.",
+            "For guided application one I multiply both derivative layers.",
+            "For guided application two I still multiply the outer and inner rates.",
+            "For guided application three I can do the full chain rule without help.",
     ):
         result = await append_workspace_event(
             db_session,
@@ -127,11 +120,16 @@ async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_chec
         "explain",
         "explain",
         "elaborate",
-        "evaluate",
-        "evaluate",
+        "elaborate",
+        "elaborate",
         "evaluate",
     ]
-    final_workspace = result.workspace
+    final_workspace = read_workspace(
+        db_session,
+        user=scenario["user"],
+        workspace_id=workspace_id,
+    )
+    assert final_workspace is not None
     assert final_workspace.posttest_eligible is True
     assert final_workspace.phase_evidence["explain"][0]["tags"] == [
         "learner_explanation"
@@ -150,8 +148,8 @@ async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_chec
         "explain",
         "explain",
         "elaborate",
-        "evaluate",
-        "evaluate",
+        "elaborate",
+        "elaborate",
     ]
     phase_openings = [
         event
@@ -162,22 +160,20 @@ async def test_workspace_runs_full_5e_evidence_cycle_without_skipping_micro_chec
         "explore",
         "explain",
         "elaborate",
-        "evaluate",
     ]
     assert [event.text_payload for event in phase_openings] == [
         "Try differentiating (2x + 1)^3 and tell me what changes at each layer.",
         "Using the pattern you found, explain the chain rule in your own words.",
-        "Application: differentiate (3x - 2)^5 and justify each factor.",
-        "Independently differentiate (x^2 + 4)^3 without hints.",
+        "Guided application 1: differentiate (3x - 2)^5 and justify each factor.",
     ]
-    assert [
-        record["tags"] for record in final_workspace.phase_evidence["evaluate"]
-    ] == [
-        ["independent_attempt", "reflection"],
-        ["error_analysis", "reflection"],
+    assert [record["tags"] for record in final_workspace.phase_evidence["elaborate"]] == [
+        ["transfer_attempt", "transfer_correct"],
+        ["transfer_attempt", "transfer_correct"],
+        ["transfer_attempt", "transfer_correct"],
     ]
     assert result.tutor_response is not None
-    assert result.tutor_response.evaluation_outcome == "passed"
+    assert result.tutor_response.next_phase_ready is True
+    assert result.tutor_response.next_phase_opening_prompt is None
     assert result.tutor_response.evidence_request is None
 
 

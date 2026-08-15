@@ -923,6 +923,28 @@ def test_elaborate_correct_transfer_implies_transfer_attempt():
     assert sanitized.evidence_tags == ["transfer_attempt", "transfer_correct"]
 
 
+def test_elaborate_requires_three_correct_guided_applications():
+    metadata = _ensure_phase_metadata({"current_phase": "elaborate"})
+    response = _response(tags=["transfer_attempt", "transfer_correct"])
+
+    for _ in range(2):
+        metadata = _record_phase_evidence(
+            metadata,
+            phase="elaborate",
+            tutor_response=response,
+            event_type="text",
+        )
+    assert _phase_is_ready(metadata, phase="elaborate") is False
+
+    metadata = _record_phase_evidence(
+        metadata,
+        phase="elaborate",
+        tutor_response=response,
+        event_type="text",
+    )
+    assert _phase_is_ready(metadata, phase="elaborate") is True
+
+
 def test_learner_metadata_cannot_claim_correctness_or_phase_state():
     sanitized = _sanitize_learner_metadata(
         {
@@ -1196,8 +1218,8 @@ def test_elaborate_fallback_continues_the_current_attempt():
         learning_context={},
     )
 
-    assert "example you just attempted" in text
-    assert "one new example" not in text
+    assert "Guided practice step 1" in text
+    assert "example you just attempted" not in text
 
 
 def test_phase_opening_fallback_does_not_repeat_original_target_mid_lesson():
