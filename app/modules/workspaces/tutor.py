@@ -678,7 +678,6 @@ async def generate_tutor_response(
         }
     )
     tutor_text = _normalize_tutor_text(parsed["text"])
-    tutor_text = _ground_feedback_opening(tutor_text)
     tutor_text = _ensure_initial_target_bridge(
         tutor_text,
         phase=phase,
@@ -797,7 +796,7 @@ async def generate_tutor_response(
         )
     raw_opening_prompt = parsed["next_phase_opening_prompt"]
     next_phase_opening_prompt = (
-        _ground_feedback_opening(str(raw_opening_prompt))
+        str(raw_opening_prompt).strip()
         if raw_opening_prompt is not None
         else None
     )
@@ -1050,40 +1049,6 @@ def _greeting_response(*, language_code: str, topic: str) -> str:
     if language_code == "id":
         return f"Halo, siap belajar {topic}. Apa yang sudah kamu ketahui tentang topik ini?"
     return f"Hi, ready to learn {topic}. What do you already know about this topic?"
-
-
-def _ground_feedback_opening(text: str) -> str:
-    grounded = str(text or "").strip()
-    if not grounded:
-        return grounded
-    grounded = re.sub(
-        r"^(?:great work|great try|good work|good try|nice work|well done|great|excellent)[!,.\s:-]+",
-        "",
-        grounded,
-        count=1,
-        flags=re.IGNORECASE,
-    )
-    replacements = (
-        (r"^you(?:'|’)ve correctly seen\s+", "Your latest comparison showed "),
-        (r"^you(?:'|’)ve correctly applied\s+", "Your latest response applied "),
-        (r"^you(?:'|’)ve correctly identified\s+", "Your latest response identified "),
-        (r"^you(?:'|’)ve correctly explained\s+", "Your latest response explained "),
-        (r"^you(?:'|’)ve correctly corrected\s+", "Your latest response corrected "),
-    )
-    for pattern, replacement in replacements:
-        updated = re.sub(
-            pattern,
-            replacement,
-            grounded,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-        if updated != grounded:
-            grounded = updated
-            break
-    if grounded:
-        grounded = grounded[0].upper() + grounded[1:]
-    return grounded
 
 
 def _ensure_initial_target_bridge(

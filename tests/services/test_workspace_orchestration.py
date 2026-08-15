@@ -21,7 +21,6 @@ from app.modules.workspaces.tutor import (
     _ensure_explain_micro_check,
     _ensure_current_phase_request_visible,
     _ground_checkpoint_question,
-    _ground_feedback_opening,
     _ensure_initial_target_bridge,
     _build_user_instruction,
     _checkpoint_stay_layer_scaffold,
@@ -962,39 +961,6 @@ def test_explain_response_always_requests_a_later_micro_check():
     assert "Micro-check:" in text
     assert request["type"] == "micro_check"
     assert "later learner turn" in request["expected_evidence"]
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        (
-            "Great, comparing both examples reveals the missing factor.",
-            "Comparing both examples reveals the missing factor.",
-        ),
-        (
-            "You've correctly applied the chain rule to this example.",
-            "Your latest response applied the chain rule to this example.",
-        ),
-        (
-            "Excellent! The inner derivative is now 6x².",
-            "The inner derivative is now 6x².",
-        ),
-        (
-            "Great work! You compared both predictions.",
-            "You compared both predictions.",
-        ),
-        (
-            "Good try! The outer derivative is correct.",
-            "The outer derivative is correct.",
-        ),
-        (
-            "Great! Let's start exploring the example.",
-            "Let's start exploring the example.",
-        ),
-    ],
-)
-def test_feedback_opening_is_specific_instead_of_generic_praise(raw, expected):
-    assert _ground_feedback_opening(raw) == expected
 
 
 def test_first_engage_response_gets_data_driven_target_bridge_when_missing():
