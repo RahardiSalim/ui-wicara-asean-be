@@ -1410,6 +1410,7 @@ def fallback_phase_opening_prompt(
     language_code = normalize_language_code(learner_language)
     if language_code == "id":
         prompts = {
+            "engage": f"Kita mulai dari {topic}. Apa yang sudah kamu perhatikan atau ingat tentang topik ini?",
             "explore": f"Coba satu contoh {topic}: pisahkan bagian-bagiannya dan ceritakan pola yang kamu temukan.",
             "explain": (
                 f"Dari pola yang baru kamu temukan, bagaimana kamu menjelaskan {topic} dengan kata-katamu sendiri?"
@@ -1423,6 +1424,7 @@ def fallback_phase_opening_prompt(
         }
     else:
         prompts = {
+            "engage": f"Let's start with {topic}. What do you already notice or remember about it?",
             "explore": f"Try one {topic} example: separate its parts and describe the pattern you find.",
             "explain": (
                 f"From the pattern you just found, how would you explain {topic} in your own words?"

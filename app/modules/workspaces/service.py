@@ -212,6 +212,50 @@ def create_or_resume_workspace(
         dict(workspace.metadata_json or {}),
         created_at=workspace.created_at,
     )
+    # A newly opened workspace starts with the tutor's Engage invitation. The
+    # learner should not have to manufacture a synthetic "I'm ready" message
+    # just to make the conversation appear.
+    if (
+        not workspace.events
+        and str(workspace.metadata_json.get("current_phase") or "engage") == "engage"
+    ):
+        session.flush()
+        opening_prompt = fallback_phase_opening_prompt(
+            phase="engage",
+            topic=workspace.current_topic or "this module",
+            learner_language=language,
+            learning_context=workspace.metadata_json.get("learning_context"),
+        )
+        session.add(
+            WorkspaceEvent(
+                workspace_session_id=workspace.id,
+                event_index=1,
+                event_type="text",
+                actor_type="tutor",
+                text_payload=opening_prompt,
+                image_asset_id=None,
+                media_artifact_id=None,
+                input_event_id=None,
+                metadata_json={
+                    "source": "workspace_initial_opening",
+                    "intent": "phase_opening",
+                    "next_actions": [],
+                    "next_phase_ready": False,
+                    "phase_reasoning": "initial_engage_opening",
+                    "phase_checkpoint_question": None,
+                    "next_phase_opening_prompt": None,
+                    "evidence_tags": [],
+                    "correctness": "unknown",
+                    "misconception_status": "none",
+                    "confidence": 1.0,
+                    "evaluation_outcome": None,
+                    "evidence_request": None,
+                    "explanation_card": None,
+                    "tool_suggestion": None,
+                    "phase": "engage",
+                },
+            )
+        )
     module.status = "active"
     track.status = "active"
 

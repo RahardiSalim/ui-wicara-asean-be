@@ -212,7 +212,7 @@ def test_repeated_visual_request_reuses_active_media_job(db_session, monkeypatch
     )
     event = WorkspaceEvent(
         workspace_session_id=workspace.id,
-        event_index=1,
+        event_index=2,
         event_type="media_generated",
         actor_type="system",
         text_payload="",
@@ -276,7 +276,7 @@ def test_ready_media_adds_one_reflection_prompt_without_phase_evidence(db_sessio
     db_session.add(
         WorkspaceEvent(
             workspace_session_id=workspace.id,
-            event_index=1,
+            event_index=2,
             event_type="media_generated",
             actor_type="system",
             text_payload="",

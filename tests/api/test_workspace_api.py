@@ -33,7 +33,10 @@ def test_workspace_events_are_persisted_in_module_timeline(client, monkeypatch):
     assert workspace["current_topic"] == "Prerequisite checkpoint"
     assert workspace["content_mode"] == "chat"
     assert workspace["status"] == "active"
-    assert workspace["events"] == []
+    assert len(workspace["events"]) == 1
+    assert workspace["events"][0]["actor_type"] == "tutor"
+    assert workspace["events"][0]["event_index"] == 1
+    assert workspace["events"][0]["metadata"]["source"] == "workspace_initial_opening"
 
     resume_response = client.post(
         "/api/v1/workspaces",
@@ -61,7 +64,7 @@ def test_workspace_events_are_persisted_in_module_timeline(client, monkeypatch):
     text_payload = text_response.json()
     assert text_payload["event"]["event_type"] == "text"
     assert text_payload["event"]["actor_type"] == "learner"
-    assert text_payload["event"]["event_index"] == 1
+    assert text_payload["event"]["event_index"] == 2
     assert text_payload["event"]["input_event_id"]
     assert text_payload["event"]["text_payload"] == "Kenapa limit harus dicek sebelum turunan?"
     assert text_payload["event"]["metadata"] == {
@@ -70,10 +73,10 @@ def test_workspace_events_are_persisted_in_module_timeline(client, monkeypatch):
     }
     assert text_payload["tutor_response"]["intent"] in {"ask_followup", "spark_curiosity"}
     assert text_payload["tutor_response"]["text"]
-    assert len(text_payload["workspace"]["events"]) == 2
-    assert text_payload["workspace"]["events"][1]["actor_type"] == "tutor"
-    assert text_payload["workspace"]["events"][1]["event_type"] == "text"
-    assert text_payload["workspace"]["events"][1]["text_payload"]
+    assert len(text_payload["workspace"]["events"]) == 3
+    assert text_payload["workspace"]["events"][2]["actor_type"] == "tutor"
+    assert text_payload["workspace"]["events"][2]["event_type"] == "text"
+    assert text_payload["workspace"]["events"][2]["text_payload"]
 
     # Workspace events may only reference an image asset the caller owns, so mint
     # a real one instead of inventing an id.
@@ -95,7 +98,7 @@ def test_workspace_events_are_persisted_in_module_timeline(client, monkeypatch):
 
     assert image_response.status_code == 200
     image_payload = image_response.json()
-    assert image_payload["event"]["event_index"] == 3
+    assert image_payload["event"]["event_index"] == 4
     assert image_payload["event"]["input_event_id"]
     assert image_payload["event"]["image_asset_id"] == image_asset_id
     assert image_payload["workspace"]["last_image_asset_id"] == image_asset_id
@@ -106,10 +109,12 @@ def test_workspace_events_are_persisted_in_module_timeline(client, monkeypatch):
     assert [event["event_type"] for event in loaded["events"]] == [
         "text",
         "text",
+        "text",
         "canvas_sent",
         "text",
     ]
     assert [event["actor_type"] for event in loaded["events"]] == [
+        "tutor",
         "learner",
         "tutor",
         "learner",
