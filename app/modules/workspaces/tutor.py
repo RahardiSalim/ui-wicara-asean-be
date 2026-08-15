@@ -24,7 +24,7 @@ class TutorImageInput(NamedTuple):
     mime_type: str
 
 
-PROMPT_VERSION = "wicara_5e_natural_progression_v9"
+PROMPT_VERSION = "wicara_5e_natural_progression_v10"
 PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
 # Two bounded attempts plus retry overhead must finish before the FE's 5-minute request cap.
 DEFAULT_TUTOR_TIMEOUT_SECONDS = 140.0
@@ -65,11 +65,11 @@ _PHASE_TRANSITION_CRITERIA: dict[str, str] = {
         "micro-check in a later turn, so they are ready for application."
     ),
     "elaborate": (
-        "Learner can apply the concept to a new/contextualized case with reasonable reasoning, "
-        "so they are ready for evaluation."
+        "Learner has completed three progressively less-scaffolded application attempts in "
+        "this phase, with the concept applied correctly across the set."
     ),
     "evaluate": (
-        "Final stage. Keep evaluating understanding and giving feedback."
+        "Final stage is the independent posttest; do not create another tutor exercise."
     ),
 }
 
@@ -91,8 +91,9 @@ _PHASE_EVIDENCE_GUIDANCE: dict[str, str] = {
         "later turn."
     ),
     "elaborate": (
-        "Use transfer_attempt for a substantive attempt on a new application. Add "
-        "transfer_correct when that application is correct."
+        "Use transfer_attempt for each substantive application attempt in this phase. Add "
+        "transfer_correct when that application is correct. The learner must complete "
+        "three progressively less-scaffolded applications before this phase is ready."
     ),
     "evaluate": (
         "Use independent_attempt, error_analysis, and reflection only when each is explicitly "
@@ -302,18 +303,23 @@ _PROMPTS: dict[str, str] = {
         "Stage: Elaborate\n"
         "Conversation so far:\n{history}\n\n"
         "Student: {message}\n\n"
+        "This phase uses a short guided practice ladder. The authoritative learning context "
+        "contains elaborate_application_count and elaborate_success_count.\n"
+        "Start with a supported application, then reduce the hint on each new problem. "
+        "Keep giving a new problem until three applications have been completed correctly. "
+        "Do not call any of these tasks a micro-check.\n"
         "First inspect the latest student message. If it is a substantive solution to the "
         "previous application task, assess that exact solution; do not replace it with another "
         "task. Preserve any method the learner already demonstrated. If the method structure "
         "is right but one calculation is wrong, say that the structure remains right and ask "
         "the learner to recompute only that step; do not claim the earlier concept was forgotten. "
-        "For a correct solution return both transfer_attempt and transfer_correct and set "
-        "next_phase_ready=true. If it is an incorrect attempt, return transfer_attempt and one "
-        "focused hint. Only when there is no substantive solution yet, give one new application "
-        "task in {response_language}. Keep it strictly within the current topic; do not add "
-        "analysis or skills from the original target. Call it an application task, never a micro-check. When "
-        "ready, give feedback only and put the independent Evaluate task in "
-        "next_phase_opening_prompt."
+        "For a correct solution return both transfer_attempt and transfer_correct. Set "
+        "next_phase_ready=true only after the context shows three correct applications. "
+        "If it is an incorrect attempt, return transfer_attempt and one focused hint. Only "
+        "when there is no substantive solution yet, give one new guided application task in "
+        "{response_language}. Keep it strictly within the current topic; do not add analysis "
+        "or skills from the original target. When the third application is correct, give "
+        "feedback only and leave next_phase_opening_prompt null; the next step is the posttest."
     ),
     "evaluate": (
         "Topic: {topic}\n"
@@ -415,13 +421,17 @@ def _build_user_instruction(
         "- When next_phase_ready=true, text must contain feedback about the learner's "
         "completed current-phase work only. It must not ask another learning question.\n"
         "- When next_phase_ready=true, next_phase_opening_prompt must contain exactly one "
-        "concrete question or task that starts the next phase. It is stored until the learner "
+        "concrete question or task that starts the next phase, except when the current phase "
+        "is Elaborate and its three guided applications are complete; in that case leave it "
+        "null because the posttest starts next. The prompt is stored until the learner "
         "confirms the transition, so do not repeat it in text or evidence_request.\n"
         "- The opening prompt must connect the evidence just demonstrated to the current "
         "concept only. Never mention or test the original target in a phase opening.\n"
         "- For Explore, give a concrete discovery task. For Explain, ask for an own-words "
-        "explanation. For Elaborate, give an application task and never label it micro-check. "
-        "For Evaluate, give one independent problem without hints or its answer.\n"
+        "explanation. For Elaborate, give the next guided application and never label it "
+        "micro-check; after three correct applications, give feedback only and leave the "
+        "opening null because the posttest is next. For legacy Evaluate, give one independent "
+        "problem without hints or its answer.\n"
         "- When next_phase_ready=false or current phase is Evaluate, return "
         "next_phase_opening_prompt=null.\n\n"
         "Evidence contract:\n"
@@ -429,8 +439,9 @@ def _build_user_instruction(
         f"- Current-phase evidence rubric: {_PHASE_EVIDENCE_GUIDANCE.get(current_phase, '')}\n"
         "- correctness: correct|partial|incorrect|unknown.\n"
         "- misconception_status: none|suspected|active|resolved.\n"
-        "- In Evaluate, evaluation_outcome is passed only with an independent attempt and "
-        "error analysis; reflection is optional. Otherwise use partial, misconception, or continue.\n"
+        "- In legacy Evaluate, evaluation_outcome is passed only with an independent attempt "
+        "and error analysis; reflection is optional. Otherwise use partial, misconception, "
+        "or continue.\n"
         "- In Elaborate, whenever transfer_correct is returned, also return transfer_attempt; "
         "a correct transfer necessarily includes an attempt.\n"
         "- evidence_request describes a task in the current phase only and must not claim a "
@@ -538,6 +549,22 @@ async def generate_tutor_response(
             ),
         }
     )
+    if phase == "elaborate":
+        elaborate_records = learning_context.get("phase_evidence")
+        if not isinstance(elaborate_records, list):
+            elaborate_records = []
+        learning_context["elaborate_application_count"] = sum(
+            1
+            for record in elaborate_records
+            if isinstance(record, dict)
+            and "transfer_attempt" in (record.get("tags") or [])
+        )
+        learning_context["elaborate_success_count"] = sum(
+            1
+            for record in elaborate_records
+            if isinstance(record, dict)
+            and "transfer_correct" in (record.get("tags") or [])
+        )
     safe_event_metadata = learner_event_metadata or {}
     checkpoint_stay = (
         safe_event_metadata.get("interaction_type") == "phase_checkpoint"
@@ -1416,7 +1443,7 @@ def fallback_phase_opening_prompt(
                 f"Dari pola yang baru kamu temukan, bagaimana kamu menjelaskan {topic} dengan kata-katamu sendiri?"
             ),
             "elaborate": (
-                f"Sekarang terapkan {topic} pada satu contoh baru dan tunjukkan alasan untuk setiap langkahmu."
+                f"Sekarang kita latihan {topic} bertahap. Mulai dari contoh baru ini dan tunjukkan alasan untuk setiap langkahmu."
             ),
             "evaluate": (
                 f"Kerjakan satu contoh baru tentang {topic} secara mandiri dan tuliskan langkah lengkapmu tanpa petunjuk."
@@ -1430,7 +1457,7 @@ def fallback_phase_opening_prompt(
                 f"From the pattern you just found, how would you explain {topic} in your own words?"
             ),
             "elaborate": (
-                f"Now apply {topic} to one new example and justify each step."
+                f"Now we will practise {topic} in a short guided ladder. Start with this new example and justify each step."
             ),
             "evaluate": (
                 f"Solve one new {topic} example independently and show your complete reasoning without hints."
@@ -1583,6 +1610,11 @@ def _fallback_current_phase_request(
     language_code: str,
     learning_context: dict[str, Any],
 ) -> str:
+    application_count = max(
+        0,
+        int(learning_context.get("elaborate_application_count") or 0),
+    )
+    application_step = application_count + 1
     if language_code == "id":
         prompts = {
             "engage": f"Bagaimana kamu sekarang menangani satu contoh sederhana {topic}, dan bagian mana yang masih membuatmu ragu?",
@@ -1591,7 +1623,10 @@ def _fallback_current_phase_request(
                 "Ketika x berubah 0,1, berapa perubahan nilai bagian dalam itu?"
             ),
             "explain": "Bagian mana dari idenya yang masih belum jelas, dan bagaimana kamu akan menjelaskan bagian itu sekarang?",
-            "elaborate": "Pada contoh yang baru kamu kerjakan, langkah mana yang belum selesai dan hasil apa yang kamu dapat setelah memeriksanya?",
+            "elaborate": (
+                f"Latihan bertahap langkah {application_step}: terapkan konsep pada "
+                "contoh baru ini dan tunjukkan alasan untuk setiap langkahmu."
+            ),
             "evaluate": f"Langkah apa yang masih perlu kamu periksa dalam solusi {topic} ini?",
         }
     else:
@@ -1602,7 +1637,10 @@ def _fallback_current_phase_request(
                 "by 0.1, by how much does that inner value change?"
             ),
             "explain": "Which part of the idea is still unclear, and how would you explain that part now?",
-            "elaborate": "In the example you just attempted, which unfinished step will you check next, and what result do you get?",
+            "elaborate": (
+                f"Guided practice step {application_step}: apply the concept to this "
+                "new example and show the reason for each step."
+            ),
             "evaluate": f"Which step in this {topic} solution still needs checking?",
         }
     return prompts.get(_normalize_phase(phase), f"What would you try next with {topic}?")

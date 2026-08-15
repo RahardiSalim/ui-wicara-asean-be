@@ -76,9 +76,10 @@ _DEFAULT_PHASE_MIN_TURNS: dict[str, int] = {
     "engage": 2,
     "explore": 1,
     "explain": 1,
-    "elaborate": 1,
+    "elaborate": 3,
     "evaluate": 1,
 }
+_ELABORATE_REQUIRED_APPLICATIONS = 3
 _LEGACY_DEFAULT_PHASE_MIN_TURNS: dict[str, int] = {
     "engage": 1,
     "explore": 2,
@@ -376,53 +377,62 @@ def advance_workspace_phase(
             f"Minimum {min_turns} learner turns required for phase '{current_phase}'."
         )
 
-    opening_prompt = _pending_phase_opening_prompt(
-        workspace,
-        current_phase=current_phase,
-    )
-    if not opening_prompt:
-        opening_prompt = fallback_phase_opening_prompt(
-            phase=next_phase,
-            topic=workspace.current_topic or "this module",
-            learner_language=_preferred_language(user),
-            learning_context=metadata.get("learning_context"),
+    posttest_handoff = next_phase == "evaluate"
+    opening_prompt = None
+    if not posttest_handoff:
+        opening_prompt = _pending_phase_opening_prompt(
+            workspace,
+            current_phase=current_phase,
         )
+        if not opening_prompt:
+            opening_prompt = fallback_phase_opening_prompt(
+                phase=next_phase,
+                topic=workspace.current_topic or "this module",
+                learner_language=_preferred_language(user),
+                learning_context=metadata.get("learning_context"),
+            )
     metadata = _advance_metadata_to_phase(metadata, next_phase=next_phase)
     workspace.metadata_json = _ensure_phase_metadata(
         metadata,
         created_at=workspace.created_at,
     )
-    workspace.updated_at = datetime.now(UTC)
-    session.add(
-        WorkspaceEvent(
-            workspace_session_id=workspace.id,
-            event_index=_next_event_index(session, workspace_id=workspace.id),
-            event_type="text",
-            actor_type="tutor",
-            text_payload=opening_prompt,
-            image_asset_id=None,
-            media_artifact_id=None,
-            input_event_id=None,
-            metadata_json={
-                "source": "workspace_phase_opening",
-                "intent": "phase_opening",
-                "next_actions": [],
-                "next_phase_ready": False,
-                "phase_reasoning": f"learner_confirmed_transition_from_{current_phase}",
-                "phase_checkpoint_question": None,
-                "next_phase_opening_prompt": None,
-                "evidence_tags": [],
-                "correctness": "unknown",
-                "misconception_status": "none",
-                "confidence": 1.0,
-                "evaluation_outcome": None,
-                "evidence_request": None,
-                "explanation_card": None,
-                "tool_suggestion": None,
-                "phase": next_phase,
-            },
+    if posttest_handoff:
+        workspace.metadata_json["posttest_eligible"] = True
+        workspace.metadata_json["posttest_handoff_reason"] = (
+            "guided_elaborate_complete"
         )
-    )
+    workspace.updated_at = datetime.now(UTC)
+    if opening_prompt:
+        session.add(
+            WorkspaceEvent(
+                workspace_session_id=workspace.id,
+                event_index=_next_event_index(session, workspace_id=workspace.id),
+                event_type="text",
+                actor_type="tutor",
+                text_payload=opening_prompt,
+                image_asset_id=None,
+                media_artifact_id=None,
+                input_event_id=None,
+                metadata_json={
+                    "source": "workspace_phase_opening",
+                    "intent": "phase_opening",
+                    "next_actions": [],
+                    "next_phase_ready": False,
+                    "phase_reasoning": f"learner_confirmed_transition_from_{current_phase}",
+                    "phase_checkpoint_question": None,
+                    "next_phase_opening_prompt": None,
+                    "evidence_tags": [],
+                    "correctness": "unknown",
+                    "misconception_status": "none",
+                    "confidence": 1.0,
+                    "evaluation_outcome": None,
+                    "evidence_request": None,
+                    "explanation_card": None,
+                    "tool_suggestion": None,
+                    "phase": next_phase,
+                },
+            )
+        )
     session.commit()
 
     workspace = _load_workspace(session, user=user, workspace_id=workspace_id)
@@ -446,7 +456,9 @@ def start_posttest(
         created_at=workspace.created_at,
     )
     if not bool(metadata.get("posttest_eligible", False)):
-        raise ValueError("Posttest is not eligible yet. Reach Evaluate phase first.")
+        raise ValueError(
+            "Posttest is not eligible yet. Complete the guided Elaborate practice first."
+        )
 
     track, module = _resolve_owned_track_module(
         session,
@@ -514,7 +526,7 @@ def start_posttest(
         refreshed_metadata["phase_transition_pending"] = False
     refreshed_metadata["posttest_trigger"] = {
         "status": "ready" if generation_ready else "generating",
-        "reason": "evaluate_evidence_verified",
+        "reason": "guided_elaborate_complete",
         "learning_goal_id": str(track.learning_goal_id),
         "track_id": str(track.id),
         "module_id": str(module.id),
@@ -910,7 +922,13 @@ async def append_workspace_event(
     tutor_degraded = bool(ai_audit.get("degraded", False))
     if tutor_response is not None:
         next_phase_opening_prompt = tutor_response.next_phase_opening_prompt
-        if phase_ready and current_phase != "evaluate" and not next_phase_opening_prompt:
+        if (
+            phase_ready
+            and current_phase != "evaluate"
+            and next_phase_opening_prompt is None
+            and _PHASE_SEQUENCE[_PHASE_SEQUENCE.index(current_phase) + 1]
+            != "evaluate"
+        ):
             phase_index = _PHASE_SEQUENCE.index(current_phase)
             next_phase_opening_prompt = fallback_phase_opening_prompt(
                 phase=_PHASE_SEQUENCE[phase_index + 1],
@@ -918,6 +936,10 @@ async def append_workspace_event(
                 learner_language=_preferred_language(user),
                 learning_context=metadata_json.get("learning_context"),
             )
+        if phase_ready and current_phase == "elaborate":
+            # Elaborate now hands directly to the independent posttest. Do not
+            # expose or persist a synthetic Evaluate exercise in the workspace.
+            next_phase_opening_prompt = None
         tutor_response = tutor_response.model_copy(
             update={
                 "next_phase_ready": phase_ready and current_phase != "evaluate",
@@ -1842,6 +1864,29 @@ def _current_evaluate_evidence_tags(
 def _phase_is_ready(metadata: dict[str, Any], *, phase: str) -> bool:
     if metadata.get("phase_readiness_recheck_required") == phase:
         return False
+    if phase == "elaborate":
+        evidence_by_phase = metadata.get("phase_evidence")
+        records = (
+            evidence_by_phase.get("elaborate", [])
+            if isinstance(evidence_by_phase, dict)
+            else []
+        )
+        if not isinstance(records, list):
+            return False
+        valid_records = [
+            record
+            for record in records
+            if isinstance(record, dict)
+            and float(record.get("confidence") or 0.0) >= _EVIDENCE_CONFIDENCE_FLOOR
+            and str(record.get("misconception_status") or "none") != "active"
+            and isinstance(record.get("tags"), list)
+        ]
+        attempts = sum("transfer_attempt" in record["tags"] for record in valid_records)
+        successes = sum("transfer_correct" in record["tags"] for record in valid_records)
+        return (
+            attempts >= _ELABORATE_REQUIRED_APPLICATIONS
+            and successes >= _ELABORATE_REQUIRED_APPLICATIONS
+        )
     tags = _recorded_phase_tags(metadata, phase=phase)
     requirements = _PHASE_REQUIRED_EVIDENCE.get(phase, ())
     return bool(requirements) and all(bool(tags & alternatives) for alternatives in requirements)
