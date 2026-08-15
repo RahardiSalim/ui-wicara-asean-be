@@ -487,6 +487,33 @@ def test_phase_gate_requires_phase_specific_evidence():
     assert _phase_is_ready(metadata, phase="explain") is False
 
 
+def test_explore_recovery_keeps_the_initial_attempt_after_misconception_resolves():
+    metadata = _ensure_phase_metadata({})
+    metadata = _record_phase_evidence(
+        metadata,
+        phase="explore",
+        tutor_response=_response(
+            tags=["exploration_attempt"],
+            correctness="partial",
+            misconception="active",
+        ),
+        event_type="text",
+    )
+    assert _phase_is_ready(metadata, phase="explore") is False
+
+    metadata = _record_phase_evidence(
+        metadata,
+        phase="explore",
+        tutor_response=_response(
+            tags=["pattern_identified"],
+            correctness="correct",
+            misconception="resolved",
+        ),
+        event_type="text",
+    )
+    assert _phase_is_ready(metadata, phase="explore") is True
+
+
 def test_scaffold_escalates_after_repeated_verified_failure():
     metadata = _ensure_phase_metadata({})
     levels = []

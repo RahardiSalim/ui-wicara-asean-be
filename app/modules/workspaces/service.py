@@ -1763,11 +1763,17 @@ def _recorded_phase_tags(metadata: dict[str, Any], *, phase: str) -> set[str]:
             continue
         if float(record.get("confidence") or 0.0) < _EVIDENCE_CONFIDENCE_FLOOR:
             continue
-        if str(record.get("misconception_status") or "none") == "active":
-            continue
         raw_tags = record.get("tags")
-        if isinstance(raw_tags, list):
-            tags.update(str(tag) for tag in raw_tags)
+        if not isinstance(raw_tags, list):
+            continue
+        if str(record.get("misconception_status") or "none") == "active":
+            # An Explore attempt remains useful evidence that the learner engaged
+            # with the task after a later response resolves the misconception.
+            # It cannot by itself satisfy the pattern requirement.
+            if phase == "explore" and "exploration_attempt" in raw_tags:
+                tags.add("exploration_attempt")
+            continue
+        tags.update(str(tag) for tag in raw_tags)
     return tags
 
 
