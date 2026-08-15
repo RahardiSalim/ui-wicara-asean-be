@@ -75,6 +75,8 @@ def test_fresh_prompt_uses_curriculum_evidence_misconceptions_and_guidance():
     assert "backend assigns and shuffles A/B/C/D labels" in prompt
     assert "never assign option labels yourself" in prompt
     assert "Never return self-correction, drafting notes" in prompt
+    assert "under 120 characters" in prompt
+    assert "Options are answer choices, not mini-solutions" in prompt
     assert "finalizes immediately" not in prompt
     assert "Prerequisite checks happen only" not in prompt
 

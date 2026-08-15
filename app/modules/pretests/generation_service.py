@@ -1084,6 +1084,8 @@ Question quality requirements:
 - Difficulty must come from the reasoning, not from reading burden. Do not ask the learner to verify or describe an entire multi-part analysis in one question (e.g., "which statement correctly describes the whole curve" combining monotonicity, extrema, concavity, and inflection points all at once) — that forces every option into a long paragraph and tests reading stamina instead of the target skill.
 - Narrow the stem to one specific analytic decision (e.g., only monotonicity on a stated interval, or only the location of one extremum, or only concavity on a stated interval). Make that single decision genuinely hard through a subtle or counter-intuitive case, not through combining many facts.
 - Because the stem targets one decision, every option must be one short phrase or short expression stating a candidate answer to that same decision — never a multi-clause paragraph re-deriving multiple properties.
+- Keep each option comfortably short for a phone screen (preferably under 120 characters when the mathematics permits).
+- Options are answer choices, not mini-solutions: use one claim or expression, avoid sentences containing "because", and do not repeat the full stem in every option.
 - Example — avoid: options that each restate increasing/decreasing intervals AND local max/min AND inflection points AND concavity together.
 - Example — prefer: stem asks only "which statement about monotonicity is correct" with options like "Decreasing on $(-1,0)$, increasing on $(0,1)$" / "Increasing on $(-1,1)$" / "Decreasing on $(-1,1)$" — short, mutually exclusive, still hard to get right.
 - Options should be similar in length and style.
