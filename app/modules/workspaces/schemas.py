@@ -88,6 +88,7 @@ class WorkspaceRead(BaseModel):
     learning_context: dict[str, Any] = Field(default_factory=dict)
     phase_evidence: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     hint_level: int = 0
+    tutor_degraded: bool = False
 
 
 class WorkspaceSessionSummaryRead(BaseModel):
@@ -103,6 +104,8 @@ class WorkspaceSessionSummaryRead(BaseModel):
 
 class WorkspaceSessionHistoryRead(BaseModel):
     sessions: list[WorkspaceSessionSummaryRead] = Field(default_factory=list)
+    total: int = 0
+    has_more: bool = False
 
 
 class WorkspaceToolSuggestionRead(BaseModel):
@@ -117,6 +120,8 @@ class TutorResponseRead(BaseModel):
     next_actions: list[str] = Field(default_factory=list)
     next_phase_ready: bool = False
     phase_reasoning: str | None = None
+    phase_checkpoint_question: str | None = None
+    next_phase_opening_prompt: str | None = None
     evidence_tags: list[str] = Field(default_factory=list)
     correctness: str = "unknown"
     misconception_status: str = "none"
@@ -125,6 +130,7 @@ class TutorResponseRead(BaseModel):
     scaffold_level: int = 0
     evidence_request: dict[str, Any] | None = None
     explanation_card: dict[str, Any] | None = None
+    degraded: bool = False
     tool_suggestion: WorkspaceToolSuggestionRead | None = None
 
 

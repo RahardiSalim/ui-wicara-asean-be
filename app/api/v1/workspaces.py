@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_session
@@ -17,6 +17,8 @@ router = APIRouter(prefix="/workspaces")
 def list_workspaces(
     track_id: UUID,
     module_id: UUID,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     account: UserAccount = Depends(get_current_account),
     session: Session = Depends(get_session),
 ) -> schemas.WorkspaceSessionHistoryRead:
@@ -26,6 +28,8 @@ def list_workspaces(
             user=account,
             track_id=track_id,
             module_id=module_id,
+            limit=limit,
+            offset=offset,
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -47,8 +51,20 @@ def create_workspace(
             workspace_session_id=payload.workspace_session_id,
             start_new_session=payload.start_new_session,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.delete("/{workspace_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_workspace(
+    workspace_id: UUID,
+    account: UserAccount = Depends(get_current_account),
+    session: Session = Depends(get_session),
+) -> None:
+    if not service.delete_workspace(session, user=account, workspace_id=workspace_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace was not found.")
 
 
 @router.get("/{workspace_id}", response_model=schemas.WorkspaceRead)
@@ -114,9 +130,14 @@ def advance_workspace_phase(
     return response
 
 
-@router.post("/{workspace_id}/start-posttest", response_model=schemas.WorkspaceRead)
+@router.post(
+    "/{workspace_id}/start-posttest",
+    response_model=schemas.WorkspaceRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def start_workspace_posttest(
     workspace_id: UUID,
+    background_tasks: BackgroundTasks,
     account: UserAccount = Depends(get_current_account),
     session: Session = Depends(get_session),
 ) -> schemas.WorkspaceRead:
@@ -133,6 +154,16 @@ def start_workspace_posttest(
 
     if response is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace was not found.")
+    trigger = response.posttest_trigger or {}
+    if str(trigger.get("status") or "") == "generating":
+        raw_session_id = trigger.get("posttest_session_id")
+        if raw_session_id:
+            background_tasks.add_task(
+                service.process_queued_posttest_generation,
+                user_id=account.id,
+                workspace_id=workspace_id,
+                posttest_session_id=UUID(str(raw_session_id)),
+            )
     return response
 
 

@@ -150,32 +150,61 @@ async def register_with_password(
     email: str,
     password: str,
     display_name: str,
+    role: str,
 ) -> tuple[str, str]:
-    if not settings.supabase_anon_key:
-        raise SupabaseTokenError("SUPABASE_ANON_KEY is missing on backend.")
-    signup_url = f"{settings.supabase_project_url.rstrip('/')}/auth/v1/signup"
+    service_role_key = settings.supabase_service_role_key.strip()
+    if not service_role_key:
+        raise SupabaseTokenError(
+            "SUPABASE_SERVICE_ROLE_KEY is missing on backend; password registration is unavailable."
+        )
+    signup_url = f"{settings.supabase_project_url.rstrip('/')}/auth/v1/admin/users"
     headers = {
-        "apikey": settings.supabase_anon_key,
+        "apikey": service_role_key,
+        "Authorization": f"Bearer {service_role_key}",
         "Content-Type": "application/json",
     }
     payload = {
         "email": email.strip(),
         "password": password,
-        "data": {"display_name": display_name.strip()},
+        "email_confirm": True,
+        "user_metadata": {"display_name": display_name.strip()},
+        "app_metadata": {"role": role.strip().lower()},
     }
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(signup_url, headers=headers, json=payload)
         if response.status_code >= 400:
             raise SupabaseTokenError(_supabase_error_message(response))
-        data = response.json()
-        access_token = str(data.get("access_token") or "").strip()
-        refresh_token = str(data.get("refresh_token") or "").strip()
-        if not access_token:
-            raise SupabaseTokenError(
-                "Registration succeeded, but email confirmation is required before login."
+    except httpx.HTTPError as exc:
+        raise SupabaseTokenError(f"Supabase auth request failed: {exc}") from exc
+    return await sign_in_with_password(
+        settings=settings,
+        email_or_phone=email,
+        password=password,
+    )
+
+
+async def request_password_reset(
+    *,
+    settings: Settings,
+    email: str,
+) -> None:
+    if not settings.supabase_anon_key:
+        raise SupabaseTokenError("SUPABASE_ANON_KEY is missing on backend.")
+    recover_url = f"{settings.supabase_project_url.rstrip('/')}/auth/v1/recover"
+    headers = {
+        "apikey": settings.supabase_anon_key,
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                recover_url,
+                headers=headers,
+                json={"email": email.strip()},
             )
-        return access_token, refresh_token
+        if response.status_code >= 400:
+            raise SupabaseTokenError(_supabase_error_message(response))
     except httpx.HTTPError as exc:
         raise SupabaseTokenError(f"Supabase auth request failed: {exc}") from exc
 

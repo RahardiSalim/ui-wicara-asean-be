@@ -31240,7 +31240,7 @@
       "concept_type_label_id": "Laju perubahan dan turunan",
       "concept_subtype": "derivative_rate_change_model.aturan_rantai",
       "concept_subtype_label_id": "Aturan rantai",
-      "default_template_id": "manim.graph_explanation.v1",
+      "default_template_id": "manim.function_composition_transform.v1",
       "media_engine_family": "manim",
       "concept_visual_pattern": "nested function machine, outer-inner decomposition, derivative factor multiplication",
       "real_world_anchor_examples": [],

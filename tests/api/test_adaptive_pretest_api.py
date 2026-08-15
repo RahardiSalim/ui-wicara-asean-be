@@ -266,7 +266,7 @@ def test_pretest_start_returns_503_after_ai_generation_timeout(client, monkeypat
     assert "attempt 2" not in response.json()["detail"]
 
 
-def test_answers_reuse_target_set_reject_duplicate_and_do_not_blindly_traverse(client):
+def test_answers_reuse_target_set_reject_duplicate_and_enter_prerequisite_after_easy(client):
     _override_account(client)
     learning_goal_id = _confirmed_goal_id(client)
     start = client.post("/api/v1/pretests/start", json={"learning_goal_id": learning_goal_id})
@@ -311,16 +311,20 @@ def test_answers_reuse_target_set_reject_duplicate_and_do_not_blindly_traverse(c
     )
 
     assert prereq_answer.status_code == 200
-    assert prereq_answer.json()["next_question"] is None
+    next_question = prereq_answer.json()["next_question"]
+    assert next_question is not None
     assert prereq_answer.json()["next_action"] == {
-        "type": "finalize",
-        "reason": "target_gap_confirmed",
+        "type": "next_question",
+        "concept_code": next_question["concept_code"],
+        "difficulty": "medium",
+        "reason": "enter_prerequisite_node",
     }
-    assert prereq_answer.json()["diagnosis"] is not None
+    assert next_question["concept_code"] != question["concept_code"]
+    assert prereq_answer.json()["diagnosis"] is None
 
     with _session_for_client(client) as session:
         questions = list(session.scalars(select(AssessmentQuestion).where(AssessmentQuestion.session_id == UUID(payload["session_id"]))))
-        assert len(questions) == 3
+        assert len(questions) == 6
         assert all(question.metadata_json.get("non_reusable") is True for question in questions)
         difficulties_by_concept: dict[str, set[str]] = {}
         for stored_question in questions:
@@ -328,7 +332,7 @@ def test_answers_reuse_target_set_reject_duplicate_and_do_not_blindly_traverse(c
             difficulties_by_concept.setdefault(concept_code, set()).add(
                 stored_question.difficulty_label.lower()
             )
-        assert len(difficulties_by_concept) == 1
+        assert len(difficulties_by_concept) == 2
         assert all(
             difficulties == {"easy", "medium", "hard"}
             for difficulties in difficulties_by_concept.values()
@@ -396,7 +400,7 @@ def test_finalize_and_path_selection_create_track(client):
         assert session.scalar(select(TrackModule).where(TrackModule.track_id == goal.track.id)) is not None
 
 
-def test_target_hard_wrong_without_step_evidence_stays_on_target(client):
+def test_target_hard_wrong_without_step_evidence_finalizes_for_review(client):
     _override_account(client)
     learning_goal_id = _confirmed_goal_id(client)
     start = client.post("/api/v1/pretests/start", json={"learning_goal_id": learning_goal_id})
@@ -419,13 +423,11 @@ def test_target_hard_wrong_without_step_evidence_stays_on_target(client):
     assert probe_response.status_code == 200
     payload = probe_response.json()
     assert payload["next_action"] == {
-        "type": "next_question",
-        "concept_code": payload["next_question"]["concept_code"],
-        "difficulty": "easy",
-        "reason": "target_gap_disambiguation",
+        "type": "finalize",
+        "reason": "target_reinforcement",
     }
-    assert payload["next_question"]["concept_code"] == medium_question["concept_code"]
-    assert payload["diagnosis"] is None
+    assert payload["next_question"] is None
+    assert payload["diagnosis"] is not None
 
 
 def test_assessment_dashboard_without_pretest_returns_start_state(client):

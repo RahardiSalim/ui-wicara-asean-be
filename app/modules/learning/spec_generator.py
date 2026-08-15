@@ -29,7 +29,7 @@ from app.modules.learning.template_validation import (
 from app.modules.workspaces.models import WorkspaceEvent, WorkspaceSession
 
 _PROMPT_VERSION = "workspace_context_spec_openrouter_v1"
-_ROUTER_PROMPT_VERSION = "workspace_context_template_router_openrouter_v1"
+_ROUTER_PROMPT_VERSION = "workspace_context_template_router_openrouter_v2_semantic_context"
 _DEFAULT_MODEL = DEFAULT_AI_MODEL
 _MAX_ATTEMPTS = 3
 _SPEC_MAX_OUTPUT_TOKENS = 8192
@@ -70,7 +70,7 @@ _ROUTER_SYSTEM_INSTRUCTION = """
 You are a backend template router for educational video templates (Manim or Remotion).
 Task:
 - Choose exactly one template_id from allowed_template_ids.
-- Use the workspace context and concept_type signal.
+- Use the workspace context, concept type/subtype, visual pattern, and engine signal.
 
 Hard requirements:
 - Return JSON only, no markdown.
@@ -385,6 +385,11 @@ def _build_context_snapshot(
         "requested_language": requested_language,
         "active_node_id": _jsonable(metadata.get("active_node_id")),
         "active_concept_type": _jsonable(metadata.get("active_concept_type")),
+        "active_concept_subtype": _jsonable(metadata.get("active_concept_subtype")),
+        "active_concept_visual_pattern": _jsonable(
+            metadata.get("active_concept_visual_pattern")
+        ),
+        "active_visual_engine": _jsonable(metadata.get("active_visual_engine")),
         "active_template_id": _jsonable(metadata.get("active_template_id")),
         "active_prerequisites": _jsonable(metadata.get("active_prerequisites")),
         "context_source": _jsonable(metadata.get("context_source")),
@@ -452,6 +457,11 @@ def _select_template_id_with_ai(
         "task": "choose_template_id",
         "requested_language": requested_language or "en",
         "active_concept_type": concept_type or "",
+        "active_concept_subtype": context_snapshot.get("active_concept_subtype"),
+        "concept_visual_pattern": context_snapshot.get(
+            "active_concept_visual_pattern"
+        ),
+        "preferred_visual_engine": context_snapshot.get("active_visual_engine"),
         "allowed_template_ids": normalized_candidates,
         "workspace_context": {
             "current_topic": context_snapshot.get("current_topic"),

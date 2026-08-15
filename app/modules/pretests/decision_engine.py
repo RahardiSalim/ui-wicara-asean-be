@@ -96,12 +96,14 @@ class PretestDecisionEngine:
                 next_state,
                 last_difficulty=last_difficulty,
                 last_is_correct=last_is_correct,
+                graph_scope=graph_scope,
             )
         return self._decide_prerequisite(
             next_state,
             last_concept_code=last_concept_code,
             last_difficulty=last_difficulty,
             last_is_correct=last_is_correct,
+            graph_scope=graph_scope,
         )
 
     def _method_evidence_action(
@@ -165,6 +167,7 @@ class PretestDecisionEngine:
         *,
         last_difficulty: str,
         last_is_correct: bool,
+        graph_scope: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         target = str(state["target_concept_code"])
         if last_difficulty == "medium":
@@ -172,17 +175,16 @@ class PretestDecisionEngine:
                 return state, _ask(target, "hard", "target_medium_correct")
             return state, _ask(target, "easy", "target_medium_wrong")
         if last_difficulty == "hard":
-            if last_is_correct:
-                state["stop_reason"] = "target_ready"
-                return state, {"type": "finalize", "reason": "target_ready"}
-            target_state = state.get("node_results", {}).get(target, {})
-            if "easy" not in target_state:
-                return state, _ask(target, "easy", "target_gap_disambiguation")
-            state["stop_reason"] = "target_gap_confirmed"
+            state["stop_reason"] = (
+                "target_ready" if last_is_correct else "target_reinforcement"
+            )
             return state, {"type": "finalize", "reason": state["stop_reason"]}
         if last_difficulty == "easy":
-            state["stop_reason"] = "target_gap_confirmed"
-            return state, {"type": "finalize", "reason": state["stop_reason"]}
+            return self._ask_next_prerequisite(
+                state,
+                graph_scope=graph_scope,
+                fallback_reason="target_basic_checked",
+            )
         state["stop_reason"] = "unsupported_target_difficulty"
         return state, {"type": "finalize", "reason": "unsupported_target_difficulty"}
 
@@ -193,8 +195,15 @@ class PretestDecisionEngine:
         last_concept_code: str,
         last_difficulty: str,
         last_is_correct: bool,
+        graph_scope: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         if last_difficulty == "medium":
+            if not last_is_correct and _is_evidence_directed_probe(
+                state,
+                concept_code=last_concept_code,
+            ):
+                state["stop_reason"] = "evidence_directed_gap_confirmed"
+                return state, {"type": "finalize", "reason": state["stop_reason"]}
             if last_is_correct:
                 return state, _ask(
                     last_concept_code,
@@ -206,22 +215,98 @@ class PretestDecisionEngine:
             state["stop_reason"] = "prerequisite_strength_checked"
             return state, {"type": "finalize", "reason": state["stop_reason"]}
         if last_difficulty == "easy":
-            state["stop_reason"] = (
-                "evidence_directed_gap_confirmed"
-                if not last_is_correct
-                else "prerequisite_fragility_confirmed"
+            if not last_is_correct:
+                self._boost_direct_prerequisites(
+                    state,
+                    graph_scope=graph_scope,
+                    concept_code=last_concept_code,
+                )
+            return self._ask_next_prerequisite(
+                state,
+                graph_scope=graph_scope,
+                fallback_reason=(
+                    "root_fragility_found" if last_is_correct else "root_gap_found"
+                ),
             )
-            return state, {"type": "finalize", "reason": state["stop_reason"]}
         state["stop_reason"] = "unsupported_prerequisite_difficulty"
         return state, {"type": "finalize", "reason": "unsupported_prerequisite_difficulty"}
+
+    def _ask_next_prerequisite(
+        self,
+        state: dict[str, Any],
+        *,
+        graph_scope: dict[str, Any],
+        fallback_reason: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        queue = [
+            deepcopy(item)
+            for item in state.get("probe_queue", [])
+            if isinstance(item, dict)
+        ]
+        visited = set(state.get("node_results", {}))
+        visited.add(str(state.get("target_concept_code") or ""))
+
+        while queue:
+            queue.sort(key=_probe_sort_key)
+            candidate = queue.pop(0)
+            concept_code = str(candidate.get("concept_code") or "").strip()
+            if not concept_code or concept_code in visited:
+                continue
+            if len(visited) >= int(state.get("max_nodes_visited", 5)):
+                state["probe_queue"] = queue
+                state["stop_reason"] = "max_nodes_visited"
+                return state, {"type": "finalize", "reason": state["stop_reason"]}
+            state["probe_queue"] = queue
+            return state, _ask(
+                concept_code,
+                "medium",
+                "enter_prerequisite_node",
+            )
+
+        state["probe_queue"] = []
+        state["stop_reason"] = (
+            fallback_reason if graph_scope.get("nodes") else "graph_exhausted"
+        )
+        return state, {"type": "finalize", "reason": state["stop_reason"]}
+
+    def _boost_direct_prerequisites(
+        self,
+        state: dict[str, Any],
+        *,
+        graph_scope: dict[str, Any],
+        concept_code: str,
+    ) -> None:
+        queue = [
+            deepcopy(item)
+            for item in state.get("probe_queue", [])
+            if isinstance(item, dict)
+        ]
+        queued = {
+            str(item.get("concept_code") or ""): item
+            for item in queue
+        }
+        visited = set(state.get("node_results", {}))
+        for prerequisite in _direct_prerequisites(
+            graph_scope,
+            concept_code=concept_code,
+        ):
+            code = str(prerequisite["concept_code"])
+            if code in visited:
+                continue
+            existing = queued.get(code)
+            if existing is None:
+                queue.append(prerequisite)
+                queued[code] = prerequisite
+            else:
+                existing["priority"] = max(
+                    float(existing.get("priority", 0.0)),
+                    float(prerequisite["priority"]),
+                )
+        state["probe_queue"] = queue
 
     def _limit_action(self, state: dict[str, Any]) -> dict[str, Any] | None:
         if int(state.get("question_count", 0)) >= int(state.get("max_questions", 10)):
             return {"type": "finalize", "reason": "max_questions_reached"}
-        if float(state.get("confidence", 0.0)) >= float(state.get("confidence_threshold", 0.8)):
-            # Target mastery has explicit stop rules; confidence stops only after prerequisite probing starts.
-            if str(state.get("current_concept_code")) != str(state.get("target_concept_code")):
-                return {"type": "finalize", "reason": "confidence_threshold_reached"}
         return None
 
 
@@ -232,6 +317,59 @@ def _ask(concept_code: str, difficulty: str, reason: str) -> dict[str, Any]:
         "difficulty": difficulty,
         "reason": reason,
     }
+
+
+def _is_evidence_directed_probe(
+    state: dict[str, Any],
+    *,
+    concept_code: str,
+) -> bool:
+    return any(
+        isinstance(route, dict)
+        and str(route.get("routed_prerequisite_code") or "") == concept_code
+        and str(route.get("from_concept_code") or "") != concept_code
+        for route in state.get("method_evidence_routes", [])
+    )
+
+
+def _probe_sort_key(item: dict[str, Any]) -> tuple[float, int, str]:
+    return (
+        -float(item.get("priority") or 0.0),
+        int(item.get("depth") or 0),
+        str(item.get("concept_code") or ""),
+    )
+
+
+def _direct_prerequisites(
+    graph_scope: dict[str, Any],
+    *,
+    concept_code: str,
+) -> list[dict[str, Any]]:
+    nodes_by_code = {
+        str(node.get("concept_code") or ""): node
+        for node in graph_scope.get("nodes", [])
+        if isinstance(node, dict)
+    }
+    prerequisites: list[dict[str, Any]] = []
+    for edge in graph_scope.get("edges", []):
+        if not isinstance(edge, dict) or str(edge.get("from") or "") != concept_code:
+            continue
+        node = nodes_by_code.get(str(edge.get("to") or ""))
+        if node is None:
+            continue
+        depth = int(node.get("depth") or 1)
+        weight = float(edge.get("weight") or 1.0)
+        prerequisites.append(
+            {
+                "concept_code": str(node.get("concept_code") or ""),
+                "concept_id": str(node.get("concept_id") or ""),
+                "depth": depth,
+                "priority": round(weight - (depth * 0.2) + 0.35, 4),
+                "parent": concept_code,
+            }
+        )
+    prerequisites.sort(key=_probe_sort_key)
+    return prerequisites
 
 
 def _node_status(node_state: dict[str, Any]) -> str:
