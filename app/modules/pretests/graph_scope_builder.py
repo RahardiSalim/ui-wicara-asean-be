@@ -95,6 +95,7 @@ def _node_payload(
         "concept_code": concept.code,
         "title": concept.title,
         "description": concept.description,
+        "display_order": concept.display_order,
         "depth": depth,
         "role": role,
         "parent": parent,

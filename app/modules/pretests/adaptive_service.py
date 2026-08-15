@@ -842,6 +842,14 @@ def _pretest_skill_candidates(
             reachable.add(code)
             ordered_codes.append(code)
             queue.append(code)
+    diagnostic_path = _select_pretest_diagnostic_path(
+        graph_scope,
+        concept_code=concept_code,
+    )
+    path_order = {
+        code: index
+        for index, code in enumerate(reversed(diagnostic_path), start=1)
+    }
     return [
         {
             "concept_code": code,
@@ -849,10 +857,72 @@ def _pretest_skill_candidates(
             "description": str(nodes[code].get("description") or "").strip(),
             "assessment_evidence": nodes[code].get("assessment_evidence") or [],
             "common_misconceptions": nodes[code].get("common_misconceptions") or [],
+            "diagnostic_path_order": path_order.get(code),
         }
         for code in ordered_codes
         if code in nodes
     ]
+
+
+def _select_pretest_diagnostic_path(
+    graph_scope: dict[str, Any],
+    *,
+    concept_code: str,
+) -> list[str]:
+    """Select the most advanced multi-step prerequisite path without naming a skill."""
+    nodes = {
+        str(node.get("concept_code")): node
+        for node in graph_scope.get("nodes", [])
+        if isinstance(node, dict)
+    }
+    outgoing: dict[str, list[dict[str, Any]]] = {}
+    for edge in graph_scope.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        parent = str(edge.get("from") or "")
+        child = str(edge.get("to") or "")
+        parent_depth = int(nodes.get(parent, {}).get("depth") or 0)
+        child_depth = int(nodes.get(child, {}).get("depth") or 0)
+        if child_depth != parent_depth + 1:
+            continue
+        outgoing.setdefault(parent, []).append(edge)
+
+    paths: list[tuple[list[str], list[float]]] = []
+
+    def walk(parent: str, path: list[str], weights: list[float]) -> None:
+        next_edges = [
+            edge
+            for edge in outgoing.get(parent, [])
+            if (code := str(edge.get("to") or "").strip()) and code not in path
+        ]
+        if not next_edges:
+            if path:
+                paths.append((path, weights))
+            return
+        for edge in next_edges:
+            code = str(edge.get("to") or "").strip()
+            walk(code, [*path, code], [*weights, float(edge.get("weight") or 1.0)])
+
+    walk(concept_code, [], [])
+    if not paths:
+        return []
+
+    max_depth = max(len(path) for path, _ in paths)
+    deepest = [(path, weights) for path, weights in paths if len(path) == max_depth]
+
+    def score(item: tuple[list[str], list[float]]) -> tuple[int, int, float, float, str]:
+        path, weights = item
+        leaf_order = int(nodes.get(path[-1], {}).get("display_order") or 0)
+        direct_order = int(nodes.get(path[0], {}).get("display_order") or 0)
+        return (
+            leaf_order,
+            direct_order,
+            min(weights, default=0.0),
+            sum(weights),
+            "|".join(path),
+        )
+
+    return max(deepest, key=score)[0]
 
 
 def _localized_concept_title(concept: KnowledgeConcept, *, language: str) -> str:

@@ -1,10 +1,13 @@
 from sqlalchemy import select
 
+import pytest
+
 from app.modules.curriculum.models import KnowledgeConcept
 from app.modules.curriculum.seed import seed_curriculum
 from app.modules.pretests.adaptive_service import (
     _localized_graph_scope,
     _pretest_skill_candidates,
+    _select_pretest_diagnostic_path,
 )
 from app.modules.pretests.generation_service import (
     _fresh_generation_max_tokens,
@@ -13,9 +16,13 @@ from app.modules.pretests.generation_service import (
     _fresh_question_response_format,
     _fresh_question_type_choices,
     _max_generation_attempts,
+    _normalize_fresh_question_payload,
     _normalize_skill_trace,
     _solution_skill_catalog,
+    _validate_completed_reasoning,
+    _validate_diagnostic_path_trace,
 )
+from app.modules.pretests.generation_service import QuestionGenerationPayloadError
 from app.modules.pretests.graph_scope_builder import GraphScopeBuilder
 
 
@@ -65,6 +72,9 @@ def test_fresh_prompt_uses_curriculum_evidence_misconceptions_and_guidance():
     assert "distractor_rationales" not in prompt
     assert "same answer dimension" in prompt
     assert "missing factor" in prompt
+    assert "backend assigns and shuffles A/B/C/D labels" in prompt
+    assert "never assign option labels yourself" in prompt
+    assert "Never return self-correction, drafting notes" in prompt
     assert "finalizes immediately" not in prompt
     assert "Prerequisite checks happen only" not in prompt
 
@@ -78,19 +88,19 @@ def test_pretest_generation_allows_two_attempts(monkeypatch):
 def test_fresh_generation_uses_strict_batch_and_option_counts():
     response_format = _fresh_question_response_format(question_count=3)
     questions = response_format["json_schema"]["schema"]["properties"]["questions"]
-    options = questions["items"]["properties"]["options"]
+    distractors = questions["items"]["properties"]["distractors"]
 
     assert response_format["type"] == "json_schema"
     assert response_format["json_schema"]["strict"] is True
     assert questions["minItems"] == questions["maxItems"] == 3
-    assert options["minItems"] == options["maxItems"] == 4
+    assert distractors["minItems"] == distractors["maxItems"] == 3
     skill_trace = questions["items"]["properties"]["skill_trace"]
     assert skill_trace["minItems"] == 1
     assert questions["items"]["required"] == [
         "stem",
         "question_type",
-        "options",
-        "correct_option_id",
+        "correct_answer",
+        "distractors",
         "skill_trace",
         "expected_reasoning",
         "explanation",
@@ -122,7 +132,7 @@ def test_pretest_generation_timeout_is_capped_below_frontend_timeout(monkeypatch
     ) == 270
 
 
-def test_prerequisite_probe_schema_excludes_direct_computation():
+def test_prerequisite_probe_schema_requires_direct_computation():
     types = _fresh_question_type_choices(
         difficulties=["easy", "medium", "hard"],
         node_role="prerequisite",
@@ -136,9 +146,65 @@ def test_prerequisite_probe_schema_excludes_direct_computation():
     ]["items"]
 
     assert question_schema["properties"]["question_type"]["enum"] == [
-        "error_analysis",
+        "direct_computation",
     ]
-    assert "correct_option_id" in question_schema["required"]
+    assert "correct_answer" in question_schema["required"]
+
+
+def test_backend_assigns_labels_and_preserves_one_correct_answer():
+    payload = {
+        "stem": "Which statement is correct?",
+        "question_type": "concept_application",
+        "correct_answer": "Fourth statement",
+        "distractors": [
+            "First statement",
+            "Second statement",
+            "Third statement",
+        ],
+        "skill_trace": [{"concept_code": "curve.sketch", "criterion": "Check it."}],
+        "expected_reasoning": "The fourth statement follows from the calculation.",
+        "explanation": "The fourth statement is correct.",
+    }
+    question = _normalize_fresh_question_payload(
+        payload,
+        concept_code="curve.sketch",
+        difficulty="medium",
+    )
+
+    assert {option["label"] for option in question["options"]} == {"A", "B", "C", "D"}
+    assert [option["text"] for option in question["options"] if option["is_correct"]] == [
+        "Fourth statement"
+    ]
+
+
+def test_unresolved_self_correction_is_rejected():
+    question = {
+        "expected_reasoning": (
+            "The selected answer is inconsistent. I need to adjust the correct answer "
+            "and the distractors need to be revised."
+        ),
+        "explanation": "Draft explanation.",
+    }
+
+    try:
+        _validate_completed_reasoning([question])
+    except QuestionGenerationPayloadError as error:
+        assert "unresolved self-correction" in str(error)
+    else:
+        raise AssertionError("Unresolved model drafting notes should be rejected")
+
+
+def test_reasoning_cannot_reference_backend_assigned_option_labels():
+    question = {
+        "expected_reasoning": "Pilihan C salah karena menggunakan turunan kedua.",
+        "explanation": "Bandingkan tanda turunannya.",
+    }
+
+    with pytest.raises(
+        QuestionGenerationPayloadError,
+        match="must not discuss backend-assigned answer options",
+    ):
+        _validate_completed_reasoning([question])
 
 
 def test_duplicate_skill_trace_entries_are_merged_by_concept_code():
@@ -318,6 +384,18 @@ def test_revised_golden_scope_exposes_chain_rule_as_question_skill_candidate(db_
         "Hanya menurunkan fungsi luar" in misconception
         for misconception in chain["common_misconceptions"]
     )
+    selected_path = sorted(
+        (
+            item["diagnostic_path_order"],
+            item["concept_code"],
+        )
+        for item in candidates
+        if item.get("diagnostic_path_order")
+    )
+    assert selected_path == [
+        (1, "km_f_matematika_tingkat_lanjut_aturan_rantai"),
+        (2, "km_f_matematika_tingkat_lanjut_turunan_fungsi_trigonometri"),
+    ]
 
 
 def test_goal_prompt_requires_question_specific_skill_trace_without_forced_focus():
@@ -338,6 +416,7 @@ def test_goal_prompt_requires_question_specific_skill_trace_without_forced_focus
                 "concept_code": "chain.rule",
                 "title": "Chain rule",
                 "description": "Differentiate composite functions.",
+                "diagnostic_path_order": 1,
             }
         ],
         diagnosis_context="",
@@ -348,3 +427,53 @@ def test_goal_prompt_requires_question_specific_skill_trace_without_forced_focus
     assert "never add a skill merely to force adaptive routing" in prompt
     assert "skill_trace" in prompt
     assert "diagnostic_prerequisite_code" not in prompt
+    assert "Graph-selected hard diagnostic path" in prompt
+    assert "selected generically from curriculum structure" in prompt
+
+
+def test_diagnostic_path_selection_uses_graph_depth_and_order_not_skill_names():
+    scope = {
+        "nodes": [
+            {"concept_code": "target", "depth": 0, "display_order": 50},
+            {"concept_code": "branch.low", "depth": 1, "display_order": 30},
+            {"concept_code": "branch.high", "depth": 1, "display_order": 40},
+            {"concept_code": "leaf.low", "depth": 2, "display_order": 10},
+            {"concept_code": "leaf.high", "depth": 2, "display_order": 20},
+        ],
+        "edges": [
+            {"from": "target", "to": "branch.low", "weight": 0.9},
+            {"from": "target", "to": "branch.high", "weight": 0.8},
+            {"from": "branch.low", "to": "leaf.low", "weight": 0.9},
+            {"from": "branch.high", "to": "leaf.high", "weight": 0.8},
+        ],
+    }
+
+    assert _select_pretest_diagnostic_path(scope, concept_code="target") == [
+        "branch.high",
+        "leaf.high",
+    ]
+
+
+def test_hard_trace_must_cover_generic_selected_path():
+    candidates = [
+        {"concept_code": "inner.skill", "diagnostic_path_order": 1},
+        {"concept_code": "outer.skill", "diagnostic_path_order": 2},
+    ]
+    questions = [
+        {
+            "skill_trace": [
+                {"concept_code": "inner.skill", "criterion": "Use inner skill."},
+            ]
+        }
+    ]
+
+    try:
+        _validate_diagnostic_path_trace(
+            questions,
+            difficulties=["hard"],
+            skill_candidates=candidates,
+        )
+    except QuestionGenerationPayloadError as error:
+        assert "outer.skill" in str(error)
+    else:
+        raise AssertionError("A hard question missing a selected path skill must be rejected")

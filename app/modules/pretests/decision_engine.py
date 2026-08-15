@@ -141,7 +141,17 @@ class PretestDecisionEngine:
             "suspected_prerequisite_code": suspected_prerequisite_code,
             "routed_prerequisite_code": candidate,
         }
-        state.setdefault("method_evidence_routes", []).append(route)
+        routes = state.setdefault("method_evidence_routes", [])
+        prior_route_confirmed_candidate = any(
+            str(item.get("routed_prerequisite_code") or "") == candidate
+            and str(item.get("from_concept_code") or "") != candidate
+            for item in routes
+            if isinstance(item, dict)
+        )
+        routes.append(route)
+        if candidate is not None and candidate == last_concept_code and prior_route_confirmed_candidate:
+            state["stop_reason"] = "evidence_directed_gap_confirmed"
+            return {"type": "finalize", "reason": state["stop_reason"]}
         if candidate is None or candidate == last_concept_code:
             return None
         if candidate in visited:

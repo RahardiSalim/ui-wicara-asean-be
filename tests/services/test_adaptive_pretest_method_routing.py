@@ -200,6 +200,41 @@ def test_wrong_mcq_with_step_failure_jumps_directly_to_identified_skill(db_sessi
     assert result.next_question.concept_code == "syn.kappa"
 
 
+def test_repeated_invalid_method_on_direct_probe_confirms_gap(db_session):
+    scenario = _create_synthetic_scenario(
+        db_session,
+        evaluator=_MethodEvaluator(
+            method_valid=False,
+            suspected_prerequisite_code="syn.kappa",
+            evidence_tags=["inner_derivative_omitted"],
+        ),
+    )
+    first = _submit_target_answer(db_session, scenario)
+    probe = first.next_question
+    assert probe is not None
+    probe_question = scenario["questions"]["syn.kappa"]["medium"]
+    wrong_option = next(
+        option for option in probe_question.options if not option.is_correct
+    )
+
+    confirmed = scenario["service"].submit_answer(
+        db_session,
+        user=scenario["user"],
+        session_id=scenario["assessment"].id,
+        question_id=probe_question.id,
+        selected_option_id=wrong_option.id,
+        typed_reasoning="I repeat the same unsupported transformation.",
+        canvas_asset_id=None,
+        used_canvas=False,
+    )
+
+    assert confirmed.next_action == {
+        "type": "finalize",
+        "reason": "evidence_directed_gap_confirmed",
+    }
+    assert confirmed.diagnosis is not None
+
+
 def test_out_of_scope_suspect_is_rejected_before_graph_routing(db_session):
     scenario = _create_synthetic_scenario(
         db_session,

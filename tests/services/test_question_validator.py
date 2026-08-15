@@ -46,6 +46,21 @@ def test_duplicate_option_text_is_rejected():
         )
 
 
+def test_option_label_as_answer_text_is_rejected():
+    question = _question()
+    question["options"][0]["text"] = "Option A"
+
+    with pytest.raises(
+        QuestionValidationError,
+        match="complete answer, not an option label",
+    ):
+        QuestionValidator().validate_question(
+            concept_code="math.derivative",
+            difficulty="hard",
+            question=question,
+        )
+
+
 def test_exactly_one_correct_option_is_required():
     question = _question()
     question["options"][1]["is_correct"] = True
