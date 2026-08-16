@@ -963,7 +963,7 @@ def _chain_rule_fallback_pack() -> dict[str, dict[str, Any]]:
                     ("A", "$f'(x) = 4(3x^2 + 2)^3$", False),
                     ("B", "$f'(x) = 24x(3x^2 + 2)^3$", True),
                     ("C", "$f'(x) = 12x(3x^2 + 2)^3$", False),
-                    ("D", "$f'(x) = 12x(3x^2 + 2)^3$", False),
+                    ("D", "$f'(x) = 24x(3x^2 + 2)^4$", False),
                 ],
                 "The chain rule requires multiplying the derivative of the outer function (keeping the inner function unchanged) by the derivative of the inner function. The correct derivative is $24x(3x^2+2)^3$.",
                 "The outer function is $u^4$ with $u=3x^2+2$. The derivative of the outer function with respect to $u$ is $4u^3 = 4(3x^2+2)^3$. The derivative of the inner function is $6x$. By the chain rule, $f'(x) = 4(3x^2+2)^3 \\cdot 6x = 24x(3x^2+2)^3$.",
