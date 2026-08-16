@@ -1,0 +1,29 @@
+{
+  "eyebrow": "Fisika - Sistem Dinamis",
+  "title": "Dua Awal yang Nyaris Sama",
+  "subtitle": "Selisih seperseribu radian, dan setelah beberapa detik keduanya tak lagi berhubungan.",
+  "audience_level": "sma",
+  "theta1": 3.1,
+  "theta2": 3.1,
+  "nudge": 0.001,
+  "seconds": 15.0,
+  "steps": [
+    {
+      "title": "Aturannya pasti",
+      "body": "Gerak bandul ganda ditentukan sepenuhnya oleh hukum Newton; tidak ada unsur acak."
+    },
+    {
+      "title": "Bedanya sangat kecil",
+      "body": "Bandul kedua dilepas hanya seperseribu radian dari yang pertama."
+    },
+    {
+      "title": "Awalnya berimpit",
+      "body": "Lima detik pertama keduanya bergerak seolah satu benda yang sama."
+    },
+    {
+      "title": "Lalu berpisah",
+      "body": "Selisih kecil itu berlipat terus sampai kedua lintasan tidak lagi mirip sama sekali."
+    }
+  ],
+  "summary": "Pasti belum tentu dapat diramalkan; itulah inti dari kekacauan deterministik."
+}

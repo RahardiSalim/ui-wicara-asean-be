@@ -1,0 +1,27 @@
+{
+  "eyebrow": "Fisika - Gelombang",
+  "title": "Dua Sumber, Satu Pola",
+  "subtitle": "Ketika dua riak bertemu, keduanya saling menguatkan dan meniadakan.",
+  "audience_level": "sma",
+  "separation": 2.0,
+  "wavelength": 0.86,
+  "steps": [
+    {
+      "title": "Satu sumber",
+      "body": "Sebuah sumber tunggal memancarkan riak melingkar yang merata ke segala arah."
+    },
+    {
+      "title": "Dua sumber",
+      "body": "Sumber kedua dinyalakan; kedua riak kini menempati ruang yang sama."
+    },
+    {
+      "title": "Saling menguatkan",
+      "body": "Di garis terang, kedua puncak tiba bersamaan sehingga simpangannya berlipat."
+    },
+    {
+      "title": "Saling meniadakan",
+      "body": "Di garis gelap, puncak bertemu lembah dan air praktis diam."
+    }
+  ],
+  "summary": "Pola terang-gelap itu bukan gambar; ia hasil penjumlahan dua gelombang."
+}

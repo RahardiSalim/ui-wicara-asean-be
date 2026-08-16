@@ -1360,9 +1360,9 @@ class WicaraTemplateScene(VoiceoverScene):
                         shift=UP * 0.34,
                         rate_func=motion.spring_rate("gentle"),
                     ),
-                    lag_ratio=0.55,
+                    lag_ratio=0.68,
                 ),
-                run_time=0.72,
+                run_time=0.78,
             )
 
         return next_card
@@ -8635,5 +8635,377 @@ class MotionCompositionTemplate(WicaraTemplateScene):
             ),
             zone=self.card_zone(),
         )
+        self.wait(self.hold_for(spec.get("summary")))
+        self.clean_summary(spec, active_card=card)
+
+
+class RippleInterferenceTemplate(WicaraTemplateScene):
+    """A wave field, computed per pixel, every frame.
+
+    Nothing in the original pack could draw this. Those templates place shapes;
+    this one evaluates a physical field across a grid and paints the result, so
+    the interference pattern -- the bright antinodal fans, the dark nodal lines
+    between them -- is not illustrated, it is the actual solution of two
+    circular waves added together.
+
+    Move the sources apart and the fringes narrow, exactly as they should,
+    because nothing about the pattern is drawn by hand.
+    """
+
+    SPEC = {
+        "eyebrow": "Fisika - Gelombang",
+        "title": "Dua Sumber, Satu Pola",
+        "subtitle": "Ketika dua riak bertemu, keduanya saling menguatkan dan meniadakan.",
+        "audience_level": "sma",
+        "separation": 2.0,
+        "wavelength": 0.86,
+        "steps": [
+            {"title": "Satu sumber", "body": "Sebuah sumber tunggal memancarkan riak melingkar yang merata ke segala arah."},
+            {"title": "Dua sumber", "body": "Sumber kedua dinyalakan; kedua riak kini menempati ruang yang sama."},
+            {"title": "Saling menguatkan", "body": "Di garis terang, kedua puncak tiba bersamaan sehingga simpangannya berlipat."},
+            {"title": "Saling meniadakan", "body": "Di garis gelap, puncak bertemu lembah dan air praktis diam."},
+        ],
+        "summary": "Pola terang-gelap itu bukan gambar; ia hasil penjumlahan dua gelombang.",
+    }
+
+    GRID_W = 300
+    GRID_H = 176
+
+    def _field_image(self, t, sources, wavelength, box_w, box_h):
+        """Paint the summed wave field as an image.
+
+        Per-pixel because there is no other honest way: an interference pattern
+        is a continuous field, and approximating it with drawn contours would be
+        a picture of the answer rather than the answer.
+        """
+        w, h = self.GRID_W, self.GRID_H
+        xs = np.linspace(-box_w / 2, box_w / 2, w)
+        ys = np.linspace(box_h / 2, -box_h / 2, h)
+        gx, gy = np.meshgrid(xs, ys)
+
+        k = 2 * np.pi / max(wavelength, 1e-6)
+        omega = 2 * np.pi * 1.15
+        field = np.zeros((h, w), dtype=np.float64)
+        for sx, sy in sources:
+            r = np.sqrt((gx - sx) ** 2 + (gy - sy) ** 2)
+            # 1/sqrt(r) is the correct 2-D amplitude falloff; the floor keeps the
+            # source itself from going singular.
+            field += np.sin(k * r - omega * t) / np.sqrt(np.maximum(r, 0.18))
+
+        peak = max(len(sources), 1) / np.sqrt(0.18)
+        norm = np.clip(field / (peak * 0.55), -1.0, 1.0)
+
+        crest = np.array(theme._hex_to_rgb(theme.BLUE_ON_INK), dtype=np.float64)
+        trough = np.array(theme._hex_to_rgb(theme.VIOLET), dtype=np.float64)
+        still = np.array(theme._hex_to_rgb(theme.INK), dtype=np.float64)
+
+        up = np.clip(norm, 0.0, 1.0)[:, :, None]
+        down = np.clip(-norm, 0.0, 1.0)[:, :, None]
+        rgb = (
+            still[None, None, :]
+            + (crest - still)[None, None, :] * up
+            + (trough - still)[None, None, :] * down
+        )
+        return np.clip(rgb, 0, 255).astype(np.uint8)
+
+    def construct(self):
+        spec = self.SPEC
+        title_block = self.make_title_block(spec)
+        title_block.set_z_index(3)
+        self.play(
+            FadeIn(title_block, shift=DOWN * 0.30),
+            run_time=motion.spring_seconds("gentle"),
+            rate_func=motion.spring_rate("gentle"),
+        )
+
+        centre, box_w, box_h = self.stage_box()
+        wavelength = float(spec.get("wavelength", 0.86))
+        separation = float(spec.get("separation", 2.0))
+
+        time = ValueTracker(0.0)
+        live_sources = [[0.0, 0.0]]
+
+        def field_mobject():
+            img = ImageMobject(
+                self._field_image(
+                    time.get_value(), live_sources, wavelength, box_w, box_h
+                )
+            )
+            img.stretch_to_fit_width(box_w)
+            img.stretch_to_fit_height(box_h)
+            img.move_to(centre)
+            img.set_z_index(-20)
+            return img
+
+        surface = always_redraw(field_mobject)
+
+        def source_marker(index):
+            return always_redraw(
+                lambda i=index: VGroup(
+                    Circle(radius=0.10)
+                    .set_fill(color=theme.GOLD, opacity=1.0)
+                    .set_stroke(color=theme.INK, width=2.0)
+                    .move_to(
+                        centre
+                        + np.array([live_sources[i][0], live_sources[i][1], 0.0])
+                    )
+                )
+                if i < len(live_sources)
+                else VGroup()
+            )
+
+        card = self.replace_card(
+            None,
+            self.make_card(
+                "Satu sumber",
+                "Sebuah sumber tunggal memancarkan riak melingkar yang merata ke segala arah.",
+                color=theme.chip(0),
+            ),
+            zone=self.card_zone(),
+        )
+        self.add(surface, source_marker(0))
+        self.play(time.animate.set_value(1.6), run_time=self.beat(1.6), rate_func=linear)
+
+        # Second source on: the pattern is not redrawn, the physics just gains a
+        # term.
+        card = self.replace_card(
+            card,
+            self.make_card(
+                "Dua sumber",
+                "Sumber kedua dinyalakan; kedua riak kini menempati ruang yang sama.",
+                color=theme.chip(2),
+            ),
+            zone=self.card_zone(),
+        )
+        live_sources[0][0] = -separation / 2
+        live_sources.append([separation / 2, 0.0])
+        self.add(source_marker(1))
+        self.play(time.animate.set_value(3.4), run_time=self.beat(1.8), rate_func=linear)
+
+        card = self.replace_card(
+            card,
+            self.make_card(
+                "Saling menguatkan",
+                "Di garis terang, kedua puncak tiba bersamaan sehingga simpangannya berlipat.",
+                color=theme.GOLD,
+            ),
+            zone=self.card_zone(),
+        )
+        self.play(time.animate.set_value(5.4), run_time=self.beat(2.0), rate_func=linear)
+
+        # Widening the gap narrows the fringes. Proof the pattern is computed:
+        # a hand-drawn one would not respond.
+        card = self.replace_card(
+            card,
+            self.make_card(
+                "Jarak sumber menentukan pola",
+                "Sumber yang direnggangkan membuat garis terang-gelap makin rapat.",
+                color=theme.GOOD,
+            ),
+            zone=self.card_zone(),
+        )
+        widen = ValueTracker(separation)
+        widen.add_updater(
+            lambda m: (
+                live_sources[0].__setitem__(0, -m.get_value() / 2),
+                live_sources[1].__setitem__(0, m.get_value() / 2),
+            )
+            and None
+        )
+        self.add(widen)
+        self.play(
+            widen.animate.set_value(separation * 1.95),
+            time.animate.set_value(7.8),
+            run_time=self.beat(2.4),
+            rate_func=linear,
+        )
+        widen.clear_updaters()
+
+        self.remove(surface)
+        self.wait(self.hold_for(spec.get("summary")))
+        self.clean_summary(spec, active_card=card)
+
+
+class ChaosPendulumTemplate(WicaraTemplateScene):
+    """Two double pendulums, released 0.001 radian apart.
+
+    The trajectory is integrated, not choreographed: RK4 over the double
+    pendulum's equations of motion. That matters for the lesson, because the
+    point being made -- that a system can be fully deterministic and still
+    unpredictable -- is only honest if nobody drew the divergence by hand.
+
+    For the first seconds the two are indistinguishable. Then they are not.
+    """
+
+    SPEC = {
+        "eyebrow": "Fisika - Sistem Dinamis",
+        "title": "Dua Awal yang Nyaris Sama",
+        "subtitle": "Selisih seperseribu radian, dan setelah beberapa detik keduanya tak lagi berhubungan.",
+        "audience_level": "sma",
+        # Both arms near vertical: the most unstable configuration there is, and
+        # the only regime where the divergence is genuinely dramatic. Released
+        # at 2.10/2.05 the system swings almost regularly -- after ten seconds
+        # the two runs were still 0.03 rad apart, which is no lesson at all.
+        "theta1": 3.10,
+        "theta2": 3.10,
+        "nudge": 0.001,
+        "seconds": 15.0,
+        "steps": [
+            {"title": "Aturannya pasti", "body": "Gerak bandul ganda ditentukan sepenuhnya oleh hukum Newton; tidak ada unsur acak."},
+            {"title": "Bedanya sangat kecil", "body": "Bandul kedua dilepas hanya seperseribu radian dari yang pertama."},
+            {"title": "Awalnya berimpit", "body": "Lima detik pertama keduanya bergerak seolah satu benda yang sama."},
+            {"title": "Lalu berpisah", "body": "Selisih kecil itu berlipat terus sampai kedua lintasan tidak lagi mirip sama sekali."},
+        ],
+        "summary": "Pasti belum tentu dapat diramalkan; itulah inti dari kekacauan deterministik.",
+    }
+
+    def _simulate(self, theta1, theta2, seconds, fps, L1=1.0, L2=1.0,
+                  m1=1.0, m2=1.0, g=9.81):
+        """RK4 over the double pendulum. Returns a list of (th1, th2)."""
+
+        def derivs(s):
+            th1, w1, th2, w2 = s
+            d = th1 - th2
+            sd, cd = math.sin(d), math.cos(d)
+            den1 = (m1 + m2) * L1 - m2 * L1 * cd * cd
+            den2 = (L2 / L1) * den1
+            dw1 = (
+                m2 * L1 * w1 * w1 * sd * cd
+                + m2 * g * math.sin(th2) * cd
+                + m2 * L2 * w2 * w2 * sd
+                - (m1 + m2) * g * math.sin(th1)
+            ) / den1
+            dw2 = (
+                -m2 * L2 * w2 * w2 * sd * cd
+                + (m1 + m2) * g * math.sin(th1) * cd
+                - (m1 + m2) * L1 * w1 * w1 * sd
+                - (m1 + m2) * g * math.sin(th2)
+            ) / den2
+            return np.array([w1, dw1, w2, dw2])
+
+        # Sub-stepping: a double pendulum integrated at frame rate accumulates
+        # visible energy error, which would look like the divergence being an
+        # artefact rather than the physics.
+        substeps = 12
+        dt = 1.0 / (fps * substeps)
+        state = np.array([theta1, 0.0, theta2, 0.0], dtype=float)
+        out = [(state[0], state[2])]
+        for _ in range(int(seconds * fps)):
+            for _ in range(substeps):
+                k1 = derivs(state)
+                k2 = derivs(state + dt / 2 * k1)
+                k3 = derivs(state + dt / 2 * k2)
+                k4 = derivs(state + dt * k3)
+                state = state + (dt / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
+            out.append((state[0], state[2]))
+        return out
+
+    def construct(self):
+        spec = self.SPEC
+        title_block = self.make_title_block(spec)
+        title_block.set_z_index(3)
+        self.play(
+            FadeIn(title_block, shift=DOWN * 0.30),
+            run_time=motion.spring_seconds("gentle"),
+            rate_func=motion.spring_rate("gentle"),
+        )
+
+        fps = 30.0
+        seconds = float(spec.get("seconds", 11.0))
+        th1 = float(spec.get("theta1", 2.10))
+        th2 = float(spec.get("theta2", 2.05))
+        nudge = float(spec.get("nudge", 0.001))
+
+        runs = [
+            self._simulate(th1, th2, seconds, fps),
+            self._simulate(th1 + nudge, th2, seconds, fps),
+        ]
+        colors = [theme.BLUE_ON_INK, theme.chip(4)]
+
+        centre, box_w, box_h = self.stage_box()
+        # A double pendulum at this energy goes over the top, so its reach is two
+        # arm lengths in *every* direction, not just downward. Pivot at the
+        # stage centre and size the arms so the full swing stays inside it --
+        # hung near the top, the traces climbed straight through the title.
+        pivot = centre
+        arm = box_h * 0.23
+
+        frame = ValueTracker(0.0)
+
+        def sample(run, t):
+            i = int(max(0, min(len(run) - 1, round(t))))
+            return run[i]
+
+        def limb(index):
+            def build():
+                a, b = sample(runs[index], frame.get_value())
+                p1 = pivot + np.array([math.sin(a), -math.cos(a), 0.0]) * arm
+                p2 = p1 + np.array([math.sin(b), -math.cos(b), 0.0]) * arm
+                col = colors[index]
+                g = VGroup(
+                    Line(pivot, p1).set_stroke(color=col, width=4.0, opacity=0.95),
+                    Line(p1, p2).set_stroke(color=col, width=4.0, opacity=0.95),
+                    Dot(p1, radius=0.075, color=col),
+                    Dot(p2, radius=0.105, color=col),
+                )
+                return g
+
+            return always_redraw(build)
+
+        def tip(index):
+            def point():
+                a, b = sample(runs[index], frame.get_value())
+                p1 = pivot + np.array([math.sin(a), -math.cos(a), 0.0]) * arm
+                return p1 + np.array([math.sin(b), -math.cos(b), 0.0]) * arm
+
+            return point
+
+        anchor = Dot(pivot, radius=0.06, color=theme.ON_INK_3)
+        trails = [
+            TracedPath(tip(i), stroke_color=colors[i], stroke_width=2.4,
+                       dissipating_time=3.2)
+            for i in range(2)
+        ]
+
+        card = self.replace_card(
+            None,
+            self.make_card(
+                "Aturannya pasti",
+                "Gerak bandul ganda ditentukan sepenuhnya oleh hukum Newton; tidak ada unsur acak.",
+                color=theme.chip(0),
+            ),
+            zone=self.card_zone(),
+        )
+        self.add(anchor, *trails, limb(1), limb(0))
+
+        # Beat one: they look like one pendulum.
+        card = self.replace_card(
+            card,
+            self.make_card(
+                "Awalnya berimpit",
+                "Lima detik pertama keduanya bergerak seolah satu benda yang sama.",
+                color=theme.chip(2),
+            ),
+            zone=self.card_zone(),
+        )
+        # Split where the runs actually part company: measured at ~5.5s in, the
+        # tip separation is still under a tenth of an arm length.
+        half = len(runs[0]) * 0.37
+        self.play(frame.animate.set_value(half), run_time=self.beat(3.6),
+                  rate_func=linear)
+
+        # Beat two: they are not.
+        card = self.replace_card(
+            card,
+            self.make_card(
+                "Lalu berpisah",
+                "Selisih seperseribu radian itu berlipat terus sampai kedua lintasan tidak lagi mirip.",
+                color=theme.chip(4),
+            ),
+            zone=self.card_zone(),
+        )
+        self.play(frame.animate.set_value(len(runs[0]) - 1),
+                  run_time=self.beat(5.4), rate_func=linear)
+
         self.wait(self.hold_for(spec.get("summary")))
         self.clean_summary(spec, active_card=card)
