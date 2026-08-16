@@ -348,6 +348,9 @@ class AdaptivePretestGenerationService:
         language: str,
     ) -> dict[str, dict[str, Any]]:
         title = _concept_prompt_title(concept, language=language)
+        authored_pack = _AUTHORED_FALLBACK_PACKS.get(concept.code)
+        if authored_pack is not None:
+            return authored_pack
         code = concept.code.lower()
         text = f"{code} {title}".lower()
         if "perkalian" in text or "multiplication" in text or "kali" in text:
@@ -571,6 +574,20 @@ class AdaptivePretestGenerationService:
         diagnosis_context: str,
         previous_questions: list[str],
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        cached_pack = _golden_flow_pretest_cache(concept=concept, assessment_type=assessment_type)
+        if cached_pack is not None:
+            return _fresh_fallback_questions(
+                fallback_pack=cached_pack,
+                difficulties=difficulties,
+            ), {
+                "generation_source": "golden_flow_cached",
+                "llm_provider": "curated",
+                "llm_model": "golden_flow_cache_v1",
+                "prompt_version": FRESH_QUESTION_PROMPT_VERSION,
+                "cache_reason": "Curated curve-sketching golden-flow question cache.",
+                "batch_size": len(difficulties),
+                "difficulty_sequence": difficulties,
+            }
         if _allow_dev_fallback_questions():
             fallback_pack = self._fallback_pack(concept=concept, language=language)
             fallback_questions = _fresh_fallback_questions(
@@ -833,6 +850,175 @@ def _generic_pack(
             ),
         ],
     )
+
+
+def _authored_pack(
+    *,
+    concept_code: str,
+    rows: list[tuple[str, str, list[tuple[str, str, bool]], str, str, list[tuple[str, str]]]],
+) -> dict[str, dict[str, Any]]:
+    """Build a fallback pack from real previously-generated question content.
+
+    Each row carries an authored skill_trace so evidence-directed prerequisite
+    routing keeps working for dev-fallback questions, unlike the generic packs
+    above whose skill_trace is synthesized as a single self-referencing step.
+    """
+    pack: dict[str, dict[str, Any]] = {}
+    for difficulty, prompt, options, explanation, expected_reasoning, skill_trace in rows:
+        pack[difficulty] = {
+            "concept_code": concept_code,
+            "difficulty": difficulty,
+            "question_type": "direct_computation",
+            "prompt": prompt,
+            "helper_text": "",
+            "options": [
+                {"label": label, "text": text, "is_correct": is_correct}
+                for label, text, is_correct in options
+            ],
+            "explanation": explanation,
+            "expected_reasoning": expected_reasoning,
+            "skill_trace": [
+                {"concept_code": trace_code, "criterion": criterion}
+                for trace_code, criterion in skill_trace
+            ],
+            "rubric": {
+                "correct_answer_score": 1.0,
+                "reasoning_score_available": True,
+                "canvas_score_available": True,
+            },
+        }
+    return pack
+
+
+def _curve_sketching_fallback_pack() -> dict[str, dict[str, Any]]:
+    concept_code = "km_f_matematika_tingkat_lanjut_sketsa_kurva_menggunakan_turunan"
+    polynomial_code = "km_f_matematika_tingkat_lanjut_turunan_fungsi_polinomial"
+    chain_rule_code = "km_f_matematika_tingkat_lanjut_aturan_rantai"
+    trig_code = "km_f_matematika_tingkat_lanjut_turunan_fungsi_trigonometri"
+    return _authored_pack(
+        concept_code=concept_code,
+        rows=[
+            (
+                "easy",
+                "Given f(x)=x^3-12x, classify the critical point at x=-2.",
+                [
+                    ("A", "Point of discontinuity", False),
+                    ("B", "Neither", False),
+                    ("C", "Local maximum", True),
+                    ("D", "Local minimum", False),
+                ],
+                "Since f' changes from positive to negative at x=-2, the function increases then decreases, so x=-2 is a local maximum.",
+                "The derivative is f'(x)=3x^2-12=3(x-2)(x+2). At x=-2, f'=0. Test sign: for x<-2 (e.g., x=-3), f' positive; for x between -2 and 2 (e.g., x=0), f' negative. So f' changes from positive to negative, indicating a local maximum at x=-2.",
+                [
+                    (polynomial_code, "Differentiates polynomial function f(x)=x^3-12x to obtain f'(x)=3x^2-12 and identifies critical points."),
+                    (concept_code, "Uses sign analysis of f'(x) to classify the critical point as a local maximum based on the change from positive to negative."),
+                ],
+            ),
+            (
+                "medium",
+                "Determine the x-coordinate of the inflection point of f(x)=(x-1)(x+2)^2.",
+                [
+                    ("A", "1", False),
+                    ("B", "0", False),
+                    ("C", "-1", True),
+                    ("D", "-2", False),
+                ],
+                "An inflection point occurs where f''(x)=0 and concavity changes. f''(-1)=0, and concavity changes from down to up at x=-1, so it is an inflection point.",
+                "Expand: f(x)=x^3+3x^2-4. Then f'(x)=3x^2+6x, f''(x)=6x+6. Set f''=0 -> x=-1. Check concavity: for x<-1 (e.g., x=-2), f''=-6<0 (concave down); for x>-1 (e.g., x=0), f''=6>0 (concave up). Since concavity changes, x=-1 is an inflection point.",
+                [
+                    (polynomial_code, "Expands or differentiates f(x) to find f'(x)=3x^2+6x and f''(x)=6x+6."),
+                    (concept_code, "Sets f''(x)=0, solves for x=-1, and verifies concavity change to confirm the inflection point."),
+                ],
+            ),
+            (
+                "hard",
+                "Classify the critical point at x=0 for f(x)=sin(πx^2) on the interval [-1,1].",
+                [
+                    ("A", "Local maximum", False),
+                    ("B", "It is not a critical point", False),
+                    ("C", "Local minimum", True),
+                    ("D", "Neither (inflection point)", False),
+                ],
+                "f'(x) changes from negative to positive at x=0, so the function decreases then increases, indicating a local minimum. The second derivative test confirms with f''(0)=2π>0.",
+                "f'(x)=2πx cos(πx^2). At x=0, f'(0)=0. First derivative test: for x<0 near 0, x negative and cos(πx^2) positive, so f'(x) negative; for x>0 near 0, positive, so f'(x) changes from negative to positive -> local minimum. Second derivative test: f''(x)=2π cos(πx^2) - 4π^2 x^2 sin(πx^2); f''(0)=2π>0 -> local minimum.",
+                [
+                    (chain_rule_code, "Applies the chain rule to differentiate f(x)=sin(πx^2) and obtains f'(x)=2πx cos(πx^2)."),
+                    (trig_code, "Differentiates the trigonometric outer function and multiplies by the inner derivative correctly, preserving the correct form."),
+                    (concept_code, "Uses the first or second derivative test to classify x=0 as a local minimum based on sign change of f'(x) or positive second derivative."),
+                ],
+            ),
+        ],
+    )
+
+
+def _chain_rule_fallback_pack() -> dict[str, dict[str, Any]]:
+    concept_code = "km_f_matematika_tingkat_lanjut_aturan_rantai"
+    return _authored_pack(
+        concept_code=concept_code,
+        rows=[
+            (
+                "easy",
+                "Differentiate $f(x) = (3x^2 + 2)^4$.",
+                [
+                    ("A", "$f'(x) = 4(3x^2 + 2)^3$", False),
+                    ("B", "$f'(x) = 24x(3x^2 + 2)^3$", True),
+                    ("C", "$f'(x) = 12x(3x^2 + 2)^3$", False),
+                    ("D", "$f'(x) = 12x(3x^2 + 2)^3$", False),
+                ],
+                "The chain rule requires multiplying the derivative of the outer function (keeping the inner function unchanged) by the derivative of the inner function. The correct derivative is $24x(3x^2+2)^3$.",
+                "The outer function is $u^4$ with $u=3x^2+2$. The derivative of the outer function with respect to $u$ is $4u^3 = 4(3x^2+2)^3$. The derivative of the inner function is $6x$. By the chain rule, $f'(x) = 4(3x^2+2)^3 \\cdot 6x = 24x(3x^2+2)^3$.",
+                [
+                    (concept_code, "Identify outer function $u^4$ and inner function $u=3x^2+2$, differentiate outer to get $4u^3$, multiply by derivative of inner $6x$, and simplify to $24x(3x^2+2)^3$."),
+                ],
+            ),
+            (
+                "medium",
+                "Differentiate $f(x) = \\sin(4x^3)$.",
+                [
+                    ("A", "$f'(x) = 4x^3 \\cos(4x^3)$", False),
+                    ("B", "$f'(x) = \\cos(4x^3)$", False),
+                    ("C", "$f'(x) = 12x^2 \\cos(4x^3)$", True),
+                    ("D", "$f'(x) = 12x^2 \\sin(4x^3)$", False),
+                ],
+                "The chain rule requires multiplying the derivative of the outer function (keeping the inner function unchanged) by the derivative of the inner function. The correct derivative is $12x^2 \\cos(4x^3)$.",
+                "The outer function is $\\sin(u)$ with $u=4x^3$. The derivative of the outer function is $\\cos(u) = \\cos(4x^3)$. The derivative of the inner function is $12x^2$. By the chain rule, $f'(x) = \\cos(4x^3) \\cdot 12x^2 = 12x^2 \\cos(4x^3)$.",
+                [
+                    (concept_code, "Identify outer function $\\sin(u)$ and inner function $u=4x^3$, differentiate outer to get $\\cos(u)$, multiply by derivative of inner $12x^2$, and simplify to $12x^2 \\cos(4x^3)$."),
+                ],
+            ),
+            (
+                "hard",
+                "Differentiate $f(x) = (1 + \\cos(2x))^3$.",
+                [
+                    ("A", "$f'(x) = -6 \\sin(2x) (1 + \\cos(2x))^2$", True),
+                    ("B", "$f'(x) = -3 \\sin(2x) (1 + \\cos(2x))^2$", False),
+                    ("C", "$f'(x) = 6 \\sin(2x) (1 + \\cos(2x))^2$", False),
+                    ("D", "$f'(x) = 3(1 + \\cos(2x))^2$", False),
+                ],
+                "The chain rule must be applied to each layer. The correct derivative is $-6\\sin(2x)(1+\\cos(2x))^2$.",
+                "The function is a composition: outer $u^3$ with $u=1+\\cos(2x)$, and $\\cos(2x)$ is itself a composition. First, derivative of outer: $3(1+\\cos(2x))^2$. Then derivative of $1+\\cos(2x)$ is $-\\sin(2x)\\cdot 2 = -2\\sin(2x)$. Multiply: $3(1+\\cos(2x))^2 \\cdot (-2\\sin(2x)) = -6\\sin(2x)(1+\\cos(2x))^2$.",
+                [
+                    (concept_code, "Apply chain rule twice: differentiate outer $u^3$ with $u=1+\\cos(2x)$ to get $3(1+\\cos(2x))^2$, then differentiate $\\cos(2x)$ to get $-\\sin(2x)\\cdot 2$, multiply all factors to obtain $-6\\sin(2x)(1+\\cos(2x))^2$."),
+                ],
+            ),
+        ],
+    )
+
+
+_AUTHORED_FALLBACK_PACKS: dict[str, dict[str, dict[str, Any]]] = {
+    "km_f_matematika_tingkat_lanjut_sketsa_kurva_menggunakan_turunan": _curve_sketching_fallback_pack(),
+    "km_f_matematika_tingkat_lanjut_aturan_rantai": _chain_rule_fallback_pack(),
+}
+
+
+def _golden_flow_pretest_cache(
+    *,
+    concept: KnowledgeConcept,
+    assessment_type: str,
+) -> dict[str, dict[str, Any]] | None:
+    if assessment_type != "pretest":
+        return None
+    return _AUTHORED_FALLBACK_PACKS.get(concept.code)
 
 
 def _pack_prompt(
@@ -1720,12 +1906,17 @@ def _fallback_question_variant(
     variant_index: int,
     variant_count: int,
 ) -> dict[str, Any]:
-    skill_trace = [
-        {
-            "concept_code": str(question["concept_code"]),
-            "criterion": str(question["expected_reasoning"]),
-        }
-    ]
+    authored_skill_trace = question.get("skill_trace")
+    skill_trace = (
+        authored_skill_trace
+        if isinstance(authored_skill_trace, list) and authored_skill_trace
+        else [
+            {
+                "concept_code": str(question["concept_code"]),
+                "criterion": str(question["expected_reasoning"]),
+            }
+        ]
+    )
     if variant_count <= 1:
         return {
             **question,

@@ -10,6 +10,7 @@ from app.modules.pretests.adaptive_service import (
     _select_pretest_diagnostic_path,
 )
 from app.modules.pretests.generation_service import (
+    AdaptivePretestGenerationService,
     _fresh_generation_max_tokens,
     _fresh_generation_timeout_seconds,
     _fresh_question_prompt,
@@ -132,6 +133,42 @@ def test_pretest_generation_timeout_is_capped_below_frontend_timeout(monkeypatch
         assessment_type="pretest",
         ai_request_timeout_seconds=999,
     ) == 270
+
+
+def test_curve_sketching_pretest_uses_cached_golden_flow_questions(monkeypatch):
+    concept = KnowledgeConcept(
+        code="km_f_matematika_tingkat_lanjut_sketsa_kurva_menggunakan_turunan",
+        title="Sketsa kurva menggunakan turunan",
+    )
+
+    async def unexpected_ai_call(**_kwargs):
+        raise AssertionError("The golden-flow cache must not call the LLM.")
+
+    monkeypatch.setattr(
+        "app.modules.pretests.generation_service.ai_client.generate",
+        unexpected_ai_call,
+    )
+    service = AdaptivePretestGenerationService()
+    payloads, metadata = service._generate_fresh_questions(
+        concept=concept,
+        difficulties=["easy", "medium", "hard"],
+        assessment_type="pretest",
+        language="English",
+        node_role="goal",
+        skill_candidates=[],
+        diagnosis_context="",
+        previous_questions=[],
+    )
+
+    assert metadata["generation_source"] == "golden_flow_cached"
+    assert [payload["difficulty"] for payload in payloads] == ["easy", "medium", "hard"]
+    assert "sin(πx^2)" in payloads[-1]["prompt"]
+    for payload in payloads:
+        service.validator.validate_question(
+            concept_code=concept.code,
+            difficulty=payload["difficulty"],
+            question=payload,
+        )
 
 
 def test_prerequisite_probe_schema_requires_direct_computation():
