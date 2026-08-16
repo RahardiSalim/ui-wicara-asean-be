@@ -185,9 +185,10 @@ def _render_template_scene_manim(
     # core_templates imports the brand theme, and the theme registers Poppins
     # from assets/fonts beside itself. Both have to land in the workdir or the
     # scene either fails to import or silently renders in Pango's default face.
-    theme_module = templates_dir / "wicara_theme.py"
-    if theme_module.exists():
-        shutil.copyfile(theme_module, render_workdir / "wicara_theme.py")
+    for sidecar in ("wicara_theme.py", "wicara_objects.py", "wicara_motion.py"):
+        module_path = templates_dir / sidecar
+        if module_path.exists():
+            shutil.copyfile(module_path, render_workdir / sidecar)
     theme_assets = templates_dir / "assets"
     if theme_assets.exists():
         shutil.copytree(
@@ -210,6 +211,11 @@ def _render_template_scene_manim(
     spec_repr = repr(spec_payload)
     render_scene_path.write_text(
         (
+            # Manim leaves frame_width at its 16:9 default even when the quality
+            # profile asks for portrait pixels, which letterboxes the scene
+            # instead of reflowing it. Pin the frame before the Scene exists.
+            "from manim import config\n"
+            "config.frame_width = config.frame_height * config.pixel_width / config.pixel_height\n\n"
             "from generated_template import GeneratedTemplate\n\n"
             "class RenderScene(GeneratedTemplate):\n"
             f"    SPEC = {spec_repr}\n"

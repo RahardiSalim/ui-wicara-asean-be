@@ -1,0 +1,41 @@
+{
+  "eyebrow": "Membangun Objek",
+  "title": "Dari Bentuk Sederhana ke Rumah",
+  "subtitle": "Objek yang rumit selalu tersusun dari bentuk-bentuk dasar.",
+  "object": "house",
+  "part_steps": [
+    {
+      "title": "Garis tanah",
+      "body": "Setiap bangunan mulai dari satu garis datar sebagai alas."
+    },
+    {
+      "title": "Dinding",
+      "body": "Sebuah persegi panjang menjadi badan rumah."
+    },
+    {
+      "title": "Atap",
+      "body": "Segitiga di atas dinding; dua bentuk dasar sudah membentuk rumah."
+    },
+    {
+      "title": "Cerobong",
+      "body": "Persegi panjang kecil menambah detail di garis atap."
+    },
+    {
+      "title": "Pintu",
+      "body": "Persegi panjang lagi, kali ini di dalam dinding."
+    },
+    {
+      "title": "Gagang pintu",
+      "body": "Satu titik kecil; detail terakhir yang membuatnya terbaca."
+    },
+    {
+      "title": "Jendela",
+      "body": "Persegi dengan palang membagi bidang dinding."
+    },
+    {
+      "title": "Palang jendela",
+      "body": "Dua garis menyilang menyelesaikan bentuknya."
+    }
+  ],
+  "summary": "Rumah ini hanya persegi, segitiga, garis, dan satu titik."
+}

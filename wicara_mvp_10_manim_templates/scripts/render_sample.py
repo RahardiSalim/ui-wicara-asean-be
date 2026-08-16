@@ -11,7 +11,7 @@ tmp=ROOT/'tmp_render'; tmp.mkdir(exist_ok=True)
 shutil.rmtree(tmp/'__pycache__', ignore_errors=True)
 for stale in ['generated_template.py', 'render_scene.py']:
     (tmp/stale).unlink(missing_ok=True)
-for name in ['core_templates.py','base_scene.py','wicara_theme.py']:
+for name in ['core_templates.py','base_scene.py','wicara_theme.py','wicara_objects.py','wicara_motion.py']:
     src = ROOT/'templates'/'manim'/name
     if src.exists():
         shutil.copyfile(src, tmp/name)

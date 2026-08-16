@@ -1,0 +1,28 @@
+{
+  "eyebrow": "Matematika - Deret Fourier",
+  "title": "Lingkaran yang Menggambar Bentuk",
+  "subtitle": "Setiap bentuk tertutup dapat disusun dari putaran-putaran sederhana.",
+  "audience_level": "sma",
+  "trace_text": "W",
+  "terms": 64,
+  "cycles": 2,
+  "steps": [
+    {
+      "title": "Ambil lintasannya",
+      "body": "Bentuk apa pun dapat dibaca sebagai satu lintasan tertutup."
+    },
+    {
+      "title": "Uraikan jadi putaran",
+      "body": "Transformasi Fourier memecah lintasan itu menjadi putaran dengan jari-jari dan kecepatan tertentu."
+    },
+    {
+      "title": "Susun bertingkat",
+      "body": "Setiap lingkaran berputar di ujung lingkaran sebelumnya."
+    },
+    {
+      "title": "Ujung pena menggambar",
+      "body": "Titik terakhir menelusuri kembali bentuk semula."
+    }
+  ],
+  "summary": "Bentuk rumit hanyalah jumlah dari putaran-putaran sederhana."
+}

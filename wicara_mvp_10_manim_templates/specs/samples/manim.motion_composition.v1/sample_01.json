@@ -1,0 +1,39 @@
+{
+  "eyebrow": "Motion System",
+  "title": "Gerak yang Terasa Nyata",
+  "subtitle": "Pegas, timeline, dan transisi -- disusun sebagai data, bukan urutan perintah.",
+  "audience_level": "smp",
+  "fps": 30,
+  "metrics": [
+    {
+      "label": "Template",
+      "value": 80,
+      "suffix": ""
+    },
+    {
+      "label": "Objek",
+      "value": 17,
+      "suffix": ""
+    },
+    {
+      "label": "Palet",
+      "value": 6,
+      "suffix": ""
+    }
+  ],
+  "steps": [
+    {
+      "title": "Pegas, bukan kurva",
+      "body": "Setiap elemen masuk dengan fisika peredam-pegas, sehingga sedikit melewati sasaran lalu mapan."
+    },
+    {
+      "title": "Timeline sebagai data",
+      "body": "Segmen dideklarasikan beserta durasinya; urutannya dihitung, bukan dicatat manual."
+    },
+    {
+      "title": "Angka yang menghitung",
+      "body": "Nilai dipetakan dari rentang ke rentang, lalu berhenti tepat di batasnya."
+    }
+  ],
+  "summary": "Gerak yang baik membuat penjelasan terasa hidup tanpa mengalihkan perhatian."
+}

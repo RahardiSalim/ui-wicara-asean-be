@@ -1,0 +1,35 @@
+{
+  "eyebrow": "Matematika - Aljabar Linear",
+  "title": "Matriks Menekuk Ruang",
+  "subtitle": "Sebuah matriks memindahkan seluruh bidang, bukan hanya satu titik.",
+  "audience_level": "sma",
+  "matrix": [
+    [
+      2.0,
+      1.0
+    ],
+    [
+      0.5,
+      1.5
+    ]
+  ],
+  "steps": [
+    {
+      "title": "Bidang utuh ikut bergerak",
+      "body": "Setiap garis grid dipetakan ke tempat baru, tetapi tetap lurus dan tetap sejajar."
+    },
+    {
+      "title": "Kolom matriks adalah tujuan",
+      "body": "Vektor basis i dan j mendarat tepat pada kolom pertama dan kedua matriks."
+    },
+    {
+      "title": "Determinan adalah luas",
+      "body": "Persegi satuan menjadi jajaran genjang; luasnya sama dengan nilai determinan."
+    },
+    {
+      "title": "Eigenvektor tidak berbelok",
+      "body": "Hanya arah-arah ini yang bertahan pada garisnya sendiri, sekadar memanjang."
+    }
+  ],
+  "summary": "Matriks adalah aturan yang memindahkan seluruh ruang sekaligus."
+}

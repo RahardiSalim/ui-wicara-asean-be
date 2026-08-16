@@ -12,6 +12,16 @@ try:
 except ImportError:  # rendered as a loose script, not a package
     import wicara_theme as theme
 
+try:
+    from . import wicara_objects as objects
+except ImportError:  # rendered as a loose script, not a package
+    import wicara_objects as objects
+
+try:
+    from . import wicara_motion as motion
+except ImportError:  # rendered as a loose script, not a package
+    import wicara_motion as motion
+
 # ---------------------------------------------------------------------------
 # Palette remap
 # ---------------------------------------------------------------------------
@@ -23,44 +33,66 @@ except ImportError:  # rendered as a loose script, not a package
 # Values are the deck's dark-ground tokens. Stock RED and GREEN are tuned for
 # a black canvas and go muddy on ink, so each maps to the lifted equivalent
 # rather than to the light-ground token.
-YELLOW = theme.GOLD              # emphasis, moving points, highlighted terms
-GOLD = theme.GOLD
-BLUE = theme.BLUE_ON_INK         # the primary rail; #2436D8 is too dark on ink
-GREEN = theme.GOOD               # correct, growth, positive delta
-RED = "#FF6B85"                  # --alert lifted to clear 4.5:1 on --ink
-ORANGE = theme.CHIPS[1]
-PURPLE = theme.VIOLET
-TEAL = theme.GOOD
-PINK = theme.CHIPS[4]
-MAROON = theme.CHIPS[4]
+# Every value is derived from the active palette rather than written out, so
+# switching palette repaints all ~700 call sites. sync_palette() re-runs this
+# whenever a spec asks for a different one.
+def sync_palette():
+    global YELLOW, GOLD, BLUE, GREEN, RED, ORANGE, PURPLE, TEAL, PINK, MAROON
+    global GRAY, GREY, GRAY_A, GREY_A, GRAY_B, GREY_B, GRAY_C, GREY_C
+    global GRAY_D, GREY_D, GRAY_E, GREY_E, LIGHT_GREY, LIGHT_GRAY
+    global DARK_GREY, DARK_GRAY
+    global BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E
+    global GREEN_A, GREEN_B, GREEN_C, GREEN_D, GREEN_E
+    global YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E
+    global RED_A, RED_B, RED_C, RED_D, RED_E
+    global PURPLE_A, PURPLE_B, PURPLE_C, PURPLE_D, PURPLE_E
 
-# Greys become the on-ink text tiers, so captions and axis labels stop
-# disappearing into the plate.
-GRAY = GREY = theme.ON_INK_3
-GRAY_A = GREY_A = theme.ON_INK_2
-GRAY_B = GREY_B = theme.ON_INK_3
-GRAY_C = GREY_C = theme.RULE
-GRAY_D = GREY_D = theme.RULE
-GRAY_E = GREY_E = theme.INK_LIFT
-LIGHT_GREY = LIGHT_GRAY = theme.ON_INK_2
-DARK_GREY = DARK_GRAY = theme.RULE
+    YELLOW = theme.GOLD              # emphasis, moving points, highlighted terms
+    GOLD = theme.GOLD
+    BLUE = theme.BLUE_ON_INK         # the primary rail; raw --blue is too dark
+    GREEN = theme.GOOD               # correct, growth, positive delta
+    RED = theme.on_ground(theme.ALERT)   # alert, legible on whichever ground
+    ORANGE = theme.CHIPS[1]
+    PURPLE = theme.on_ground(theme.VIOLET)
+    TEAL = theme.GOOD
+    PINK = theme.on_ground(theme.CHIPS[4])
+    MAROON = PINK
 
-# Manim's letter variants used by a few templates.
-BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E = (
-    "#DCE0FF", theme.BLUE_ON_INK, theme.BLUE_ON_INK, theme.BLUE, theme.BLUE_DEEP,
-)
-GREEN_A, GREEN_B, GREEN_C, GREEN_D, GREEN_E = (
-    "#8FE6DC", theme.GOOD, theme.GOOD, "#12907F", "#0C6C5C",
-)
-YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E = (
-    "#FFEFC7", theme.GOLD, theme.GOLD, "#E5B75F", "#C2933F",
-)
-RED_A, RED_B, RED_C, RED_D, RED_E = (
-    "#FFB3C0", RED, RED, "#D94A63", theme.ALERT,
-)
-PURPLE_A, PURPLE_B, PURPLE_C, PURPLE_D, PURPLE_E = (
-    "#D9C6FF", "#A87BEA", theme.VIOLET, "#5726AC", "#421C85",
-)
+    # Greys become the palette's text tiers, so captions and axis labels stop
+    # disappearing into the plate.
+    GRAY = GREY = theme.ON_INK_3
+    GRAY_A = GREY_A = theme.ON_INK_2
+    GRAY_B = GREY_B = theme.ON_INK_3
+    GRAY_C = GREY_C = theme.RULE
+    GRAY_D = GREY_D = theme.RULE
+    GRAY_E = GREY_E = theme.INK_LIFT
+    LIGHT_GREY = LIGHT_GRAY = theme.ON_INK_2
+    DARK_GREY = DARK_GRAY = theme.RULE
+
+    # Manim's letter variants: A is the lightest tint, E the deepest shade.
+    BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E = (
+        theme.lift(theme.BLUE_ON_INK, 0.55), theme.BLUE_ON_INK,
+        theme.BLUE_ON_INK, theme.BLUE, theme.BLUE_DEEP,
+    )
+    GREEN_A, GREEN_B, GREEN_C, GREEN_D, GREEN_E = (
+        theme.lift(theme.GOOD, 0.55), theme.GOOD, theme.GOOD,
+        theme.deepen(theme.GOOD, 0.28), theme.deepen(theme.GOOD, 0.48),
+    )
+    YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E = (
+        theme.lift(theme.GOLD, 0.55), theme.GOLD, theme.GOLD,
+        theme.deepen(theme.GOLD, 0.24), theme.deepen(theme.GOLD, 0.44),
+    )
+    RED_A, RED_B, RED_C, RED_D, RED_E = (
+        theme.lift(RED, 0.5), RED, RED,
+        theme.deepen(RED, 0.26), theme.ALERT,
+    )
+    PURPLE_A, PURPLE_B, PURPLE_C, PURPLE_D, PURPLE_E = (
+        theme.lift(theme.VIOLET, 0.62), theme.lift(theme.VIOLET, 0.30),
+        PURPLE, theme.deepen(theme.VIOLET, 0.28), theme.deepen(theme.VIOLET, 0.46),
+    )
+
+
+sync_palette()
 
 try:
     from manim_voiceover import VoiceoverScene
@@ -495,7 +527,10 @@ class WicaraTemplateScene(VoiceoverScene):
 
     def setup(self):
         super().setup()
+        self._resolve_palette()
+        self._resolve_layout()
         self._apply_brand_ground()
+        self._pace = None
         self._resolved_language = "id"
         self._voiceover_initialized = False
         self._voiceover_enabled = False
@@ -513,13 +548,57 @@ class WicaraTemplateScene(VoiceoverScene):
     # Brand ground
     # --------------------------------------------------------
 
+    def _resolve_palette(self):
+        """Pick the palette this render uses, before anything is drawn.
+
+        Resolution order, most specific first:
+
+          1. `palette_tokens` -- an explicit token dict, for a caller supplying
+             its own brand colours.
+          2. `palette` -- a named palette or an alias.
+          3. `subject` / `subject_name` -- so a chemistry lesson comes out warm
+             and a biology lesson comes out green without anyone choosing.
+          4. WICARA_PALETTE in the environment, for previewing a spec in every
+             palette without editing it.
+          5. the deck default.
+
+        Runs in setup(), so construct() and the brand ground both see the
+        finished palette. A name that resolves to nothing falls through rather
+        than raising: a bad preference string must never cost a render.
+        """
+        spec = self.SPEC if isinstance(self.SPEC, dict) else {}
+
+        tokens = spec.get("palette_tokens")
+        if isinstance(tokens, dict) and tokens:
+            self._palette = theme.use_palette(tokens)
+            sync_palette()
+            return
+
+        candidates = [
+            spec.get("palette"),
+            spec.get("color_theme"),
+            spec.get("subject"),
+            spec.get("subject_name"),
+            os.environ.get("WICARA_PALETTE"),
+        ]
+        for candidate in candidates:
+            resolved = theme.resolve_palette(candidate)
+            if resolved:
+                self._palette = theme.use_palette(resolved)
+                sync_palette()
+                return
+
+        self._palette = theme.use_palette("ink")
+        sync_palette()
+
     def _apply_brand_ground(self):
-        """Ink plate, violet glow, blueprint grid and corner ticks.
+        """Ink plate, violet glow, brand face, blueprint grid and corner ticks.
 
         Runs from setup() so every template inherits it without changing a
         single line of its own construct().
         """
         self.camera.background_color = theme.INK
+        self._apply_brand_font()
         self._brand_ground = []
         try:
             self._brand_plate, self._brand_decor = theme.make_background(self)
@@ -529,6 +608,94 @@ class WicaraTemplateScene(VoiceoverScene):
         except Exception:
             # A themed background is never worth failing a render over.
             self._brand_plate = self._brand_decor = None
+
+    def _apply_brand_font(self):
+        """Make Poppins the default face for every Text in every template.
+
+        The title block and cards pass theme.font_kwargs() explicitly, but the
+        shared helpers -- circle_chip, simple_box and a few dozen others -- call
+        Text() bare, so their labels fell back to Pango's default serif. Chip
+        letters and box captions were rendering in a different typeface from the
+        headings sitting right above them.
+
+        Setting the class default fixes all of them at once, and anything that
+        passes `font=` explicitly still wins.
+        """
+        family = theme.register_fonts()
+        if not family:
+            return
+        for cls in (Text, Paragraph):
+            try:
+                cls.set_default(font=family)
+            except Exception:
+                # set_default is a Manim convenience, not a guarantee; a missing
+                # brand face is a downgrade, never a failed render.
+                pass
+
+    # --------------------------------------------------------
+    # Aspect-aware layout
+    # --------------------------------------------------------
+    #
+    # Every zone used to be a number typed for a 16:9 frame. That is fine until
+    # the same lesson has to come out as a 9:16 short for Reels or TikTok, where
+    # the frame is 4.5 units wide instead of 14.2 and a card parked at x=4.05 is
+    # off-screen entirely.
+    #
+    # So zones are computed from config, and templates compose in a *nominal*
+    # 16:9 space that is mapped onto whatever frame is actually being rendered.
+    # A template writes one set of coordinates and gets every aspect ratio.
+
+    #: The space a template's own coordinates are written in.
+    NOMINAL_W = 13.7
+    NOMINAL_H = 3.85
+
+    def is_portrait(self):
+        return config.frame_width < config.frame_height * 0.95
+
+    def is_square(self):
+        ratio = config.frame_width / max(config.frame_height, 1e-6)
+        return 0.95 <= ratio <= 1.15
+
+    def _resolve_layout(self):
+        fw, fh = config.frame_width, config.frame_height
+        self._portrait = self.is_portrait() or self.is_square()
+
+        if self._portrait:
+            # Title band on top, stage in the middle, card and captions below.
+            # Class-level STAGE_* overrides are ignored here: they were authored
+            # against a wide frame and mean nothing at this aspect.
+            self.stage_left = -fw / 2 + 0.30
+            self.stage_right = fw / 2 - 0.30
+            self.stage_top = fh / 2 - 2.30
+            self.stage_bottom = -fh / 2 + 2.70
+            self._card_zone = "bottom"
+        else:
+            self.stage_left = self.STAGE_LEFT
+            self.stage_right = self.STAGE_RIGHT
+            self.stage_top = self.STAGE_TOP
+            self.stage_bottom = self.STAGE_BOTTOM
+            self._card_zone = "right"
+
+        # The nominal-to-frame transform every template draws through.
+        centre, width, height = self.stage_box()
+        self._scene_scale = min(
+            width / self.NOMINAL_W, height / self.NOMINAL_H
+        )
+        self._scene_origin = centre
+
+    def card_zone(self):
+        """Where guidance cards live at this aspect."""
+        return getattr(self, "_card_zone", "right")
+
+    def P(self, x, y=0.0):
+        """Map a nominal-space point onto the frame actually being rendered."""
+        scale = getattr(self, "_scene_scale", 1.0)
+        origin = getattr(self, "_scene_origin", ORIGIN)
+        return origin + np.array([x * scale, y * scale, 0.0])
+
+    def S(self, length):
+        """Map a nominal-space length (a width, a height, a radius)."""
+        return length * getattr(self, "_scene_scale", 1.0)
 
     def scene_content(self):
         """Everything on screen except the brand ground.
@@ -559,6 +726,97 @@ class WicaraTemplateScene(VoiceoverScene):
 
     def bottom_summary_y(self):
         return -3.18
+
+    # --------------------------------------------------------
+    # The stage
+    # --------------------------------------------------------
+    #
+    # Until now "layout" was two bare points: visual_center() for the figure and
+    # right_card_center() for the card. A point cannot say how wide a figure is
+    # allowed to get, so templates that place by hardcoded coordinate simply ran
+    # under the card -- MutationEvolutionSelection lays its second population out
+    # to x=4.9 while the card starts at x=1.67. Nothing in the system objected.
+    #
+    # The stage is a real rectangle. Everything that is not title, card or ground
+    # belongs inside it, and fit_stage() guarantees that by construction.
+
+    STAGE_LEFT = -6.80
+    STAGE_RIGHT = 1.30
+    STAGE_TOP = 1.62
+    STAGE_BOTTOM = -3.62
+
+    def stage_box(self):
+        """(centre, width, height) of the region a figure may occupy.
+
+        Reads the resolved instance bounds, which _resolve_layout() sets from
+        the frame; the class constants are only the 16:9 defaults.
+        """
+        left = getattr(self, "stage_left", self.STAGE_LEFT)
+        right = getattr(self, "stage_right", self.STAGE_RIGHT)
+        top = getattr(self, "stage_top", self.STAGE_TOP)
+        bottom = getattr(self, "stage_bottom", self.STAGE_BOTTOM)
+        centre = np.array([(left + right) / 2.0, (top + bottom) / 2.0, 0.0])
+        return centre, right - left, top - bottom
+
+    def fit_stage(self, *mobjects, margin=0.22, max_scale=2.4, align=None):
+        """Scale a figure to fill the stage, then centre it there.
+
+        Scales up as readily as down: the complaint was never only that figures
+        collided with the card, it was that they sat in a thin band with the
+        bottom third of the frame empty. A figure built at whatever size its
+        hardcoded coordinates imply gets resized to actually use the stage.
+
+        `align` optionally pins one edge (LEFT/RIGHT/UP/DOWN) instead of
+        centring, for figures that read better anchored.
+        """
+        group = VGroup(*[m for m in mobjects if m is not None])
+        if not len(group):
+            return group
+
+        centre, width, height = self.stage_box()
+        avail_w = max(0.1, width - 2 * margin)
+        avail_h = max(0.1, height - 2 * margin)
+
+        cur_w = max(group.width, 1e-6)
+        cur_h = max(group.height, 1e-6)
+        factor = min(avail_w / cur_w, avail_h / cur_h, max_scale)
+        if factor > 0 and abs(factor - 1.0) > 1e-3:
+            group.scale(factor)
+
+        group.move_to(centre)
+        if align is not None:
+            # Pin one edge to the matching stage boundary; the other axis keeps
+            # the centred position from move_to above.
+            limits = {
+                tuple(LEFT): (0, centre[0] - width / 2 + margin),
+                tuple(RIGHT): (0, centre[0] + width / 2 - margin),
+                tuple(UP): (1, centre[1] + height / 2 - margin),
+                tuple(DOWN): (1, centre[1] - height / 2 + margin),
+            }
+            found = limits.get(tuple(np.sign(align)))
+            if found:
+                axis, limit = found
+                shift = np.zeros(3)
+                shift[axis] = limit - group.get_edge_center(align)[axis]
+                group.shift(shift)
+        return group
+
+    def stage_rows(self, *rows, buff=0.55, align_edge=None):
+        """Stack figure rows down the stage and fit the result.
+
+        The bio template drew generation one and generation two side by side,
+        which is what pushed the second group into the card. They are a
+        before/after pair -- stacked they read better *and* they use the
+        vertical space that was sitting empty.
+        """
+        groups = [VGroup(*r) if isinstance(r, (list, tuple)) else r for r in rows]
+        groups = [g for g in groups if g is not None and len(g)]
+        if not groups:
+            return VGroup()
+        stack = VGroup(*groups)
+        stack.arrange(DOWN, buff=buff, aligned_edge=align_edge or ORIGIN)
+        self.fit_stage(stack)
+        return stack
 
     # --------------------------------------------------------
     # Text/card helpers
@@ -872,6 +1130,7 @@ class WicaraTemplateScene(VoiceoverScene):
             if lang in {"id", "en", "vi", "ms", "ja"}:
                 self._resolved_language = lang
                 return lang
+        self._pace = None
         self._resolved_language = "id"
         return "id"
 
@@ -960,16 +1219,36 @@ class WicaraTemplateScene(VoiceoverScene):
             )
             block = VGroup(block, subtitle).arrange(DOWN, aligned_edge=LEFT, buff=0.16)
 
-        block.to_edge(UP, buff=0.30).to_edge(LEFT, buff=0.62)
+        if self._portrait:
+            # Centred, tighter margins, and scaled down if the headline still
+            # runs past a narrow frame.
+            block.to_edge(UP, buff=0.34)
+            if block.width > config.frame_width - 0.6:
+                block.scale_to_fit_width(config.frame_width - 0.6)
+            block.move_to(
+                np.array([0.0, block.get_center()[1], 0.0])
+            )
+        else:
+            block.to_edge(UP, buff=0.30).to_edge(LEFT, buff=0.62)
         return block
 
-    def make_card(self, title, body, color=None, width=4.75, body_width=34):
+    def make_card(self, title, body, color=None, width=None, body_width=None):
+        # Card geometry follows the frame. A 4.75-wide card is a third of a 16:9
+        # stage and wider than a 9:16 frame.
+        if width is None:
+            width = min(4.75, config.frame_width - 0.9)
+        if body_width is None:
+            body_width = 34 if not self._portrait else 30
         # Templates still pass stock Manim colours positionally. Map anything
         # that is not already a brand token onto the accent so no card falls
         # back to raw YELLOW/GREEN on the ink ground.
         accent = color if isinstance(color, str) and str(color).startswith("#") else None
         if accent is None:
             accent = theme.ACCENT
+        # A palette is free to include colours that are dark on a dark ground --
+        # mono's fifth chip is #3F3F49 -- and a card heading has to stay readable
+        # whichever one it is handed.
+        accent = theme.on_ground(accent)
 
         localized_title = self.tr_text(title)
         localized_body = self.tr_text(body)
@@ -1026,6 +1305,12 @@ class WicaraTemplateScene(VoiceoverScene):
         return card
 
     def place_right_card(self, card):
+        # There is no right rail on a 9:16 frame -- it is 4.5 units wide, and a
+        # card centred at x=4.05 sits entirely off-screen. Portrait sends every
+        # card to the bottom band instead, which is also where a phone viewer's
+        # eye already is.
+        if self.card_zone() == "bottom":
+            return self.place_summary_card(card)
         card.move_to(self.right_card_center())
         return card
 
@@ -1051,20 +1336,33 @@ class WicaraTemplateScene(VoiceoverScene):
         if previous_card is None:
             self.play_with_voiceover(
                 narration_text,
-                FadeIn(next_card, shift=LEFT * 0.15),
-                run_time=0.55,
+                FadeIn(next_card, shift=LEFT * 0.30),
+                run_time=motion.spring_seconds("gentle"),
+                rate_func=motion.spring_rate("gentle"),
             )
         else:
-            # Cross-fade rather than morph. ReplacementTransform pairs
-            # submobjects one to one, so two cards whose bodies wrap to a
-            # different number of lines raise "zip() argument 2 is shorter than
-            # argument 1" mid-render. Fading is also what the deck does: it
-            # animates opacity and position, never the shape of a glyph.
+            # Fade rather than morph: ReplacementTransform pairs submobjects one
+            # to one, so two cards whose bodies wrap to a different number of
+            # lines raise "zip() argument 2 is shorter than argument 1".
+            #
+            # Staggered, not simultaneous. Both cards sit at the same spot, so
+            # cross-fading them over one shared window left both headings legible
+            # at once -- on a template that swaps cards every half second the
+            # panel read as permanently double-exposed. LaggedStart clears the
+            # outgoing card before the incoming one becomes readable, and the
+            # shared upward shift reads as a stack advancing.
             self.play_with_voiceover(
                 narration_text,
-                FadeOut(previous_card, shift=LEFT * 0.12),
-                FadeIn(next_card, shift=LEFT * 0.12),
-                run_time=0.50,
+                LaggedStart(
+                    FadeOut(previous_card, shift=UP * 0.28),
+                    FadeIn(
+                        next_card,
+                        shift=UP * 0.34,
+                        rate_func=motion.spring_rate("gentle"),
+                    ),
+                    lag_ratio=0.55,
+                ),
+                run_time=0.72,
             )
 
         return next_card
@@ -1101,8 +1399,95 @@ class WicaraTemplateScene(VoiceoverScene):
         self.wait(2.0)
         return summary_card
 
-    def render_step_cards(self, spec, active_card=None, max_steps=5):
+    # --------------------------------------------------------
+    # Pacing
+    # --------------------------------------------------------
+    #
+    # Every render used to come out at roughly the same length no matter what
+    # it was explaining, because the beats were constants: a hard max of five
+    # steps and a flat 0.9s dwell after each. A one-step arithmetic reminder and
+    # a six-step derivation both landed near seventeen seconds -- the first
+    # dawdled, the second got truncated.
+    #
+    # Duration is now a function of what the spec actually contains.
+
+    #: Characters of on-screen text a viewer gets through per second. Deliberately
+    #: conservative: this is a second language for most of the audience, and the
+    #: text sits beside a moving figure competing for attention.
+    READ_RATE = 13.0
+
+    def complexity(self, spec=None):
+        """0..1 -- how much work this lesson is asking the viewer to do."""
+        spec = spec if spec is not None else self.SPEC
+        if not isinstance(spec, dict):
+            return 0.35
+
+        steps = [s for s in (spec.get("steps") or []) if isinstance(s, dict)]
+        # Step count, up to eight, is the strongest single signal.
+        by_count = min(len(steps), 8) / 8.0
+
+        body_chars = sum(
+            len(str(s.get("body", ""))) + len(str(s.get("title", ""))) for s in steps
+        )
+        by_text = min(body_chars, 900) / 900.0
+
+        level = str(spec.get("audience_level", "")).lower()
+        by_level = {
+            "sd": 0.10, "elementary": 0.10,
+            "smp": 0.40, "middle": 0.40,
+            "sma": 0.70, "high": 0.70,
+            "kuliah": 0.90, "university": 0.90,
+        }.get(level, 0.45)
+
+        # Formulae and a named phase both mean more to unpack.
+        extras = 0.0
+        for key in ("formula", "prime_factorization", "equation", "derivation"):
+            if spec.get(key):
+                extras += 0.10
+        extras = min(extras, 0.25)
+
+        score = 0.40 * by_count + 0.30 * by_text + 0.22 * by_level + extras
+        return max(0.0, min(1.0, score))
+
+    def pace(self, spec=None):
+        """Multiplier applied to every timed beat. Cached per scene."""
+        if getattr(self, "_pace", None) is None:
+            override = None
+            if isinstance(self.SPEC, dict):
+                override = self.SPEC.get("pace")
+            if isinstance(override, (int, float)) and override > 0:
+                self._pace = float(max(0.5, min(2.5, override)))
+            else:
+                # 0.85x for the simplest lesson, 1.55x for the densest.
+                self._pace = 0.85 + 0.70 * self.complexity(spec)
+        return self._pace
+
+    def beat(self, seconds):
+        """Scale an animation run_time by this lesson's pace."""
+        return float(seconds) * self.pace()
+
+    def hold_for(self, *texts):
+        """Dwell long enough to actually read `texts`, scaled by pace."""
+        chars = sum(len(self._clean_voice_text(t)) for t in texts if t)
+        seconds = chars / self.READ_RATE
+        return float(max(0.65, min(4.0, seconds))) * self.pace()
+
+    def step_budget(self, spec=None):
+        """How many step cards this lesson earns.
+
+        The old hard cap of five silently dropped the tail of any longer
+        derivation, which is exactly where the hard part usually is.
+        """
+        spec = spec if spec is not None else self.SPEC
+        steps = [s for s in (spec.get("steps") or []) if isinstance(s, dict)]
+        if not steps:
+            return 0
+        return min(len(steps), 4 + int(round(self.complexity(spec) * 6)))
+
+    def render_step_cards(self, spec, active_card=None, max_steps=None):
         steps = require(spec, "steps")
+        if max_steps is None:
+            max_steps = self.step_budget(spec)
 
         for i, step in enumerate(steps[:max_steps]):
             step_title = step.get(
@@ -1130,7 +1515,13 @@ class WicaraTemplateScene(VoiceoverScene):
                 card,
                 narration_text=step_narration,
             )
-            self.wait(float(step.get("wait", 0.9)))
+            # Dwell on what is on screen for as long as it takes to read it,
+            # not for a flat 0.9s. A spec may still pin its own `wait`.
+            explicit = step.get("wait")
+            if isinstance(explicit, (int, float)):
+                self.wait(float(explicit))
+            else:
+                self.wait(self.hold_for(step_title, step_body))
 
         return active_card
 
@@ -2307,14 +2698,37 @@ class GeometryAreaVolumeTemplate(WicaraTemplateScene):
 
         features = spec.get("highlight_features", [])
         if features:
-            feature_text = Text(
-                f"{self.tr_key('highlight_prefix', spec, fallback='Sorot:')} "
-                + ", ".join([str(f) for f in features[:3]]),
-                font_size=20,
-                color=YELLOW,
+            # This used to print "Sorot: panjang, lebar, luas" as one raw comma
+            # list above the figure, which read like debug output and crowded the
+            # subtitle. A row of pills reads as a deliberate legend.
+            pills = VGroup()
+            for index, feature in enumerate(features[:3]):
+                accent = theme.chip(index)
+                label = Text(
+                    str(feature),
+                    font_size=theme.FS_CAPTION,
+                    color=accent,
+                    **theme.font_kwargs("medium"),
+                )
+                pill = RoundedRectangle(
+                    width=label.width + 0.42,
+                    height=label.height + 0.26,
+                    corner_radius=0.14,
+                )
+                pill.set_fill(color=accent, opacity=0.12)
+                pill.set_stroke(color=accent, width=1.4, opacity=0.65)
+                label.move_to(pill.get_center())
+                pills.add(VGroup(pill, label))
+            pills.arrange(RIGHT, buff=0.24)
+            pills.move_to(
+                np.array([visual.get_center()[0], self.stage_bottom + 0.34, 0.0])
             )
-            feature_text.next_to(visual, UP, buff=0.28)
-            self.play(FadeIn(feature_text), run_time=0.45)
+            self.play(
+                LaggedStart(
+                    *[FadeIn(p, shift=UP * 0.08) for p in pills], lag_ratio=0.12
+                ),
+                run_time=0.55,
+            )
 
         active_card = self.render_step_cards(spec, active_card=active_card)
         self.clean_summary(spec, active_card=active_card)
@@ -2526,11 +2940,16 @@ class GraphExplanationTemplate(WicaraTemplateScene):
                 x_value = float(item.get("x", 0))
                 y_value = f(x_value)
                 point_dot = Dot(axes.c2p(x_value, y_value), color=GREEN, radius=0.062)
+                # An 18-char hard clamp cut "point we differentiate" mid-word.
+                # Wrapping keeps the whole phrase, and a wider buff lifts it off
+                # the dashed drop-line it was sitting on.
                 point_label = Text(
-                    clamp_text(str(item.get("label", f"x={x_value:g}")), 18),
-                    font_size=15,
+                    wrap_text(clamp_text(str(item.get("label", f"x={x_value:g}")), 40), 18),
+                    font_size=14,
                     color=GREEN,
-                ).next_to(point_dot, UP, buff=0.09)
+                    line_spacing=0.8,
+                    **theme.font_kwargs("medium"),
+                ).next_to(point_dot, UP, buff=0.22)
                 self.play(FadeIn(point_dot), FadeIn(point_label), run_time=0.42)
 
         tangent_group = None
@@ -5276,28 +5695,71 @@ class MutationEvolutionSelectionTemplate(WicaraTemplateScene):
         self.play(FadeIn(title_block, shift=DOWN * 0.08), run_time=0.6)
         active_card = self.replace_card(None, self.make_card("Variasi populasi", "Individu dalam populasi tidak selalu sama persis; ada variasi sifat.", color=TEAL))
 
-        pop1 = VGroup()
+        # The two generations are a before/after pair, so they stack. Laid out
+        # side by side (the old xs2 ran to x=4.9) the second one landed under the
+        # card, and both were squeezed into a band with the lower third of the
+        # frame empty. Stacked, they read as a sequence and fill the stage.
         colors = [BLUE, GREEN, ORANGE]
-        xs = [-5.0, -4.3, -3.6, -2.9, -2.2, -1.5]
-        for i, x in enumerate(xs):
-            label = labels[i % len(labels)][-1]
-            chip = circle_chip(label, radius=0.22, color=colors[i % len(colors)], font_size=14, fill_opacity=0.24).move_to(RIGHT * x + UP * (0.7 if i % 2 == 0 else 0.15))
-            pop1.add(chip)
-        env = simple_box(spec.get("environment_factor", "Lingkungan"), width=2.2, height=0.7, color=RED, font_size=18).move_to(LEFT * 0.45 + UP * 0.4)
-        arrow = Arrow(pop1.get_right(), env.get_left(), buff=0.2, color=WHITE)
-        self.play(LaggedStart(*[FadeIn(p) for p in pop1], lag_ratio=0.06), FadeIn(env), Create(arrow), run_time=1.0)
 
-        pop2 = VGroup()
-        xs2 = [1.4, 2.1, 2.8, 3.5, 4.2, 4.9]
-        for i, x in enumerate(xs2):
-            color = GREEN if i < 4 else ORANGE
-            lbl = labels[1][-1] if i < 4 else labels[2][-1]
-            chip = circle_chip(lbl, radius=0.22, color=color, font_size=14, fill_opacity=0.24).move_to(RIGHT * x + UP * (0.7 if i % 2 == 0 else 0.15))
-            pop2.add(chip)
+        def generation(picks, caption):
+            row = VGroup(
+                *[
+                    circle_chip(
+                        lbl, radius=0.30, color=col, font_size=18, fill_opacity=0.26
+                    )
+                    for lbl, col in picks
+                ]
+            ).arrange(RIGHT, buff=0.40)
+            cap = Text(
+                caption,
+                font_size=theme.FS_LABEL,
+                color=theme.ON_INK_3,
+                **theme.font_kwargs("medium"),
+            )
+            return VGroup(row, cap).arrange(DOWN, buff=0.22), row
+
+        gen1_block, gen1 = generation(
+            [
+                (labels[i % len(labels)][-1], colors[i % len(colors)])
+                for i in range(6)
+            ],
+            self.tr_text("Generasi awal"),
+        )
+        gen2_block, gen2 = generation(
+            [
+                (labels[1][-1] if i < 4 else labels[2][-1], GREEN if i < 4 else ORANGE)
+                for i in range(6)
+            ],
+            self.tr_text("Generasi berikutnya"),
+        )
+
+        env = simple_box(
+            spec.get("environment_factor", "Lingkungan"),
+            width=2.4,
+            height=0.72,
+            color=RED,
+            font_size=18,
+        )
+        press = VGroup(
+            Arrow(UP * 0.34, DOWN * 0.34, buff=0.0, color=theme.ON_INK_3, stroke_width=3),
+            env,
+            Arrow(UP * 0.34, DOWN * 0.34, buff=0.0, color=theme.ON_INK_3, stroke_width=3),
+        ).arrange(RIGHT, buff=0.55)
+
+        self.stage_rows(gen1_block, press, gen2_block, buff=0.50)
+
+        self.play(
+            LaggedStart(*[FadeIn(p, scale=0.9) for p in gen1], lag_ratio=0.08),
+            FadeIn(gen1_block[1]),
+            run_time=0.9,
+        )
+        self.play(FadeIn(press, shift=DOWN * 0.10), run_time=0.6)
         active_card = self.replace_card(active_card, self.make_card("Seleksi alam", "Lingkungan menyeleksi sifat yang paling menguntungkan untuk bertahan hidup.", color=GREEN))
-        self.play(FadeIn(pop2), run_time=0.8)
-        gen_label = Text("Generasi berikutnya", font_size=18, color=WHITE).next_to(pop2, DOWN, buff=0.18)
-        self.play(FadeIn(gen_label), run_time=0.3)
+        self.play(
+            LaggedStart(*[FadeIn(p, scale=0.9) for p in gen2], lag_ratio=0.08),
+            FadeIn(gen2_block[1]),
+            run_time=0.9,
+        )
         active_card = self.render_step_cards(spec, active_card=active_card)
         self.clean_summary(spec, active_card=active_card)
 
@@ -7027,17 +7489,27 @@ class FactorizationDivisibilityTemplate(WicaraTemplateScene):
         levels = spec.get("tree_levels", [])
         groups = VGroup()
         for r, vals in enumerate(levels):
-            row = VGroup(*[_chip(str(v), radius=0.22, color=YELLOW if r == 0 else GREEN if r < len(levels) - 1 else TEAL, font_size=14) for v in vals]).arrange(RIGHT, buff=0.35)
-            row.move_to(LEFT * 3.1 + UP * (1.25 - r * 0.65))
+            row = VGroup(*[_chip(str(v), radius=0.26, color=YELLOW if r == 0 else GREEN if r < len(levels) - 1 else TEAL, font_size=15) for v in vals]).arrange(RIGHT, buff=0.42)
             groups.add(row)
+        groups.arrange(DOWN, buff=0.52)
+
+        # Branches are measured off the arranged rows, then grouped with them, so
+        # the whole tree scales as one piece when it is fitted to the stage.
         lines = VGroup()
         for i in range(len(groups) - 1):
             for a in groups[i]:
                 for b in groups[i + 1]:
-                    if abs(a.get_center()[0] - b.get_center()[0]) < 0.75:
+                    if abs(a.get_center()[0] - b.get_center()[0]) < 0.85:
                         lines.add(Line(a.get_bottom(), b.get_top(), color=WHITE, stroke_opacity=0.45))
+        tree = VGroup(groups, lines)
+
+        # The result used to be parked at RIGHT * 3.35, which is inside the card
+        # zone -- it rendered on top of the card and spilled past its bottom
+        # edge. It belongs under the tree it summarises.
+        result = _formula(spec.get("prime_factorization"), 30, YELLOW)
+        self.stage_rows(tree, result, buff=0.48)
+
         self.play(FadeIn(groups), FadeIn(lines), run_time=1.0)
-        result = _formula(spec.get("prime_factorization"), 28, YELLOW).move_to(RIGHT * 3.35 + DOWN * 0.15)
         active_card = self.replace_card(active_card, self.make_card("Faktorisasi prima", "Daun pohon faktor disusun sebagai perkalian faktor prima.", color=YELLOW))
         self.play(FadeIn(result), run_time=0.55)
         active_card = self.render_step_cards(spec, active_card=active_card)
@@ -7194,3 +7666,974 @@ __all__ = [
 # ============================================================
 # END PHASE 6: TEMPLATE 61-107 MANIM BUNDLE (MERGED)
 # ============================================================
+
+
+# ============================================================
+# OBJECT CONSTRUCTION
+# ============================================================
+
+
+class ObjectConstructionTemplate(WicaraTemplateScene):
+    """Assemble a real-world object one part at a time.
+
+    Every other template explains with abstract marks -- a labelled circle, a
+    box, an arrow. This one draws the thing itself and builds it up, so the
+    "simple to complex" reading comes from watching it assemble rather than from
+    a caption saying so.
+
+    The part order is the object's own build order (see wicara_objects), so this
+    construct() never has to know whether it is drawing a house or an atom.
+    """
+
+    SPEC = {
+        "eyebrow": "Membangun Objek",
+        "title": "Dari Bentuk Sederhana ke Rumah",
+        "subtitle": "Objek yang rumit selalu tersusun dari bentuk-bentuk dasar.",
+        "object": "house",
+        "part_steps": [
+            {"title": "Garis tanah", "body": "Setiap bangunan mulai dari satu garis datar sebagai alas."},
+            {"title": "Dinding", "body": "Sebuah persegi panjang menjadi badan rumah."},
+            {"title": "Atap", "body": "Segitiga di atas dinding; dua bentuk dasar sudah membentuk rumah."},
+            {"title": "Cerobong", "body": "Persegi panjang kecil menambah detail di garis atap."},
+            {"title": "Pintu", "body": "Persegi panjang lagi, kali ini di dalam dinding."},
+            {"title": "Gagang pintu", "body": "Satu titik kecil; detail terakhir yang membuatnya terbaca."},
+            {"title": "Jendela", "body": "Persegi dengan palang membagi bidang dinding."},
+            {"title": "Palang jendela", "body": "Dua garis menyilang menyelesaikan bentuknya."},
+        ],
+        "summary": "Rumah ini hanya persegi, segitiga, garis, dan satu titik.",
+    }
+
+    def construct(self):
+        spec = self.SPEC
+        title_block = self.make_title_block(spec)
+        self.play(FadeIn(title_block, shift=DOWN * 0.08), run_time=0.6)
+
+        obj = objects.make_object(spec.get("object", "house"))
+        # A single object has a lot of air around it, so it gets a bigger share
+        # of the stage than a multi-row figure would.
+        self.fit_stage(obj, margin=0.55, max_scale=3.2)
+        parts = list(obj.submobjects) or [obj]
+
+        steps = spec.get("part_steps") or []
+        counter = Text(
+            f"0 / {len(parts)}",
+            font_size=theme.FS_CAPTION,
+            color=theme.ON_INK_3,
+            **theme.font_kwargs("medium"),
+        )
+        counter.move_to(
+            np.array([self.stage_left + 0.55, self.stage_bottom + 0.30, 0.0])
+        )
+        self.play(FadeIn(counter), run_time=0.25)
+
+        active_card = None
+        for index, part in enumerate(parts):
+            info = steps[index] if index < len(steps) else None
+            if info:
+                active_card = self.replace_card(
+                    active_card,
+                    self.make_card(
+                        info.get("title", ""),
+                        info.get("body", ""),
+                        color=theme.chip(index),
+                    ),
+                )
+            next_counter = Text(
+                f"{index + 1} / {len(parts)}",
+                font_size=theme.FS_CAPTION,
+                color=theme.ON_INK_3,
+                **theme.font_kwargs("medium"),
+            ).move_to(counter)
+            # FadeTransform, not Transform: morphing "3 / 8" into "4 / 8" pairs
+            # glyph outlines and renders an unreadable hybrid mid-tween.
+            self.play(
+                FadeIn(part, shift=UP * 0.14, scale=0.94),
+                FadeTransform(counter, next_counter),
+                run_time=0.55,
+            )
+            counter = next_counter
+
+        # One beat with the finished object before the summary sweeps it.
+        glow = SurroundingRectangle(
+            obj, color=theme.BLUE_ON_INK, buff=0.26, corner_radius=0.18
+        )
+        glow.set_stroke(width=2.0, opacity=0.55)
+        self.play(Create(glow), run_time=0.5)
+        self.play(FadeOut(glow), run_time=0.4)
+
+        self.clean_summary(spec, active_card=active_card)
+
+
+# ============================================================
+# PROJECTILE SCENE (physics + math over a drawn world)
+# ============================================================
+
+
+class ProjectileSceneTemplate(WicaraTemplateScene):
+    """A drawn world, a person who throws, and the maths laid over the result.
+
+    This is the capability piece: it builds a scene rather than a diagram --
+    ground, mountain, sun, cloud, house, tree, a posed human figure -- then
+    animates a throw and derives the physics from the arc the viewer just
+    watched. The maths is not illustrated beside the picture, it is measured
+    on top of it.
+
+    Cards run along the bottom here instead of the right rail, because a scene
+    needs the whole width. The stage bounds are class attributes precisely so a
+    template can retune them like this.
+    """
+
+    STAGE_LEFT = -6.85
+    STAGE_RIGHT = 6.85
+    STAGE_TOP = 1.55
+    STAGE_BOTTOM = -2.30
+
+    GROUND_Y = -1.62
+
+    SPEC = {
+        "eyebrow": "Fisika - Gerak Parabola",
+        "title": "Lemparan yang Menjadi Persamaan",
+        "subtitle": "Lintasan benda yang dilempar selalu berbentuk parabola.",
+        "summary": "Satu lemparan, satu parabola: tinggi dan jangkauan keduanya jatuh dari persamaan yang sama.",
+    }
+
+    # -- scene helpers -------------------------------------------------
+
+    def _place_on_ground(self, mobject, x, width=None):
+        if width is not None:
+            mobject.scale_to_fit_width(width)
+        mobject.shift(
+            RIGHT * (x - mobject.get_center()[0])
+            + UP * (self.GROUND_Y - mobject.get_bottom()[1])
+        )
+        return mobject
+
+    def _trajectory(self, start, end, arc):
+        """Quadratic through start and end with `arc` of lift at the midpoint."""
+
+        def point(t):
+            x = start[0] + (end[0] - start[0]) * t
+            y = start[1] + (end[1] - start[1]) * t + arc * 4 * t * (1 - t)
+            return np.array([x, y, 0.0])
+
+        return point
+
+    # -- construct -----------------------------------------------------
+
+    def construct(self):
+        spec = self.SPEC
+        title_block = self.make_title_block(spec)
+        self.play(FadeIn(title_block, shift=DOWN * 0.08), run_time=0.6)
+
+        # ---- the world, composed relative to its own ground line ----------
+        # Built at a nominal size and then fitted, rather than typed at frame
+        # coordinates, so the same scene composes on 16:9, 1:1 and 9:16.
+        # A panorama does not survive being squeezed into a 9:16 frame -- at
+        # that aspect the stage is under four units wide, and a 13.7-unit world
+        # shrinks to a quarter size. Portrait gets a shorter world with the
+        # background scenery dropped, not the same world made tiny.
+        wide = not self._portrait
+        span = (self.NOMINAL_W if wide else 7.4) / 2
+        ground = Line(np.array([-span, 0.0, 0.0]), np.array([span, 0.0, 0.0]))
+        ground.set_stroke(color=theme.RULE, width=3.0)
+
+        def stand(mobject, x, width):
+            mobject.scale_to_fit_width(width)
+            mobject.shift(
+                RIGHT * (x - mobject.get_center()[0])
+                + UP * (0.0 - mobject.get_bottom()[1])
+            )
+            return mobject
+
+        if wide:
+            scenery = [
+                stand(objects.mountain(), -5.55, 2.55),
+                stand(objects.house(), 5.85, 1.85),
+                stand(objects.tree(), 4.30, 1.25),
+                objects.sun().scale_to_fit_width(1.00).move_to(np.array([6.05, 2.76, 0.0])),
+                objects.cloud().scale_to_fit_width(1.40).move_to(np.array([2.55, 2.82, 0.0])),
+            ]
+            thrower_x, land_at = -3.75, 0.686
+        else:
+            scenery = [
+                stand(objects.house(), 3.05, 1.35),
+                stand(objects.tree(), 1.95, 0.95),
+                objects.sun().scale_to_fit_width(0.85).move_to(np.array([3.05, 2.60, 0.0])),
+            ]
+            thrower_x, land_at = -2.55, 0.70
+
+        def stand_figure(pose):
+            fig = objects.figure(pose=pose, height=1.62)
+            fig.shift(
+                RIGHT * (thrower_x - fig.get_center()[0])
+                + UP * (0.0 - fig.get_bottom()[1])
+            )
+            return fig
+
+        thrower = stand_figure("wind_up")
+        launched = stand_figure("throw")
+
+        world = VGroup(ground, *scenery, thrower, launched)
+        self.fit_stage(world, margin=0.28)
+        # One factor derived from the fit, used for every length below.
+        k = ground.get_length() / (span * 2)
+
+        card = self.replace_card(
+            None,
+            self.make_card(
+                "Adegan",
+                "Sebuah dunia sederhana: tanah, gunung, rumah, dan pohon.",
+                color=theme.chip(0),
+            ),
+            zone=self.card_zone(),
+        )
+        self.play(Create(ground), run_time=self.beat(0.5))
+        self.play(
+            LaggedStart(
+                *[FadeIn(item, shift=UP * 0.16) for item in scenery],
+                lag_ratio=0.26,
+            ),
+            run_time=self.beat(1.8),
+        )
+
+        card = self.replace_card(
+            card,
+            self.make_card(
+                "Pelempar",
+                "Rangka sendi yang sama dapat dipasang dalam berbagai pose.",
+                color=theme.chip(2),
+            ),
+            zone=self.card_zone(),
+        )
+        self.play(FadeIn(thrower, shift=UP * 0.14), run_time=self.beat(0.7))
+
+        # ---- the throw ----------------------------------------------------
+        launch_point = objects.hand_of(launched)
+        landing = ground.point_from_proportion(land_at)
+        traj = self._trajectory(launch_point, landing, arc=1.62 * k)
+        path = ParametricFunction(traj, t_range=[0, 1, 0.01])
+        path.set_stroke(color=theme.GOLD, width=3.0, opacity=0.9)
+
+        projectile = objects.ball().scale_to_fit_width(0.30 * k)
+        projectile.move_to(launch_point)
+
+        card = self.replace_card(
+            card,
+            self.make_card(
+                "Lemparan",
+                "Benda dilepas dengan kecepatan awal pada sudut tertentu.",
+                color=theme.GOLD,
+            ),
+            zone=self.card_zone(),
+        )
+        self.play(
+            FadeTransform(thrower, launched),
+            FadeIn(projectile, scale=0.6),
+            run_time=0.5,
+        )
+        self.play(
+            MoveAlongPath(projectile, path),
+            Create(path),
+            run_time=self.beat(1.9),
+            rate_func=linear,
+        )
+
+        # ---- the maths, measured on the arc -------------------------------
+        apex = traj(0.5)
+        ground_y = ground.get_center()[1]
+        apex_dot = Dot(apex, color=theme.BLUE_ON_INK, radius=0.06)
+        height_line = DashedLine(
+            np.array([apex[0], ground_y, 0.0]), apex, dash_length=0.10
+        )
+        height_line.set_stroke(color=theme.BLUE_ON_INK, width=2.0, opacity=0.8)
+        height_label = MathTex("h_{maks}", font_size=30, color=theme.BLUE_ON_INK)
+        # On the compressed portrait world the apex sits close to the thrower, so
+        # the label goes on the far side of the drop-line to clear the velocity
+        # arrows rather than landing on top of them.
+        height_label.next_to(height_line, RIGHT if self._portrait else LEFT, buff=0.16)
+
+        range_arrow = DoubleArrow(
+            np.array([launch_point[0], ground_y - 0.34 * k, 0.0]),
+            np.array([landing[0], ground_y - 0.34 * k, 0.0]),
+            buff=0, color=theme.GOOD, stroke_width=3, tip_length=0.18 * k,
+        )
+        range_label = MathTex("R", font_size=30, color=theme.GOOD)
+        range_label.next_to(range_arrow, DOWN, buff=0.10)
+
+        card = self.replace_card(
+            card,
+            self.make_card(
+                "Ukur lintasannya",
+                "Tinggi maksimum dan jangkauan terbaca langsung dari parabola.",
+                color=theme.BLUE_ON_INK,
+            ),
+            zone=self.card_zone(),
+        )
+        self.play(
+            FadeIn(apex_dot, scale=0.5),
+            Create(height_line),
+            FadeIn(height_label, shift=RIGHT * 0.10),
+            run_time=0.7,
+        )
+        self.play(
+            Create(range_arrow), FadeIn(range_label, shift=UP * 0.10), run_time=0.6
+        )
+
+        # ---- launch velocity, decomposed ----------------------------------
+        v_tip = launch_point + np.array([1.05 * k, 0.92 * k, 0.0])
+        v0 = Arrow(launch_point, v_tip, buff=0, color=theme.chip(4), stroke_width=3.5, tip_length=0.20 * k)
+        vx = Arrow(launch_point, launch_point + np.array([1.05 * k, 0.0, 0.0]),
+                   buff=0, color=theme.GOOD, stroke_width=2.6, tip_length=0.16 * k)
+        vy = Arrow(launch_point, launch_point + np.array([0.0, 0.92 * k, 0.0]),
+                   buff=0, color=theme.chip(1), stroke_width=2.6, tip_length=0.16 * k)
+        v0_label = MathTex("v_0", font_size=26, color=theme.chip(4)).next_to(v_tip, UR, buff=0.04)
+        vx_label = MathTex("v_x", font_size=22, color=theme.GOOD).next_to(vx, DOWN, buff=0.06)
+        vy_label = MathTex("v_y", font_size=22, color=theme.chip(1)).next_to(vy, LEFT, buff=0.06)
+
+        equation = MathTex(
+            r"y = x\tan\theta - \frac{g\,x^{2}}{2v_0^{2}\cos^{2}\theta}",
+            font_size=31,
+            color=theme.GOLD,
+        )
+        # Anchored to the stage rather than to a typed coordinate, and dropped
+        # under the title on a narrow frame where there is no room beside it.
+        if self._portrait:
+            equation.scale_to_fit_width(min(equation.width, config.frame_width - 1.0))
+            equation.move_to(np.array([0.0, self.stage_top + 0.42, 0.0]))
+        else:
+            equation.move_to(np.array([self.stage_left + 1.95, self.stage_top + 0.05, 0.0]))
+
+        card = self.replace_card(
+            card,
+            self.make_card(
+                "Dari gambar ke persamaan",
+                "Kecepatan awal diuraikan menjadi komponen mendatar dan tegak.",
+                color=theme.chip(4),
+            ),
+            zone=self.card_zone(),
+        )
+        self.play(
+            LaggedStart(
+                AnimationGroup(GrowArrow(v0), FadeIn(v0_label)),
+                AnimationGroup(GrowArrow(vx), FadeIn(vx_label)),
+                AnimationGroup(GrowArrow(vy), FadeIn(vy_label)),
+                lag_ratio=0.35,
+            ),
+            run_time=1.3,
+        )
+        self.play(Write(equation), run_time=self.beat(1.1))
+        self.wait(self.hold_for(spec.get("summary")))
+
+        self.clean_summary(spec, active_card=card)
+
+
+# ============================================================
+# COMPLEX VISUALS
+# ============================================================
+
+
+class FourierEpicyclesTemplate(WicaraTemplateScene):
+    """Rotating circles that draw an arbitrary shape.
+
+    The coefficients are a real discrete Fourier transform of the target
+    outline, not a scripted animation: the path is sampled, transformed, the
+    terms sorted by amplitude, and the top N rebuilt as epicycles. Whatever
+    shape the spec names is what the circles will draw.
+
+    This is the "why would a sum of waves matter" lesson that a line graph
+    cannot make. It is also the single most watchable thing in the pack.
+    """
+
+    SPEC = {
+        "eyebrow": "Matematika - Deret Fourier",
+        "title": "Lingkaran yang Menggambar Bentuk",
+        "subtitle": "Setiap bentuk tertutup dapat disusun dari putaran-putaran sederhana.",
+        "audience_level": "sma",
+        "trace_text": "W",
+        "terms": 64,
+        "cycles": 2,
+        "steps": [
+            {"title": "Ambil lintasannya", "body": "Bentuk apa pun dapat dibaca sebagai satu lintasan tertutup."},
+            {"title": "Uraikan jadi putaran", "body": "Transformasi Fourier memecah lintasan itu menjadi putaran dengan jari-jari dan kecepatan tertentu."},
+            {"title": "Susun bertingkat", "body": "Setiap lingkaran berputar di ujung lingkaran sebelumnya."},
+            {"title": "Ujung pena menggambar", "body": "Titik terakhir menelusuri kembali bentuk semula."},
+        ],
+        "summary": "Bentuk rumit hanyalah jumlah dari putaran-putaran sederhana.",
+    }
+
+    def _target_path(self, spec):
+        """The outline the circles have to reproduce."""
+        raw = str(spec.get("trace_text", "W"))[:1] or "W"
+        glyph = Text(raw, font_size=200, **theme.font_kwargs("extrabold"))
+        # A glyph with an interior counter traverses as several subpaths, and the
+        # jumps between them show up as straight scars in the trace. Keep the
+        # single longest contour.
+        pieces = [m for m in glyph.family_members_with_points() if len(m.points) > 4]
+        if not pieces:
+            return Circle(radius=1.5)
+        return max(pieces, key=lambda m: m.get_arc_length())
+
+    def _coefficients(self, path, terms, samples=480):
+        """Complex DFT of the path, strongest terms first."""
+        pts = np.array(
+            [path.point_from_proportion(i / samples) for i in range(samples)]
+        )
+        centre = pts.mean(axis=0)
+        z = (pts[:, 0] - centre[0]) + 1j * (pts[:, 1] - centre[1])
+
+        n = np.arange(samples)
+        coeffs = []
+        # Frequencies interleaved outward from zero: 0, +1, -1, +2, -2 ...
+        freqs = [0]
+        k = 1
+        while len(freqs) < terms:
+            freqs.extend([k, -k])
+            k += 1
+        for f in freqs[:terms]:
+            c = np.sum(z * np.exp(-2j * np.pi * f * n / samples)) / samples
+            coeffs.append((f, c))
+        coeffs.sort(key=lambda fc: -abs(fc[1]))
+        return coeffs
+
+    def construct(self):
+        spec = self.SPEC
+        title_block = self.make_title_block(spec)
+        self.play(FadeIn(title_block, shift=DOWN * 0.08), run_time=self.beat(0.6))
+
+        terms = int(spec.get("terms", 64))
+        path = self._target_path(spec)
+        coeffs = self._coefficients(path, terms)
+
+        centre, box_w, box_h = self.stage_box()
+        target_h = min(box_w, box_h) * 0.62
+
+        # Size from the extent the reconstruction actually reaches, not from the
+        # sum of the amplitudes. That sum is the worst case -- every circle
+        # pointing the same way at once, which never happens -- and using it drew
+        # the shape at a fifth of the space it had.
+        probe = []
+        for i in range(240):
+            t = i / 240.0
+            x = y = 0.0
+            for freq, c in coeffs:
+                angle = np.angle(c) + 2 * np.pi * freq * t
+                x += abs(c) * np.cos(angle)
+                y += abs(c) * np.sin(angle)
+            probe.append((x, y))
+        span_y = max(p[1] for p in probe) - min(p[1] for p in probe)
+        span_x = max(p[0] for p in probe) - min(p[0] for p in probe)
+        unit = min(
+            target_h / max(span_y, 1e-6),
+            (box_w * 0.72) / max(span_x, 1e-6),
+        )
+
+        card = self.replace_card(
+            None,
+            self.make_card(
+                "Ambil lintasannya",
+                "Bentuk apa pun dapat dibaca sebagai satu lintasan tertutup.",
+                color=theme.chip(0),
+            ),
+            zone=self.card_zone(),
+        )
+
+        ghost = path.copy()
+        ghost.set_stroke(color=theme.RULE, width=2.0, opacity=0.55).set_fill(opacity=0)
+        ghost.scale_to_fit_height(target_h).move_to(centre)
+        self.play(Create(ghost), run_time=self.beat(1.2))
+
+        time = ValueTracker(0.0)
+
+        def tip_at(t):
+            """Just the vector sum. No mobjects -- this runs per frame, three
+            times over, and building 64 circles to find one point was the
+            difference between a render and a stall."""
+            x = y = 0.0
+            for freq, c in coeffs:
+                angle = np.angle(c) + 2 * np.pi * freq * t
+                x += abs(c) * np.cos(angle)
+                y += abs(c) * np.sin(angle)
+            return centre + np.array([x * unit, y * unit, 0.0])
+
+        def epicycle_chain():
+            """Circles and spokes rebuilt from the tracker each frame."""
+            group = VGroup()
+            tip = centre.copy()
+            t = time.get_value()
+            for index, (freq, c) in enumerate(coeffs):
+                radius = abs(c) * unit
+                angle = np.angle(c) + 2 * np.pi * freq * t
+                nxt = tip + np.array(
+                    [radius * np.cos(angle), radius * np.sin(angle), 0.0]
+                )
+                if radius > 0.012:
+                    ring = Circle(radius=radius, arc_center=tip)
+                    ring.set_stroke(
+                        color=theme.BLUE_ON_INK,
+                        width=1.3,
+                        opacity=max(0.10, 0.62 - index * 0.012),
+                    )
+                    spoke = Line(tip, nxt)
+                    spoke.set_stroke(
+                        color=theme.ON_INK_3,
+                        width=1.1,
+                        opacity=max(0.10, 0.55 - index * 0.011),
+                    )
+                    group.add(ring, spoke)
+                tip = nxt
+            return group
+
+        chain = always_redraw(epicycle_chain)
+        pen = always_redraw(
+            lambda: Dot(tip_at(time.get_value()), radius=0.055, color=theme.GOLD)
+        )
+        trace = TracedPath(
+            lambda: tip_at(time.get_value()),
+            stroke_color=theme.GOLD,
+            stroke_width=4.4,
+        )
+
+        card = self.replace_card(
+            card,
+            self.make_card(
+                "Uraikan jadi putaran",
+                f"{len(coeffs)} putaran, masing-masing dengan jari-jari dan kecepatan sendiri.",
+                color=theme.chip(2),
+            ),
+            zone=self.card_zone(),
+        )
+        self.add(chain, trace, pen)
+        self.play(FadeOut(ghost), run_time=self.beat(0.4))
+
+        card = self.replace_card(
+            card,
+            self.make_card(
+                "Ujung pena menggambar",
+                "Titik terakhir menelusuri kembali bentuk semula.",
+                color=theme.GOLD,
+            ),
+            zone=self.card_zone(),
+        )
+
+        cycles = int(spec.get("cycles", 2))
+        self.play(
+            time.animate.set_value(float(cycles)),
+            run_time=self.beat(5.4) * cycles,
+            rate_func=linear,
+        )
+
+        self.remove(chain, pen)
+        self.wait(self.hold_for(spec.get("summary")))
+        self.clean_summary(spec, active_card=card)
+
+
+class LinearTransformTemplate(WicaraTemplateScene):
+    """A matrix bending the plane it acts on.
+
+    Shows what a 2x2 matrix *is* rather than how to multiply one: the whole
+    grid deforms, the basis vectors land on the matrix columns, the unit square
+    becomes a parallelogram whose area is the determinant, and the eigenvectors
+    are the only directions that merely stretch instead of turning.
+
+    All of it is computed from the spec's matrix -- eigenvectors included -- so
+    a different matrix gives a genuinely different animation.
+    """
+
+    SPEC = {
+        "eyebrow": "Matematika - Aljabar Linear",
+        "title": "Matriks Menekuk Ruang",
+        "subtitle": "Sebuah matriks memindahkan seluruh bidang, bukan hanya satu titik.",
+        "audience_level": "sma",
+        "matrix": [[2.0, 1.0], [0.5, 1.5]],
+        "steps": [
+            {"title": "Bidang utuh ikut bergerak", "body": "Setiap garis grid dipetakan ke tempat baru, tetapi tetap lurus dan tetap sejajar."},
+            {"title": "Kolom matriks adalah tujuan", "body": "Vektor basis i dan j mendarat tepat pada kolom pertama dan kedua matriks."},
+            {"title": "Determinan adalah luas", "body": "Persegi satuan menjadi jajaran genjang; luasnya sama dengan nilai determinan."},
+            {"title": "Eigenvektor tidak berbelok", "body": "Hanya arah-arah ini yang bertahan pada garisnya sendiri, sekadar memanjang."},
+        ],
+        "summary": "Matriks adalah aturan yang memindahkan seluruh ruang sekaligus.",
+    }
+
+    def construct(self):
+        spec = self.SPEC
+        title_block = self.make_title_block(spec)
+        title_block.set_z_index(2)
+        self.play(FadeIn(title_block, shift=DOWN * 0.08), run_time=self.beat(0.6))
+
+        m = np.array(spec.get("matrix", [[2.0, 1.0], [0.5, 1.5]]), dtype=float)
+        centre, box_w, box_h = self.stage_box()
+        # A transform that stretches by 2.5x will push a full-size grid straight
+        # off the stage and under the card, so the plane is pre-shrunk by the
+        # matrix's largest singular value -- how much it can stretch anything.
+        stretch = float(np.linalg.svd(m, compute_uv=False)[0])
+        # A strong transform is *meant* to push the grid past the frame -- that
+        # overflow is the effect. Pre-shrinking only mildly keeps the starting
+        # grid readable without making the result timid.
+        unit = min(box_w * 0.98 / 8.0, box_h * 0.98 / 6.0) / max(1.0, stretch * 0.42)
+
+        plane = NumberPlane(
+            x_range=[-4, 4, 1],
+            y_range=[-3, 3, 1],
+            x_length=8 * unit,
+            y_length=6 * unit,
+            # theme.GRID is the faint texture that sits *behind* a figure. Here
+            # the grid IS the figure -- watching it bend is the whole lesson --
+            # so it is lifted to a foreground weight.
+            background_line_style={
+                "stroke_color": theme.lift(theme.RULE, 0.28),
+                "stroke_width": 1.8,
+                "stroke_opacity": 0.85,
+            },
+            axis_config={
+                "stroke_color": theme.ON_INK_2,
+                "stroke_width": 2.8,
+            },
+        )
+        plane.move_to(centre)
+        plane.set_z_index(-10)
+        origin = plane.c2p(0, 0)
+
+        # The card is created before the plane, so without an explicit order the
+        # grid draws straight over the text. A scrim holds the card's zone.
+        if self.card_zone() == "bottom":
+            scrim = Rectangle(width=config.frame_width, height=2.55)
+            scrim.to_edge(DOWN, buff=0.0)
+        else:
+            scrim = Rectangle(width=config.frame_width / 2 - 1.30,
+                              height=config.frame_height)
+            scrim.to_edge(RIGHT, buff=0.0)
+        scrim.set_fill(color=theme.INK, opacity=0.90).set_stroke(width=0)
+        top_scrim = Rectangle(width=config.frame_width, height=2.05)
+        top_scrim.to_edge(UP, buff=0.0)
+        top_scrim.set_fill(color=theme.INK, opacity=0.90).set_stroke(width=0)
+        # Above the plane and the eigen spans, below the cards and the title.
+        for band in (scrim, top_scrim):
+            band.set_z_index(-2)
+            self.add(band)
+
+        def vec(x, y, color):
+            arrow = Arrow(origin, plane.c2p(x, y), buff=0, color=color,
+                          stroke_width=5, tip_length=0.22 * unit)
+            return arrow
+
+        i_vec = vec(1, 0, theme.GOLD)
+        j_vec = vec(0, 1, theme.GOOD)
+        unit_square = Polygon(
+            plane.c2p(0, 0), plane.c2p(1, 0), plane.c2p(1, 1), plane.c2p(0, 1),
+        )
+        unit_square.set_fill(color=theme.BLUE_ON_INK, opacity=0.22)
+        unit_square.set_stroke(color=theme.BLUE_ON_INK, width=2.0)
+
+        card = self.replace_card(
+            None,
+            self.make_card(
+                "Bidang utuh ikut bergerak",
+                "Setiap garis grid dipetakan ke tempat baru, tetapi tetap lurus dan tetap sejajar.",
+                color=theme.chip(0),
+            ),
+            zone=self.card_zone(),
+        )
+        self.play(Create(plane), run_time=self.beat(1.0))
+        self.play(
+            FadeIn(unit_square),
+            GrowArrow(i_vec),
+            GrowArrow(j_vec),
+            run_time=self.beat(0.7),
+        )
+
+        matrix_tex = MathTex(
+            r"\begin{bmatrix} %.3g & %.3g \\ %.3g & %.3g \end{bmatrix}"
+            % (m[0][0], m[0][1], m[1][0], m[1][1]),
+            font_size=34,
+            color=theme.ON_INK,
+        )
+        det = float(np.linalg.det(m))
+        det_tex = MathTex(r"\det = %.2f" % det, font_size=30, color=theme.BLUE_ON_INK)
+        readout = VGroup(matrix_tex, det_tex).arrange(DOWN, buff=0.22)
+        if self._portrait:
+            readout.move_to(np.array([0.0, self.stage_top + 0.55, 0.0]))
+        else:
+            readout.move_to(
+                np.array([self.stage_left + 0.95, self.stage_top - 0.55, 0.0])
+            )
+        readout.set_z_index(2)
+        self.play(FadeIn(readout, shift=DOWN * 0.10), run_time=self.beat(0.5))
+
+        card = self.replace_card(
+            card,
+            self.make_card(
+                "Kolom matriks adalah tujuan",
+                "Vektor basis i dan j mendarat tepat pada kolom pertama dan kedua matriks.",
+                color=theme.GOLD,
+            ),
+            zone=self.card_zone(),
+        )
+
+        # The transform itself, applied about the plane's own origin.
+        self.play(
+            ApplyMatrix(m, plane, about_point=origin),
+            ApplyMatrix(m, i_vec, about_point=origin),
+            ApplyMatrix(m, j_vec, about_point=origin),
+            ApplyMatrix(m, unit_square, about_point=origin),
+            run_time=self.beat(2.4),
+            rate_func=smooth,
+        )
+
+        card = self.replace_card(
+            card,
+            self.make_card(
+                "Determinan adalah luas",
+                "Persegi satuan menjadi jajaran genjang; luasnya sama dengan nilai determinan.",
+                color=theme.BLUE_ON_INK,
+            ),
+            zone=self.card_zone(),
+        )
+        area_flash = unit_square.copy().set_fill(color=theme.GOLD, opacity=0.45)
+        self.play(FadeIn(area_flash), run_time=self.beat(0.35))
+        self.play(FadeOut(area_flash), run_time=self.beat(0.45))
+
+        # Eigenvectors: the directions this matrix only stretches.
+        values, vectors = np.linalg.eig(m)
+        if np.all(np.isreal(values)):
+            card = self.replace_card(
+                card,
+                self.make_card(
+                    "Eigenvektor tidak berbelok",
+                    "Hanya arah-arah ini yang bertahan pada garisnya sendiri, sekadar memanjang.",
+                    color=theme.chip(4),
+                ),
+                zone=self.card_zone(),
+            )
+            spans = VGroup()
+            labels = VGroup()
+            for idx in range(vectors.shape[1]):
+                v = np.real(vectors[:, idx])
+                norm = np.linalg.norm(v)
+                if norm < 1e-9:
+                    continue
+                v = v / norm
+                far = 3.6
+                # Measured off the original basis, not via plane.c2p: the plane
+                # has already been deformed by this point, so its coordinate
+                # mapping no longer describes the space the eigenvectors are
+                # stated in.
+                line = Line(
+                    origin - np.array([v[0], v[1], 0.0]) * far * unit,
+                    origin + np.array([v[0], v[1], 0.0]) * far * unit,
+                )
+                line.set_stroke(color=theme.chip(4 - idx), width=2.6, opacity=0.9)
+                line.set_z_index(-8)
+                spans.add(line)
+                tag = MathTex(r"\lambda = %.2f" % float(np.real(values[idx])),
+                              font_size=24, color=theme.chip(4 - idx))
+                # Pushed out along its own span and offset perpendicular, so the
+                # label never lands on the parallelogram it is describing.
+                # An eigen-span has two ends; put the label on whichever one
+                # points away from the matrix readout in the top-left, so the
+                # two never share the same patch of frame.
+                direction = np.array([v[0], v[1], 0.0])
+                if direction[0] < 0 or (abs(direction[0]) < 1e-6 and direction[1] > 0):
+                    direction = -direction
+                perp = np.array([-direction[1], direction[0], 0.0])
+                tag.move_to(
+                    origin + direction * (far * 0.88) * unit + perp * 0.34
+                )
+                tag.set_z_index(1)
+                labels.add(tag)
+            self.play(
+                LaggedStart(*[Create(l) for l in spans], lag_ratio=0.3),
+                run_time=self.beat(1.0),
+            )
+            self.play(FadeIn(labels), run_time=self.beat(0.5))
+
+        self.wait(self.hold_for(spec.get("summary")))
+        self.clean_summary(spec, active_card=card)
+
+
+class MotionCompositionTemplate(WicaraTemplateScene):
+    """A composition built the Remotion way, rendered by Manim.
+
+    The timeline is declared as a Series of named segments with durations, not
+    accumulated by hand; every entrance rides a spring rather than an easing
+    curve; the counters are driven through interpolate(); and the segments are
+    joined by a branded panel wipe.
+
+    It doubles as the reference for how to use wicara_motion, which is why the
+    segments are named after what they demonstrate.
+    """
+
+    SPEC = {
+        "eyebrow": "Motion System",
+        "title": "Gerak yang Terasa Nyata",
+        "subtitle": "Pegas, timeline, dan transisi -- disusun sebagai data, bukan urutan perintah.",
+        "audience_level": "smp",
+        "fps": 30,
+        "metrics": [
+            {"label": "Template", "value": 80, "suffix": ""},
+            {"label": "Objek", "value": 17, "suffix": ""},
+            {"label": "Palet", "value": 6, "suffix": ""},
+        ],
+        "steps": [
+            {"title": "Pegas, bukan kurva", "body": "Setiap elemen masuk dengan fisika peredam-pegas, sehingga sedikit melewati sasaran lalu mapan."},
+            {"title": "Timeline sebagai data", "body": "Segmen dideklarasikan beserta durasinya; urutannya dihitung, bukan dicatat manual."},
+            {"title": "Angka yang menghitung", "body": "Nilai dipetakan dari rentang ke rentang, lalu berhenti tepat di batasnya."},
+        ],
+        "summary": "Gerak yang baik membuat penjelasan terasa hidup tanpa mengalihkan perhatian.",
+    }
+
+    def construct(self):
+        spec = self.SPEC
+        fps = float(spec.get("fps", 30))
+        title_block = self.make_title_block(spec)
+        self.play(
+            FadeIn(title_block, shift=DOWN * 0.34),
+            run_time=motion.spring_seconds("gentle", fps),
+            rate_func=motion.spring_rate("gentle", fps),
+        )
+
+        centre, box_w, box_h = self.stage_box()
+        series = motion.Series(fps=fps)
+
+        # -- segment 1: springs side by side ------------------------------
+        def springs(scene, seg):
+            scene._motion_card = scene.replace_card(
+                getattr(scene, "_motion_card", None),
+                scene.make_card(
+                    "Pegas, bukan kurva",
+                    "Setiap elemen masuk dengan fisika peredam-pegas, sehingga sedikit melewati sasaran lalu mapan.",
+                    color=theme.chip(0),
+                ),
+                zone=scene.card_zone(),
+            )
+            names = ["stiff", "gentle", "snappy", "bouncy"]
+            chips = VGroup()
+            for index, name in enumerate(names):
+                pill = theme.panel(width=1.62, height=0.86)
+                label = Text(
+                    name,
+                    font_size=theme.FS_LABEL,
+                    color=theme.chip(index),
+                    **theme.font_kwargs("semibold"),
+                )
+                label.move_to(pill.get_center())
+                chips.add(VGroup(pill, label))
+            chips.arrange(DOWN, buff=0.24)
+            scene.fit_stage(chips, margin=0.5, max_scale=1.35)
+
+            # Same distance, same moment, four different springs -- the point is
+            # that they arrive differently.
+            scene.play(
+                *[
+                    FadeIn(
+                        chip,
+                        shift=RIGHT * 1.30,
+                        rate_func=motion.spring_rate(name, fps),
+                        run_time=motion.spring_seconds(name, fps),
+                    )
+                    for chip, name in zip(chips, names)
+                ]
+            )
+            scene.wait(0.4)
+            seg.meta["mobjects"] = chips
+
+        # -- segment 2: interpolate driving counters ----------------------
+        def counters(scene, seg):
+            scene._motion_card = scene.replace_card(
+                getattr(scene, "_motion_card", None),
+                scene.make_card(
+                    "Angka yang menghitung",
+                    "Nilai dipetakan dari rentang ke rentang, lalu berhenti tepat di batasnya.",
+                    color=theme.GOLD,
+                ),
+                zone=scene.card_zone(),
+            )
+
+            metrics = spec.get("metrics", [])
+            tracker = ValueTracker(0.0)
+
+            def numeral(text, index):
+                return Text(
+                    text,
+                    font_size=theme.FS_METRIC,
+                    color=theme.chip(index),
+                    **theme.font_kwargs("extrabold"),
+                )
+
+            # Lay the finished values out first, so the columns are spaced for
+            # the widest numeral each will ever show.
+            columns = VGroup()
+            for index, metric in enumerate(metrics):
+                caption = Text(
+                    str(metric.get("label", "")),
+                    font_size=theme.FS_CAPTION,
+                    color=theme.ON_INK_3,
+                    **theme.font_kwargs("medium"),
+                )
+                column = VGroup(
+                    numeral(str(int(metric.get("value", 0))), index), caption
+                ).arrange(DOWN, buff=0.16)
+                columns.add(column)
+            columns.arrange(RIGHT, buff=1.05)
+            scene.fit_stage(columns, margin=0.6, max_scale=1.5)
+
+            # always_redraw rebuilds its mobject every frame, and a fresh Text is
+            # born at the origin -- the arrangement above is not inherited. Each
+            # counter has to be pinned to the anchor its column settled on, or
+            # all three stack in the middle of the frame.
+            live = VGroup()
+            for index, (metric, column) in enumerate(zip(metrics, columns)):
+                target = float(metric.get("value", 0))
+                anchor = column[0].get_center()
+                scale = column[0].height / max(numeral("0", index).height, 1e-6)
+                column.remove(column[0])
+                live.add(
+                    always_redraw(
+                        lambda t=target, i=index, a=anchor, sc=scale: numeral(
+                            str(int(round(motion.interpolate(
+                                tracker.get_value(), [0.0, 1.0], [0.0, t],
+                                easing=motion.Easing.out_cubic,
+                            )))),
+                            i,
+                        ).scale(sc).move_to(a)
+                    )
+                )
+
+            scene.add(columns, live)
+            scene.play(
+                tracker.animate.set_value(1.0),
+                run_time=1.6,
+                rate_func=linear,
+            )
+            scene.wait(0.5)
+            seg.meta["mobjects"] = VGroup(columns, live)
+
+        series.add("springs", 3.2, springs)
+        series.add("counters", 3.4, counters)
+
+        previous_group = None
+        for seg in series.segments:
+            if previous_group is not None:
+                # The wipe covers the swap, so the outgoing segment never has to
+                # animate itself away.
+                def swap(group=previous_group):
+                    # FadeIn adds each chip to the scene individually, so the
+                    # scene never held the VGroup and removing it alone left
+                    # every chip on screen behind the next segment.
+                    self.remove(group, *group.submobjects)
+
+                motion.wipe(self, swap, direction=RIGHT, color=theme.VIOLET,
+                            run_time=0.5, fps=fps)
+            seg.build(self, seg)
+            previous_group = seg.meta.get("mobjects")
+
+        card = self.replace_card(
+            getattr(self, "_motion_card", None),
+            self.make_card(
+                "Timeline sebagai data",
+                f"Dua segmen, total {series.duration:.1f} detik, disusun sebagai daftar.",
+                color=theme.chip(2),
+            ),
+            zone=self.card_zone(),
+        )
+        self.wait(self.hold_for(spec.get("summary")))
+        self.clean_summary(spec, active_card=card)
