@@ -9040,8 +9040,8 @@ class FolkTaleTemplate(WicaraTemplateScene):
         "characters": {
             # The cast has to hold the frame against a full landscape; at 1.30
             # they read as scenery rather than as the people the tale is about.
-            "malin": {"color": "#B9C0FF", "height": 1.85},
-            "ibu": {"color": "#F5B65C", "height": 1.72},
+            "malin": {"palette": "warm", "garment": "tunic", "hair": "short", "height": 1.90},
+            "ibu": {"palette": "olive", "garment": "dress", "hair": "bun", "height": 1.76},
         },
         "scenes": [
             {
@@ -9131,11 +9131,14 @@ class FolkTaleTemplate(WicaraTemplateScene):
                 objects.sun().scale_to_fit_width(0.85).move_to(np.array([5.4, 1.15, 0.0])),
             )
         elif name == "shore":
-            water = objects.sea(width=span * 0.9)
-            water.move_to(np.array([1.2, g + 0.05, 0.0]))
+            # The shore is a shore: water on the right, dry land on the left
+            # where the cast stands. Spanning the full width put both characters
+            # ankle-deep in the sea.
+            water = objects.sea(width=span * 0.52)
+            water.move_to(np.array([3.9, g + 0.10, 0.0]))
             parts.add(
                 water,
-                stand(objects.boat(), 4.4, 1.5),
+                stand(objects.boat(), 4.6, 1.5),
                 objects.sun().scale_to_fit_width(0.80).move_to(np.array([5.6, 1.20, 0.0])),
                 stand(objects.mountain(), -5.4, 2.0),
             )
@@ -9189,10 +9192,15 @@ class FolkTaleTemplate(WicaraTemplateScene):
 
     def _actor(self, key, x, pose):
         conf = (self.SPEC.get("characters") or {}).get(key, {})
-        fig = objects.figure(
+        # Drawn characters, not the skeleton figure(). A tale needs a cast the
+        # viewer can tell apart, and two stick figures in different colours is
+        # not a cast.
+        fig = objects.character(
             pose=pose,
-            color=conf.get("color", theme.BLUE_ON_INK),
-            height=float(conf.get("height", 1.28)),
+            palette=conf.get("palette", "warm"),
+            garment=conf.get("garment", "tunic"),
+            hair_style=conf.get("hair", "short"),
+            height=float(conf.get("height", 1.8)),
         )
         fig.shift(
             RIGHT * (x - fig.get_center()[0])

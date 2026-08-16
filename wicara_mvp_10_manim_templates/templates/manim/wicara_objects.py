@@ -880,3 +880,218 @@ OBJECTS.update({
     "bird": bird, "rock": rock,
 })
 __all__.extend(["sea", "boat", "moon", "stars", "bird", "rock"])
+
+
+# ----------------------------------------------------------------------
+# Characters
+# ----------------------------------------------------------------------
+#
+# figure() above is a skeleton: joint angles drawn as lines. It is fine for a
+# physics diagram, where the person is a mass on the end of an arm and nothing
+# more. A tale needs somebody the viewer can tell apart and care about, so this
+# hangs a body on that same skeleton -- tapered limbs, a garment, hair, a face.
+#
+# The pose data is shared with figure(), so anything posable there is posable
+# here and no new pose has to be authored twice.
+
+
+def _taper(p0, p1, w0, w1, color, opacity=0.95):
+    """A limb segment with real width, thicker at the joint it hangs from."""
+    d = p1 - p0
+    length = np.linalg.norm(d)
+    if length < 1e-9:
+        return VGroup()
+    n = np.array([-d[1], d[0], 0.0]) / length
+    poly = Polygon(
+        p0 + n * w0, p1 + n * w1, p1 - n * w1, p0 - n * w0,
+    )
+    poly.set_fill(color=color, opacity=opacity).set_stroke(
+        color=color, width=1.2, opacity=opacity
+    )
+    return poly
+
+
+def _limb_shape(root, angles, lengths, widths, color):
+    upper_end = _seg(root, angles[0], lengths[0])
+    lower_end = _seg(upper_end, angles[1], lengths[1])
+    group = VGroup(
+        _taper(root, upper_end, widths[0], widths[1], color),
+        _taper(upper_end, lower_end, widths[1], widths[2], color),
+    )
+    group.wicara_tip = lower_end
+    return group
+
+
+PALETTES_CHARACTER = {
+    "warm": {"skin": "#E9B48C", "cloth": "#2F6FE0", "hair": "#241B2E", "trim": "#FFD98A"},
+    "olive": {"skin": "#D9A374", "cloth": "#C4562A", "hair": "#1F1622", "trim": "#F5D08A"},
+    "deep": {"skin": "#B9825C", "cloth": "#17B0A0", "hair": "#171021", "trim": "#C8F2A0"},
+    "light": {"skin": "#F2CBA6", "cloth": "#8A4FD8", "hair": "#3A2438", "trim": "#FFB08A"},
+}
+
+
+def character(pose="stand", palette="warm", height=2.0, garment="tunic",
+              hair_style="short", skin=None, cloth=None, hair=None):
+    """A person with a body, drawn on figure()'s skeleton.
+
+    garment: "tunic" (trousers showing) or "dress" (a skirt to the shins).
+    hair_style: "short", "long", "bun".
+    """
+    pal = dict(PALETTES_CHARACTER.get(palette, PALETTES_CHARACTER["warm"]))
+    skin = skin or pal["skin"]
+    cloth = cloth or pal["cloth"]
+    hair = hair or pal["hair"]
+    trim = pal["trim"]
+
+    conf = POSES.get(str(pose).lower(), POSES["stand"])
+    hip = ORIGIN.copy()
+    shoulder = hip + UP * 0.74
+
+    # -- torso: a garment, not a spine line --------------------------------
+    half_sh, half_hip = 0.26, 0.20
+    torso = Polygon(
+        shoulder + LEFT * half_sh + UP * 0.06,
+        shoulder + RIGHT * half_sh + UP * 0.06,
+        hip + RIGHT * half_hip,
+        hip + LEFT * half_hip,
+    )
+    torso.set_fill(color=cloth, opacity=0.95).set_stroke(color=cloth, width=1.4)
+    collar = Line(
+        shoulder + LEFT * half_sh * 0.55 + UP * 0.06,
+        shoulder + RIGHT * half_sh * 0.55 + UP * 0.06,
+    ).set_stroke(color=trim, width=3.0, opacity=0.9)
+
+    body = VGroup(torso, collar)
+
+    # -- legs ---------------------------------------------------------------
+    leg_color = skin if garment == "dress" else theme.mix(cloth, theme.INK, 0.45)
+    legs = VGroup(
+        _limb_shape(hip, conf["l_leg"], (0.50, 0.48), (0.115, 0.085, 0.062), leg_color),
+        _limb_shape(hip, conf["r_leg"], (0.50, 0.48), (0.115, 0.085, 0.062), leg_color),
+    )
+    feet = VGroup()
+    for leg in legs:
+        foot = Ellipse(width=0.20, height=0.10)
+        foot.set_fill(color=theme.mix(hair, theme.ON_INK, 0.15), opacity=1.0)
+        foot.set_stroke(width=0)
+        foot.move_to(leg.wicara_tip + DOWN * 0.03)
+        feet.add(foot)
+
+    if garment == "dress":
+        skirt = Polygon(
+            hip + LEFT * half_hip + UP * 0.04,
+            hip + RIGHT * half_hip + UP * 0.04,
+            hip + RIGHT * 0.40 + DOWN * 0.66,
+            hip + LEFT * 0.40 + DOWN * 0.66,
+        )
+        skirt.set_fill(color=cloth, opacity=0.95).set_stroke(color=cloth, width=1.4)
+        hem = Line(
+            hip + LEFT * 0.40 + DOWN * 0.66, hip + RIGHT * 0.40 + DOWN * 0.66
+        ).set_stroke(color=trim, width=3.0, opacity=0.9)
+        body.add(skirt, hem)
+
+    # -- arms ---------------------------------------------------------------
+    # Arms hang from the shoulders, not from a single point between them. Rooted
+    # at the centre, the right arm crossed the chest diagonally on its way out --
+    # which read as a sash, because it is drawn in front of the garment.
+    arm_w = (0.095, 0.075, 0.055)
+    l_shoulder = shoulder + LEFT * half_sh * 0.78
+    r_shoulder = shoulder + RIGHT * half_sh * 0.78
+    l_arm = _limb_shape(l_shoulder, conf["l_arm"], (0.44, 0.42), arm_w, skin)
+    r_arm = _limb_shape(r_shoulder, conf["r_arm"], (0.44, 0.42), arm_w, skin)
+    sleeves = VGroup()
+    for root, angles in ((l_shoulder, conf["l_arm"]), (r_shoulder, conf["r_arm"])):
+        sleeves.add(
+            _taper(root, _seg(root, angles[0], 0.22), 0.115, 0.095, cloth)
+        )
+    hands = VGroup(
+        *[
+            Dot(radius=0.062, color=skin).move_to(a.wicara_tip)
+            for a in (l_arm, r_arm)
+        ]
+    )
+
+    # -- head, hair, face ---------------------------------------------------
+    neck = _taper(shoulder + UP * 0.02, shoulder + UP * 0.16, 0.070, 0.070, skin)
+    head_c = shoulder + UP * 0.44
+    head = Circle(radius=0.235).move_to(head_c)
+    head.set_fill(color=skin, opacity=1.0).set_stroke(
+        color=theme.mix(skin, theme.INK, 0.35), width=1.4
+    )
+
+    # Faces look right by default; poses that reach right read as facing that way.
+    gaze = 0.055
+    eyes = VGroup(
+        *[
+            Dot(radius=0.032, color="#241B2E").move_to(
+                head_c + RIGHT * (gaze + dx) + UP * 0.045
+            )
+            for dx in (-0.085, 0.085)
+        ]
+    )
+    # An arc across the top half reads as a frown. The lower half is a mouth.
+    mouth = Arc(radius=0.085, start_angle=PI * 1.18, angle=PI * 0.64)
+    mouth.set_stroke(color=theme.mix(skin, theme.INK, 0.55), width=2.0, opacity=0.8)
+    mouth.move_to(head_c + RIGHT * gaze + DOWN * 0.085)
+
+    if hair_style == "long":
+        crown = Polygon(
+            head_c + LEFT * 0.26 + UP * 0.10,
+            head_c + UP * 0.30,
+            head_c + RIGHT * 0.26 + UP * 0.10,
+            head_c + RIGHT * 0.28 + DOWN * 0.42,
+            # Inner edge kept above the eyes: at DOWN*0.02 the fall of hair
+            # closed over the face and the character lost its expression.
+            head_c + RIGHT * 0.17 + DOWN * 0.40,
+            head_c + RIGHT * 0.15 + UP * 0.12,
+            head_c + LEFT * 0.15 + UP * 0.12,
+            head_c + LEFT * 0.17 + DOWN * 0.40,
+            head_c + LEFT * 0.28 + DOWN * 0.42,
+        )
+    elif hair_style == "bun":
+        crown = VGroup(
+            Circle(radius=0.11).move_to(head_c + UP * 0.30 + LEFT * 0.06),
+            Arc(radius=0.245, start_angle=0.05 * PI, angle=0.90 * PI).move_to(
+                head_c + UP * 0.10
+            ),
+        )
+    else:
+        crown = Polygon(
+            head_c + LEFT * 0.25 + UP * 0.06,
+            head_c + LEFT * 0.18 + UP * 0.24,
+            head_c + UP * 0.29,
+            head_c + RIGHT * 0.18 + UP * 0.24,
+            head_c + RIGHT * 0.25 + UP * 0.06,
+            head_c + RIGHT * 0.20 + UP * 0.13,
+            head_c + LEFT * 0.20 + UP * 0.13,
+        )
+    if isinstance(crown, VGroup):
+        for piece in crown:
+            piece.set_fill(color=hair, opacity=1.0).set_stroke(color=hair, width=3.0)
+    else:
+        crown.set_fill(color=hair, opacity=1.0).set_stroke(color=hair, width=1.2)
+
+    # Back-to-front: far limbs, body, near limbs, head.
+    person = VGroup(
+        legs, feet, l_arm, body, sleeves, neck, r_arm, hands, head, mouth, eyes, crown
+    )
+    if conf.get("lean"):
+        person.rotate(conf["lean"] * DEGREES, about_point=hip)
+    person.scale(height / max(person.height, 1e-6), about_point=hip)
+
+    # The hand dot is a real submobject, so it follows the lean and the scale.
+    # wicara_tip is measured on the raw skeleton and goes stale the moment
+    # either is applied.
+    person.wicara_hand_dot = hands[1]
+    person.wicara_r_arm = r_arm
+    person.wicara_l_arm = l_arm
+    return person
+
+
+def hand_of_character(person):
+    dot = getattr(person, "wicara_hand_dot", None)
+    return dot.get_center() if dot is not None else person.get_center()
+
+
+OBJECTS["character"] = character
+__all__.extend(["character", "PALETTES_CHARACTER", "hand_of_character"])

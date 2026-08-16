@@ -5,12 +5,16 @@
   "audience_level": "sd",
   "characters": {
     "malin": {
-      "color": "#B9C0FF",
-      "height": 1.85
+      "palette": "warm",
+      "garment": "tunic",
+      "hair": "short",
+      "height": 1.9
     },
     "ibu": {
-      "color": "#F5B65C",
-      "height": 1.72
+      "palette": "olive",
+      "garment": "dress",
+      "hair": "bun",
+      "height": 1.76
     }
   },
   "scenes": [
