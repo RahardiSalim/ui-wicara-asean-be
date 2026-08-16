@@ -5,6 +5,63 @@ import re
 import textwrap
 import numpy as np
 
+# Brand layer. Every scene draws on the deck's ink ground with the deck's
+# palette and Poppins, instead of Manim's stock colours on black.
+try:
+    from . import wicara_theme as theme
+except ImportError:  # rendered as a loose script, not a package
+    import wicara_theme as theme
+
+# ---------------------------------------------------------------------------
+# Palette remap
+# ---------------------------------------------------------------------------
+# The ten renderers below reference Manim's stock constants ~700 times. Those
+# names resolve against this module's globals, so rebinding them here — after
+# `from manim import *` has populated them — repaints every template at once
+# without touching a single call site.
+#
+# Values are the deck's dark-ground tokens. Stock RED and GREEN are tuned for
+# a black canvas and go muddy on ink, so each maps to the lifted equivalent
+# rather than to the light-ground token.
+YELLOW = theme.GOLD              # emphasis, moving points, highlighted terms
+GOLD = theme.GOLD
+BLUE = theme.BLUE_ON_INK         # the primary rail; #2436D8 is too dark on ink
+GREEN = theme.GOOD               # correct, growth, positive delta
+RED = "#FF6B85"                  # --alert lifted to clear 4.5:1 on --ink
+ORANGE = theme.CHIPS[1]
+PURPLE = theme.VIOLET
+TEAL = theme.GOOD
+PINK = theme.CHIPS[4]
+MAROON = theme.CHIPS[4]
+
+# Greys become the on-ink text tiers, so captions and axis labels stop
+# disappearing into the plate.
+GRAY = GREY = theme.ON_INK_3
+GRAY_A = GREY_A = theme.ON_INK_2
+GRAY_B = GREY_B = theme.ON_INK_3
+GRAY_C = GREY_C = theme.RULE
+GRAY_D = GREY_D = theme.RULE
+GRAY_E = GREY_E = theme.INK_LIFT
+LIGHT_GREY = LIGHT_GRAY = theme.ON_INK_2
+DARK_GREY = DARK_GRAY = theme.RULE
+
+# Manim's letter variants used by a few templates.
+BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E = (
+    "#DCE0FF", theme.BLUE_ON_INK, theme.BLUE_ON_INK, theme.BLUE, theme.BLUE_DEEP,
+)
+GREEN_A, GREEN_B, GREEN_C, GREEN_D, GREEN_E = (
+    "#8FE6DC", theme.GOOD, theme.GOOD, "#12907F", "#0C6C5C",
+)
+YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E = (
+    "#FFEFC7", theme.GOLD, theme.GOLD, "#E5B75F", "#C2933F",
+)
+RED_A, RED_B, RED_C, RED_D, RED_E = (
+    "#FFB3C0", RED, RED, "#D94A63", theme.ALERT,
+)
+PURPLE_A, PURPLE_B, PURPLE_C, PURPLE_D, PURPLE_E = (
+    "#D9C6FF", "#A87BEA", theme.VIOLET, "#5726AC", "#421C85",
+)
+
 try:
     from manim_voiceover import VoiceoverScene
     from manim_voiceover.services.gtts import GTTSService
@@ -438,6 +495,7 @@ class WicaraTemplateScene(VoiceoverScene):
 
     def setup(self):
         super().setup()
+        self._apply_brand_ground()
         self._resolved_language = "id"
         self._voiceover_initialized = False
         self._voiceover_enabled = False
@@ -452,6 +510,37 @@ class WicaraTemplateScene(VoiceoverScene):
         self._requested_tts_provider = "gtts_voiceover"
 
     # --------------------------------------------------------
+    # Brand ground
+    # --------------------------------------------------------
+
+    def _apply_brand_ground(self):
+        """Ink plate, violet glow, blueprint grid and corner ticks.
+
+        Runs from setup() so every template inherits it without changing a
+        single line of its own construct().
+        """
+        self.camera.background_color = theme.INK
+        self._brand_ground = []
+        try:
+            self._brand_plate, self._brand_decor = theme.make_background(self)
+            self._brand_ground = [
+                m for m in (self._brand_plate, self._brand_decor) if m is not None
+            ]
+        except Exception:
+            # A themed background is never worth failing a render over.
+            self._brand_plate = self._brand_decor = None
+
+    def scene_content(self):
+        """Everything on screen except the brand ground.
+
+        Templates sweep the stage with `FadeOut(m) for m in self.mobjects`
+        before a summary. That list now includes the ink plate and its decor,
+        and fading those left the closing frame on bare camera black.
+        """
+        ground = set(id(m) for m in getattr(self, "_brand_ground", []))
+        return [m for m in self.mobjects if id(m) not in ground]
+
+    # --------------------------------------------------------
     # Layout zones
     # --------------------------------------------------------
 
@@ -459,7 +548,10 @@ class WicaraTemplateScene(VoiceoverScene):
         return 3.25
 
     def visual_center(self):
-        return LEFT * 2.05 + DOWN * 0.40
+        # Pushed down from -0.40: the branded title block carries an eyebrow and
+        # a gradient rule above the title, so the old centre let whatever a
+        # template anchors to the top of its visual collide with the subtitle.
+        return LEFT * 2.05 + DOWN * 0.72
 
     def right_card_center(self):
         # Keep guidance cards away from the main visual rail.
@@ -836,60 +928,95 @@ class WicaraTemplateScene(VoiceoverScene):
                 50,
             ),
             font_size=title_size,
-            weight=BOLD,
+            color=theme.ON_INK,
+            **theme.font_kwargs("bold"),
         )
+
+        # Eyebrow above, gradient rule below: the deck's title signature. The
+        # eyebrow carries the phase/subject so a viewer landing mid-video knows
+        # where they are.
+        eyebrow_source = (
+            spec.get("eyebrow")
+            or spec.get("subject_name")
+            or spec.get("topic")
+            or self.tr_key("default_title", spec, fallback="WICARA")
+        )
+        head = VGroup(
+            theme.eyebrow(clamp_text(str(eyebrow_source), 34)),
+            title,
+        ).arrange(DOWN, aligned_edge=LEFT, buff=0.14)
+
+        rule = theme.accent_rule(width=min(2.2, max(1.2, title.width * 0.28)))
+        block = VGroup(head, rule).arrange(DOWN, aligned_edge=LEFT, buff=0.16)
 
         subtitle_text = spec.get("subtitle", "")
         if subtitle_text:
             subtitle = Text(
                 wrap_text(clamp_text(subtitle_text, 96), subtitle_width),
                 font_size=subtitle_size,
-                color=GRAY_A,
+                color=theme.ON_INK_2,
                 line_spacing=0.82,
+                **theme.font_kwargs("regular"),
             )
-            block = VGroup(title, subtitle).arrange(DOWN, buff=0.10)
-        else:
-            block = VGroup(title)
+            block = VGroup(block, subtitle).arrange(DOWN, aligned_edge=LEFT, buff=0.16)
 
-        block.to_edge(UP, buff=0.22)
+        block.to_edge(UP, buff=0.30).to_edge(LEFT, buff=0.62)
         return block
 
-    def make_card(self, title, body, color=BLUE, width=4.75, body_width=34):
+    def make_card(self, title, body, color=None, width=4.75, body_width=34):
+        # Templates still pass stock Manim colours positionally. Map anything
+        # that is not already a brand token onto the accent so no card falls
+        # back to raw YELLOW/GREEN on the ink ground.
+        accent = color if isinstance(color, str) and str(color).startswith("#") else None
+        if accent is None:
+            accent = theme.ACCENT
+
         localized_title = self.tr_text(title)
         localized_body = self.tr_text(body)
         title_obj = Text(
             safe_text(localized_title, max_chars=40, width=28),
-            font_size=20,
-            weight=BOLD,
-            color=color,
+            font_size=theme.FS_SUB,
+            color=accent,
+            **theme.font_kwargs("semibold"),
         )
 
-        body_obj = Text(
-            safe_text(localized_body, max_chars=145, width=body_width),
-            font_size=15,
-            line_spacing=0.84,
-            color=WHITE,
+        # Manim's Text centres every line of a multi-line string, which made
+        # card copy sit in a ragged column under a left-aligned heading.
+        # Paragraph is the one that takes an alignment.
+        body_lines = safe_text(
+            localized_body, max_chars=145, width=body_width
+        ).split("\n")
+        body_obj = Paragraph(
+            *body_lines,
+            font_size=theme.FS_BODY,
+            line_spacing=0.86,
+            alignment="left",
+            color=theme.ON_INK_2,
+            **theme.font_kwargs("regular"),
         )
 
         group = VGroup(title_obj, body_obj).arrange(
             DOWN,
             aligned_edge=LEFT,
-            buff=0.18,
+            buff=0.20,
         )
 
-        box = RoundedRectangle(
-            corner_radius=0.18,
-            width=max(width, group.width + 0.55),
-            height=max(1.15, group.height + 0.46),
-            stroke_color=color,
-            stroke_opacity=0.78,
-            fill_color=BLACK,
-            fill_opacity=0.70,
-            stroke_width=2,
+        box = theme.panel(
+            width=max(width, group.width + 0.62),
+            height=max(1.15, group.height + 0.56),
         )
+
+        # A lit edge on the leading side, so a card reads as an active panel
+        # rather than an outlined box.
+        edge = Line(
+            box.get_corner(UL) + DOWN * 0.16,
+            box.get_corner(DL) + UP * 0.16,
+            stroke_width=4,
+        )
+        edge.set_stroke(color=[accent, theme.VIOLET])
 
         group.move_to(box.get_center())
-        card = VGroup(box, group)
+        card = VGroup(box, edge, group)
         card.wicara_card_title = self._clean_voice_text(localized_title)
         card.wicara_card_body = self._clean_voice_text(localized_body)
         card.wicara_card_narration = self._join_narration_parts(
@@ -928,9 +1055,15 @@ class WicaraTemplateScene(VoiceoverScene):
                 run_time=0.55,
             )
         else:
+            # Cross-fade rather than morph. ReplacementTransform pairs
+            # submobjects one to one, so two cards whose bodies wrap to a
+            # different number of lines raise "zip() argument 2 is shorter than
+            # argument 1" mid-render. Fading is also what the deck does: it
+            # animates opacity and position, never the shape of a glyph.
             self.play_with_voiceover(
                 narration_text,
-                ReplacementTransform(previous_card, next_card),
+                FadeOut(previous_card, shift=LEFT * 0.12),
+                FadeIn(next_card, shift=LEFT * 0.12),
                 run_time=0.50,
             )
 
@@ -944,7 +1077,7 @@ class WicaraTemplateScene(VoiceoverScene):
         # Fade out everything currently on screen so the summary gets a clean frame.
         # active_card and extra_fadeouts are kept for API compatibility but are
         # subsumed — self.mobjects already contains them.
-        on_screen = list(self.mobjects)
+        on_screen = self.scene_content()
         if on_screen:
             self.play(*[FadeOut(m) for m in on_screen], run_time=0.42)
 
@@ -2272,12 +2405,17 @@ class GraphExplanationTemplate(WicaraTemplateScene):
         title_block = self.make_title_block(spec)
         self.play(FadeIn(title_block, shift=DOWN * 0.08), run_time=0.6)
 
-        formula = MathTex(spec.get("formula_latex", "f(x)=x"), font_size=34, color=YELLOW)
-        formula.next_to(title_block, DOWN, buff=0.18)
-        self.play(Write(formula), run_time=0.75)
-
+        # Axes first: four things want the space around them — the formula, the
+        # live value readout, the curve label and the slope — and each is now
+        # anchored to one corner of the axes rather than to the title or to the
+        # same edge as its neighbour, which is what put the formula straight
+        # through the readout. That anchoring needs the axes to exist.
         axes, axis_labels = self.make_axes(spec)
         self.play(Create(axes), FadeIn(axis_labels), run_time=1.0)
+
+        formula = MathTex(spec.get("formula_latex", "f(x)=x"), font_size=34, color=YELLOW)
+        formula.next_to(axes, UP, buff=0.30, aligned_edge=LEFT)
+        self.play(Write(formula), run_time=0.75)
 
         x_range = spec["x_range"]
         graph = axes.plot(f, x_range=[x_range[0], x_range[1]], color=BLUE)
@@ -2293,7 +2431,7 @@ class GraphExplanationTemplate(WicaraTemplateScene):
             font_size=17,
             color=BLUE,
         )
-        graph_label.next_to(axes, DOWN, buff=0.15)
+        graph_label.next_to(axes, DOWN, buff=0.26, aligned_edge=LEFT)
 
         self.play(Create(graph), FadeIn(graph_label), run_time=1.25)
 
@@ -2357,7 +2495,7 @@ class GraphExplanationTemplate(WicaraTemplateScene):
                 f"x={tracker.get_value():.1f}, f(x)={f(tracker.get_value()):.1f}",
                 font_size=16,
                 color=YELLOW,
-            ).next_to(axes, UP, buff=0.12).shift(RIGHT * 1.35)
+            ).next_to(axes, UP, buff=0.30, aligned_edge=RIGHT)
         )
 
         self.add(trace_path)
@@ -2428,7 +2566,7 @@ class GraphExplanationTemplate(WicaraTemplateScene):
                 color=RED,
                 weight=BOLD,
             )
-            slope_value.next_to(axes, DOWN, buff=0.20).shift(LEFT * 1.25)
+            slope_value.next_to(axes, DOWN, buff=0.26, aligned_edge=RIGHT)
             self.play(FadeIn(slope_value, shift=UP * 0.06), run_time=0.45)
             self.wait(0.7)
 

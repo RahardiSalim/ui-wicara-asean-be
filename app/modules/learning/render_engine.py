@@ -182,6 +182,20 @@ def _render_template_scene_manim(
     shutil.copyfile(base_scene, render_workdir / "base_scene.py")
     shutil.copyfile(template_file, render_workdir / "generated_template.py")
 
+    # core_templates imports the brand theme, and the theme registers Poppins
+    # from assets/fonts beside itself. Both have to land in the workdir or the
+    # scene either fails to import or silently renders in Pango's default face.
+    theme_module = templates_dir / "wicara_theme.py"
+    if theme_module.exists():
+        shutil.copyfile(theme_module, render_workdir / "wicara_theme.py")
+    theme_assets = templates_dir / "assets"
+    if theme_assets.exists():
+        shutil.copytree(
+            theme_assets,
+            render_workdir / "assets",
+            dirs_exist_ok=True,
+        )
+
     normalized_language = _normalize_token(language)
     spec_payload = dict(spec_json)
     if normalized_language and not spec_payload.get("language"):
