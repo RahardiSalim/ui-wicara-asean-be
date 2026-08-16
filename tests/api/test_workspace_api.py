@@ -12,7 +12,8 @@ from app.modules.workspaces.models import WorkspaceSession
 ACCOUNT_ID = UUID("33333333-3333-4333-8333-333333333333")
 
 
-def test_workspace_events_are_persisted_in_module_timeline(client):
+def test_workspace_events_are_persisted_in_module_timeline(client, monkeypatch):
+    monkeypatch.setenv("WICARA_WORKSPACE_TUTOR_TIMEOUT_SECONDS", "0.1")
     _override_account(client)
     track_id, module_id = _create_track_and_first_module(client)
 
@@ -32,7 +33,10 @@ def test_workspace_events_are_persisted_in_module_timeline(client):
     assert workspace["current_topic"] == "Prerequisite checkpoint"
     assert workspace["content_mode"] == "chat"
     assert workspace["status"] == "active"
-    assert workspace["events"] == []
+    assert len(workspace["events"]) == 1
+    assert workspace["events"][0]["actor_type"] == "tutor"
+    assert workspace["events"][0]["event_index"] == 1
+    assert workspace["events"][0]["metadata"]["source"] == "workspace_initial_opening"
 
     resume_response = client.post(
         "/api/v1/workspaces",
@@ -60,16 +64,19 @@ def test_workspace_events_are_persisted_in_module_timeline(client):
     text_payload = text_response.json()
     assert text_payload["event"]["event_type"] == "text"
     assert text_payload["event"]["actor_type"] == "learner"
-    assert text_payload["event"]["event_index"] == 1
+    assert text_payload["event"]["event_index"] == 2
     assert text_payload["event"]["input_event_id"]
     assert text_payload["event"]["text_payload"] == "Kenapa limit harus dicek sebelum turunan?"
-    assert text_payload["event"]["metadata"] == {"client_event_id": "local-1"}
+    assert text_payload["event"]["metadata"] == {
+        "client_event_id": "local-1",
+        "phase": "engage",
+    }
     assert text_payload["tutor_response"]["intent"] in {"ask_followup", "spark_curiosity"}
     assert text_payload["tutor_response"]["text"]
-    assert len(text_payload["workspace"]["events"]) == 2
-    assert text_payload["workspace"]["events"][1]["actor_type"] == "tutor"
-    assert text_payload["workspace"]["events"][1]["event_type"] == "text"
-    assert text_payload["workspace"]["events"][1]["text_payload"]
+    assert len(text_payload["workspace"]["events"]) == 3
+    assert text_payload["workspace"]["events"][2]["actor_type"] == "tutor"
+    assert text_payload["workspace"]["events"][2]["event_type"] == "text"
+    assert text_payload["workspace"]["events"][2]["text_payload"]
 
     # Workspace events may only reference an image asset the caller owns, so mint
     # a real one instead of inventing an id.
@@ -91,7 +98,7 @@ def test_workspace_events_are_persisted_in_module_timeline(client):
 
     assert image_response.status_code == 200
     image_payload = image_response.json()
-    assert image_payload["event"]["event_index"] == 3
+    assert image_payload["event"]["event_index"] == 4
     assert image_payload["event"]["input_event_id"]
     assert image_payload["event"]["image_asset_id"] == image_asset_id
     assert image_payload["workspace"]["last_image_asset_id"] == image_asset_id
@@ -102,10 +109,12 @@ def test_workspace_events_are_persisted_in_module_timeline(client):
     assert [event["event_type"] for event in loaded["events"]] == [
         "text",
         "text",
+        "text",
         "canvas_sent",
         "text",
     ]
     assert [event["actor_type"] for event in loaded["events"]] == [
+        "tutor",
         "learner",
         "tutor",
         "learner",
@@ -114,7 +123,8 @@ def test_workspace_events_are_persisted_in_module_timeline(client):
     assert loaded["last_image_asset_id"] == image_asset_id
 
 
-def test_workspace_rejects_client_mastery_and_completion_bypass(client):
+def test_workspace_rejects_client_mastery_and_completion_bypass(client, monkeypatch):
+    monkeypatch.setenv("WICARA_WORKSPACE_TUTOR_TIMEOUT_SECONDS", "0.1")
     _override_account(client)
     track_id, module_id = _create_track_and_first_module(client)
 
@@ -213,6 +223,25 @@ def test_opening_a_locked_module_is_a_conflict_not_a_server_error(client):
 
     assert response.status_code == 409
     assert "prerequisite" in response.json()["detail"].lower()
+
+
+def test_workspace_rejects_visualization_outside_explore(client):
+    _override_account(client)
+    track_id, module_id = _create_track_and_first_module(client)
+    workspace = client.post(
+        "/api/v1/workspaces",
+        json={"track_id": track_id, "module_id": module_id},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/workspaces/{workspace['id']}/generate-video",
+        json={"generation_mode": "context_auto", "language": "id"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "Visualization can only be requested during the Explore phase."
+    )
 
 
 def test_workspace_event_rejects_an_image_asset_the_caller_does_not_own(client):

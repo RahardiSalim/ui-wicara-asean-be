@@ -213,13 +213,18 @@ def postprocess_render_output(
             )
         tts_meta["warning"] = "Voiceover script exists but output video has no audio stream."
     if tts_meta["enabled"] and voiceover_audio_path is None and not audio_stream_present:
+        underlying_error = tts_meta.get("error")
+        underlying_message = (
+            underlying_error.get("message") if isinstance(underlying_error, dict) else None
+        )
         raise MediaPostprocessError(
             code="tts_error",
             message=(
                 "Voiceover is enabled but no synthesized audio was attached and final video has "
                 "no audio stream."
+                + (f" Underlying cause: {underlying_message}" if underlying_message else "")
             ),
-            details={"video_path": str(final_video_path)},
+            details={"video_path": str(final_video_path), "underlying_error": underlying_error},
         )
     tts_meta["audio_stream_present"] = audio_stream_present
     tts_meta["hold_last_frame_seconds"] = round(float(hold_seconds), 3)

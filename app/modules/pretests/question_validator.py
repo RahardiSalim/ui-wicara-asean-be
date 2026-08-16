@@ -78,6 +78,10 @@ class QuestionValidator:
             if not str(option.get("text", "")).strip():
                 raise QuestionValidationError("Generated option is missing text.")
             option_text = str(option.get("text", "")).strip()
+            if re.fullmatch(r"(?i)(?:option\s*)?[a-d][.)]?", option_text):
+                raise QuestionValidationError(
+                    "Generated option text must be a complete answer, not an option label."
+                )
             normalized_option_text = _normalize_option_text(option_text)
             if normalized_option_text in option_texts:
                 raise QuestionValidationError("Generated option texts must be unique.")

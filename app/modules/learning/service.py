@@ -87,6 +87,7 @@ from app.modules.learning.schemas import (
     WeeklyReportResponse,
     ProgressRead,
 )
+from app.modules.learning.spec_generator import generate_spec_from_workspace_context
 from app.modules.posttests.schemas import PosttestNodeResultRead
 from app.modules.learning.render_engine import (
     RenderEngineError,
@@ -936,6 +937,87 @@ def queue_animation_job(
     )
 
 
+def queue_context_animation_job(
+    session: Session,
+    *,
+    user: UserAccount,
+    workspace_id: UUID,
+    concept_id: UUID | None,
+    language: str,
+    quality_profile: str,
+) -> AnimationQueueResponse:
+    workspace = _resolve_owned_workspace(session, user=user, workspace_id=workspace_id)
+    if workspace is None:
+        raise ValueError("Workspace is required for context-auto animation generation.")
+
+    resolved_concept_id = _resolve_concept_id(
+        session,
+        concept_id=concept_id,
+        workspace=workspace,
+    )
+    artifact = MediaArtifact(
+        user_id=user.id,
+        track_id=workspace.track_id,
+        module_id=workspace.module_id,
+        workspace_id=workspace.id,
+        concept_id=resolved_concept_id,
+        template_id="pending.context_auto",
+        spec_json={},
+        language=normalize_language_code(language)[:16],
+        quality_profile=_normalize_short_label(
+            quality_profile, fallback="standard", max_length=32
+        ),
+        artifact_type="video",
+        title="Generating visualization",
+        subtitle="Preparing an animation from this workspace",
+        status="queued",
+        duration_seconds=0,
+        thumbnail_url="",
+        playback_url="",
+        video_url="",
+        transcript="",
+        notes_json=[],
+        metadata_json={
+            "source": "workspace_context_auto",
+            "generation_mode": "context_auto",
+            "progress": 0,
+            "job_state": "queued",
+        },
+        render_meta_json={"spec_generation": "queued"},
+    )
+    session.add(artifact)
+    session.flush()
+
+    job = MediaJob(
+        artifact_id=artifact.id,
+        status="queued",
+        progress=0,
+        message="Queued for animation spec generation.",
+        attempt=0,
+    )
+    session.add(job)
+    _sync_artifact_job_state(
+        artifact=artifact,
+        job=job,
+        error_message=None,
+        error_details=None,
+        error_code=None,
+    )
+    session.commit()
+    session.refresh(job)
+    published = _publish_media_job_to_queue(job_id=job.id)
+    if not published:
+        job.message = "Job queued in database. Waiting for worker polling fallback."
+        session.commit()
+
+    return AnimationQueueResponse(
+        job_id=job.id,
+        artifact_id=artifact.id,
+        status=job.status,
+        error_details=None,
+    )
+
+
 def get_animation_job_status(
     session: Session,
     *,
@@ -1007,6 +1089,7 @@ def process_animation_job_for_worker(
             context=context,
         )
         _mark_job_processing(session, job=job, artifact=artifact)
+        _generate_context_spec_for_worker(session=session, job=job, artifact=artifact)
         _validate_job_payload(session=session, job=job, artifact=artifact)
         _log_job_event(
             level="info",
@@ -4127,6 +4210,52 @@ def _validate_job_payload(
     )
     artifact.render_meta_json = render_meta
     session.flush()
+
+
+def _generate_context_spec_for_worker(
+    *,
+    session: Session,
+    job: MediaJob,
+    artifact: MediaArtifact,
+) -> None:
+    metadata = dict(artifact.metadata_json or {})
+    if metadata.get("generation_mode") != "context_auto":
+        return
+    if artifact.template_id != "pending.context_auto" or artifact.spec_json:
+        return
+    if artifact.workspace_id is None:
+        raise ValueError(f"Context-auto job {job.id} has no workspace_id.")
+
+    workspace = session.get(WorkspaceSession, artifact.workspace_id)
+    if workspace is None:
+        raise ValueError(f"Context-auto job {job.id} references a missing workspace.")
+
+    _update_job_progress(
+        session,
+        job=job,
+        artifact=artifact,
+        progress=8,
+        message="Generating an animation spec from the workspace context.",
+    )
+    generated = generate_spec_from_workspace_context(
+        workspace=workspace,
+        language=artifact.language,
+    )
+    artifact.template_id = generated.template_id
+    artifact.spec_json = generated.spec_json
+    artifact.title = _queued_artifact_title(generated.spec_json, generated.template_id)
+    artifact.subtitle = _queued_artifact_subtitle(generated.spec_json)
+    artifact.metadata_json = {
+        **metadata,
+        "spec_source": generated.debug_meta.get("spec_source"),
+        "resolved_template_id": generated.template_id,
+    }
+    artifact.render_meta_json = {
+        **dict(artifact.render_meta_json or {}),
+        "spec_generation": "completed",
+        "spec_generation_meta": generated.debug_meta,
+    }
+    session.commit()
 
 
 def _render_artifact_with_retry(

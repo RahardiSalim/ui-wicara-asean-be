@@ -27,7 +27,7 @@ class PretestQuestionRead(BaseModel):
 class PretestStartRequest(BaseModel):
     learning_goal_id: UUID
     depth: int = Field(default=2, ge=0, le=5)
-    max_questions: int = Field(default=10, ge=2, le=30)
+    max_questions: int = Field(default=10, ge=2, le=10)
     max_nodes_visited: int = Field(default=5, ge=1, le=20)
 
 

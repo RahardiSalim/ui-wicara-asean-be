@@ -79,6 +79,7 @@ class AdaptivePosttestService:
         learning_goal_id: UUID | None = None,
         track_id: UUID | None = None,
         module_id: UUID | None = None,
+        generate_questions: bool = True,
     ) -> PosttestSessionRead | None:
         context = _resolve_posttest_context(
             session,
@@ -102,7 +103,9 @@ class AdaptivePosttestService:
             workspace_session_id=workspace.id if workspace is not None else None,
             module_id=context.get("module_id"),
         )
-        if existing is not None:
+        if existing is not None and len(
+            (existing.decision_state_json or {}).get("question_queue", [])
+        ) == len(POSTTEST_DIFFICULTIES):
             return self.read(session, user=user, session_id=existing.id)
         if workspace is not None and not _workspace_allows_posttest(workspace):
             raise ValueError(
@@ -124,40 +127,66 @@ class AdaptivePosttestService:
         posttest_source = str(workspace_summary.get("posttest_source") or posttest_source)
         diagnosis_context = _posttest_generation_context(workspace_summary)
 
-        assessment = AssessmentSession(
-            user_id=user.id,
-            learning_goal_id=goal.id,
-            track_id=context.get("track_id"),
-            target_concept_id=target.id,
-            session_type="posttest",
-            title=f"Posttest: {target_title}",
-            status="active",
-            source="workspace_history",
-            metadata_json={
-                "source": "workspace_history",
-                "generation": "workspace_context_posttest_v1",
-                "posttest_source": posttest_source,
-                "workspace_session_id": str(workspace.id) if workspace is not None else None,
-                "learning_goal_id": str(goal.id),
-                "track_id": str(context["track_id"]) if context.get("track_id") is not None else None,
-                "module_id": str(context["module_id"]) if context.get("module_id") is not None else None,
-                "target_concept_id": str(target.id),
-                "target_concept_code": target.code,
-                "target_concept_title": target_title,
-                "language": language,
-                "learner_language": language,
-                "question_count": len(POSTTEST_DIFFICULTIES),
-                "difficulty_policy": {"fixed": list(POSTTEST_DIFFICULTIES)},
-                "workspace_learning_summary": workspace_summary,
-            },
-            decision_state_json={},
-            graph_scope_json={},
-            max_questions=len(POSTTEST_DIFFICULTIES),
-            max_depth=0,
-            max_nodes_visited=1,
-        )
-        session.add(assessment)
-        session.flush()
+        if existing is None:
+            assessment = AssessmentSession(
+                user_id=user.id,
+                learning_goal_id=goal.id,
+                track_id=context.get("track_id"),
+                target_concept_id=target.id,
+                session_type="posttest",
+                title=f"Posttest: {target_title}",
+                status="generating",
+                source="workspace_history",
+                metadata_json={
+                    "source": "workspace_history",
+                    "generation": "workspace_context_posttest_v1",
+                    "generation_state": {
+                        "status": "generating",
+                        "completed_questions": 0,
+                        "total_questions": len(POSTTEST_DIFFICULTIES),
+                    },
+                    "posttest_source": posttest_source,
+                    "workspace_session_id": str(workspace.id) if workspace is not None else None,
+                    "learning_goal_id": str(goal.id),
+                    "track_id": str(context["track_id"]) if context.get("track_id") is not None else None,
+                    "module_id": str(context["module_id"]) if context.get("module_id") is not None else None,
+                    "target_concept_id": str(target.id),
+                    "target_concept_code": target.code,
+                    "target_concept_title": target_title,
+                    "language": language,
+                    "learner_language": language,
+                    "question_count": len(POSTTEST_DIFFICULTIES),
+                    "difficulty_policy": {"fixed": list(POSTTEST_DIFFICULTIES)},
+                    "workspace_learning_summary": workspace_summary,
+                },
+                decision_state_json={},
+                graph_scope_json={},
+                max_questions=len(POSTTEST_DIFFICULTIES),
+                max_depth=0,
+                max_nodes_visited=1,
+            )
+            session.add(assessment)
+            session.commit()
+            session.refresh(assessment)
+        else:
+            assessment = existing
+
+        if not generate_questions:
+            generation_state = dict(
+                (assessment.metadata_json or {}).get("generation_state") or {}
+            )
+            assessment.status = "generating"
+            assessment.metadata_json = {
+                **dict(assessment.metadata_json or {}),
+                "generation_state": {
+                    **generation_state,
+                    "status": "queued",
+                    "completed_questions": len(assessment.questions),
+                    "total_questions": len(POSTTEST_DIFFICULTIES),
+                },
+            }
+            session.commit()
+            return self.read(session, user=user, session_id=assessment.id)
 
         questions = _create_posttest_questions(
             self.generation_service,
@@ -194,6 +223,15 @@ class AdaptivePosttestService:
                 }
             },
         }
+        assessment.metadata_json = {
+            **dict(assessment.metadata_json or {}),
+            "generation_state": {
+                "status": "ready",
+                "completed_questions": len(question_ids),
+                "total_questions": len(POSTTEST_DIFFICULTIES),
+            },
+        }
+        assessment.status = "active"
         session.commit()
         return self.read(session, user=user, session_id=assessment.id)
 
@@ -1058,16 +1096,38 @@ def _create_posttest_questions(
     language: str,
     diagnosis_context: str,
 ) -> list[AssessmentQuestion]:
-    questions: list[AssessmentQuestion] = []
+    questions = list(
+        session.scalars(
+            select(AssessmentQuestion)
+            .where(AssessmentQuestion.session_id == assessment.id)
+            .order_by(AssessmentQuestion.sort_order)
+        )
+    )
     generation_batches = [
         ["medium", "medium", "medium"],
         ["hard", "hard", "hard"],
         ["hard", "hard"],
         ["hard", "hard"],
     ]
+    completed_count = len(questions)
+    batch_boundaries = {0}
+    running_count = 0
     for batch in generation_batches:
+        running_count += len(batch)
+        batch_boundaries.add(running_count)
+    if completed_count not in batch_boundaries:
+        raise AssessmentQuestionGenerationError(
+            f"Posttest has an incomplete cached batch at {completed_count} questions."
+        )
+
+    skipped_count = 0
+    for batch_index, batch in enumerate(generation_batches, start=1):
+        batch_end = skipped_count + len(batch)
+        if batch_end <= completed_count:
+            skipped_count = batch_end
+            continue
         try:
-            questions.extend(
+            generated = (
                 _generate_posttest_question_chunk(
                     generation_service,
                     session,
@@ -1078,12 +1138,25 @@ def _create_posttest_questions(
                     diagnosis_context=diagnosis_context,
                 )
             )
+            questions.extend(generated)
+            assessment.metadata_json = {
+                **dict(assessment.metadata_json or {}),
+                "generation_state": {
+                    "status": "generating",
+                    "completed_questions": len(questions),
+                    "total_questions": len(POSTTEST_DIFFICULTIES),
+                    "completed_batches": batch_index,
+                },
+            }
+            session.commit()
         except ValueError as exc:
+            session.rollback()
             if _non_retryable_generation_error(exc):
                 raise
             raise AssessmentQuestionGenerationError(
                 f"Posttest question generation failed for difficulty batch {batch}: {exc}"
             ) from exc
+        skipped_count = batch_end
 
     full_sequence = list(POSTTEST_DIFFICULTIES)
     if len(questions) != len(full_sequence):
@@ -1177,7 +1250,7 @@ def _active_posttest_for_goal(
             AssessmentSession.user_id == user.id,
             AssessmentSession.learning_goal_id == goal_id,
             AssessmentSession.session_type == "posttest",
-            AssessmentSession.status.in_({"active", "awaiting_answer"}),
+            AssessmentSession.status.in_({"generating", "active", "awaiting_answer"}),
         )
         .options(selectinload(AssessmentSession.questions).selectinload(AssessmentQuestion.options))
         .order_by(AssessmentSession.created_at.desc())

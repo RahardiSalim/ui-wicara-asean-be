@@ -15,6 +15,7 @@ from app.modules.learning import models as learning_models  # noqa: F401
 from app.modules.learning_goal_resolution import models as goal_resolution_models  # noqa: F401
 from app.modules.question_bank import models as question_bank_models  # noqa: F401
 from app.modules.review import models as review_models  # noqa: F401
+from app.modules.teacher_students import models as teacher_student_models  # noqa: F401
 from app.modules.workspaces import models as workspace_models  # noqa: F401
 
 config = context.config

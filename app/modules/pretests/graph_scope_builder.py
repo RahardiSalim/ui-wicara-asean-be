@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -82,6 +83,48 @@ class GraphScopeBuilder:
             "edges": edges,
         }
 
+    def build_probe_queue(
+        self,
+        graph_scope: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        edges = [
+            edge
+            for edge in graph_scope.get("edges", [])
+            if isinstance(edge, dict)
+        ]
+        edge_by_prerequisite = {
+            str(edge.get("to") or ""): edge
+            for edge in edges
+            if str(edge.get("to") or "").strip()
+        }
+        queue: list[dict[str, Any]] = []
+        for node in graph_scope.get("nodes", []):
+            if not isinstance(node, dict) or node.get("role") != "prerequisite":
+                continue
+            concept_code = str(node.get("concept_code") or "").strip()
+            if not concept_code:
+                continue
+            depth = int(node.get("depth") or 1)
+            edge = edge_by_prerequisite.get(concept_code, {})
+            weight = float(edge.get("weight") or 1.0)
+            queue.append(
+                {
+                    "concept_code": concept_code,
+                    "concept_id": str(node.get("concept_id") or ""),
+                    "depth": depth,
+                    "priority": round(weight - (depth * 0.2), 4),
+                    "parent": node.get("parent"),
+                }
+            )
+        queue.sort(
+            key=lambda item: (
+                -float(item["priority"]),
+                int(item["depth"]),
+                str(item["concept_code"]),
+            )
+        )
+        return queue
+
 def _node_payload(
     concept: KnowledgeConcept,
     *,
@@ -95,6 +138,7 @@ def _node_payload(
         "concept_code": concept.code,
         "title": concept.title,
         "description": concept.description,
+        "display_order": concept.display_order,
         "depth": depth,
         "role": role,
         "parent": parent,

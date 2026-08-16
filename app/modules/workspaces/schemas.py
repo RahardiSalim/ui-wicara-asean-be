@@ -108,12 +108,20 @@ class WorkspaceSessionHistoryRead(BaseModel):
     has_more: bool = False
 
 
+class WorkspaceToolSuggestionRead(BaseModel):
+    tool: str
+    reason: str
+    prompt: str
+
+
 class TutorResponseRead(BaseModel):
     text: str
     intent: str
     next_actions: list[str] = Field(default_factory=list)
     next_phase_ready: bool = False
     phase_reasoning: str | None = None
+    phase_checkpoint_question: str | None = None
+    next_phase_opening_prompt: str | None = None
     evidence_tags: list[str] = Field(default_factory=list)
     correctness: str = "unknown"
     misconception_status: str = "none"
@@ -123,6 +131,7 @@ class TutorResponseRead(BaseModel):
     evidence_request: dict[str, Any] | None = None
     explanation_card: dict[str, Any] | None = None
     degraded: bool = False
+    tool_suggestion: WorkspaceToolSuggestionRead | None = None
 
 
 class WorkspaceMasteryUpdateRead(BaseModel):

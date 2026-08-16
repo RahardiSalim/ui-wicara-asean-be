@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import random
+import re
 from typing import Any
 from uuid import UUID
 
@@ -24,7 +26,7 @@ from app.modules.pretests.question_validator import QuestionValidator, VALID_QUE
 from app.modules.review.flagger import enqueue_flag
 
 PACK_PROMPT_VERSION = "adaptive_node_pack_v6_flexible_subject_tasks"
-FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v10_minimal_contract"
+FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v12_graph_path_blueprint"
 DEFAULT_PACK_GENERATION_MAX_ATTEMPTS = 4
 DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 270.0
 
@@ -700,6 +702,8 @@ class AdaptivePretestGenerationService:
                     concept_code=concept.code,
                     difficulties=difficulties,
                 )
+                _validate_completed_reasoning(normalized_questions)
+                _validate_no_leaked_meta_commentary(normalized_questions)
                 for difficulty, question in zip(difficulties, normalized_questions, strict=True):
                     self.validator.validate_question(
                         concept_code=concept.code,
@@ -709,6 +713,11 @@ class AdaptivePretestGenerationService:
                 _validate_skill_traces(
                     normalized_questions,
                     concept_code=concept.code,
+                    skill_candidates=skill_candidates,
+                )
+                _validate_diagnostic_path_trace(
+                    normalized_questions,
+                    difficulties=difficulties,
                     skill_candidates=skill_candidates,
                 )
                 _validate_unique_question_prompts(normalized_questions)
@@ -906,6 +915,7 @@ If the learner language is missing, use English.
 
 Return valid JSON only.
 Do not include markdown, commentary, or extra text.
+Every field value must contain only learner-facing content. Never write notes, self-critique, or commentary about how or why you designed the question anywhere in the output, including inside the stem.
 """.strip()
 
 
@@ -938,6 +948,7 @@ def _fresh_question_prompt(
         concept=concept,
         skill_candidates=skill_candidates,
     )
+    diagnostic_path = _diagnostic_path_candidates(skill_candidates)
     retry_instruction = ""
     if previous_errors:
         compact_errors = "\n".join(f"- {error}" for error in previous_errors[-6:])
@@ -968,10 +979,27 @@ Pretest-specific rules:
         prerequisite_probe_rules = """
 
 Prerequisite-probe rules:
-- Use error_analysis, as required by the response schema.
-- Do not ask only for the final derivative or another direct computation.
-- The stem must show a concrete learner's incomplete or incorrect worked solution and ask for a concrete correction.
-- For chain-rule tasks, the learner must identify or restore the derivative of the inner function.
+- Ask the learner to solve the task directly (e.g., compute the derivative), not to find or correct someone else's mistake.
+- Require the learner to show their working steps; expected_reasoning must describe the exact step-by-step method so a learner's submitted steps can be checked against it.
+- One question must test one hypothesis: choose the simplest concrete task whose correct solution uses ONLY the skill in concept_code (this node) plus skills already listed in the allowed solution-skill catalog.
+- Never choose a function or task that structurally requires a technique outside the allowed solution-skill catalog. For example, do not combine chain rule with product rule, quotient rule, or any other untested rule unless that rule's concept_code is itself in the catalog.
+- If probing chain rule specifically, use a single outer-inner composition (e.g., a power of a polynomial, or a single transcendental function of a polynomial) and nothing else.
+""".rstrip()
+    diagnostic_path_rules = ""
+    if node_role == "goal" and "hard" in difficulties and diagnostic_path:
+        path_lines = "\n".join(
+            f"  {index}. {item['concept_code']} — {item['title']}: {item['description']}"
+            for index, item in enumerate(diagnostic_path, start=1)
+        )
+        diagnostic_path_rules = f"""
+
+Graph-selected hard diagnostic path:
+{path_lines}
+- The hard question must assess the target through a task that genuinely requires every skill in this path.
+- Include every selected path concept_code exactly once in the hard question's skill_trace, in causal solution order.
+- Do not mention graph nodes or prerequisite codes to the learner.
+- The path was selected generically from curriculum structure; do not replace it with an easier unrelated skill.
+- The concrete function, representation, numbers, and distractors must remain freshly generated.
 """.rstrip()
     if assessment_type == "posttest":
         assessment_specific_rules = """
@@ -1039,13 +1067,27 @@ Question quality requirements:
 - Each criterion must state observable evidence that distinguishes correct use of that skill from a nearby misconception.
 - The selected answer alone must not be enough to diagnose a skill gap; expected_reasoning must expose the learner's method.
 - Do not mention the curriculum graph, diagnosis, evidence labels, or prerequisite codes to the learner.
-- Exactly one correct option per question.
-- Provide 4 answer options.
+- Return one correct_answer and exactly 3 distractors per question. The backend assigns and shuffles A/B/C/D labels; never assign option labels yourself.
+- correct_answer and every distractor must contain the complete learner-visible answer text, never a label or reference such as "A", "option B", or "the first statement".
+- Incorrect output example: correct_answer="A", distractors=["B", "C", "D"].
+- Correct output example: correct_answer="Increasing on $(-\\infty,-1)\\cup(1,\\infty)$", distractors=["Increasing on $(-1,1)$", "Decreasing for all $x$", "Increasing for all $x$"].
 - All four options must answer the same specific task and be mutually exclusive.
 - Keep the stem and every option in the same answer dimension: if the stem asks for a missing factor, options must be factors only; if options are complete corrected results, the stem must ask for the complete corrected result.
 - Every distractor must be mathematically or factually false, not merely less complete than the correct option.
 - Distractors must be plausible and reveal misconceptions.
-- Solve the problem independently before choosing correct_option_id, then make sure the explanation agrees with the selected correct option.
+- Solve the problem independently before writing correct_answer, then make sure the explanation agrees with that answer.
+- Complete all internal checking before returning JSON. Never return self-correction, drafting notes, or statements that an answer/distractor still needs to be fixed; silently fix every affected field first.
+- stem must contain only the learner-facing question. Never append a note, summary, or commentary explaining why the question is well-designed, what the distractors represent, or how skill_trace/expected_reasoning/explanation were written.
+- Never mention field names from this schema (stem, skill_trace, expected_reasoning, explanation, distractors, correct_answer, question_type) to the learner in any field's visible text.
+- expected_reasoning and explanation must contain only the derivation or justification of the correct result. Never discuss, compare, number, or name answer options there because the backend assigns and shuffles options after generation.
+- Keep the stem short enough to read on a phone screen in a few seconds.
+- Difficulty must come from the reasoning, not from reading burden. Do not ask the learner to verify or describe an entire multi-part analysis in one question (e.g., "which statement correctly describes the whole curve" combining monotonicity, extrema, concavity, and inflection points all at once) — that forces every option into a long paragraph and tests reading stamina instead of the target skill.
+- Narrow the stem to one specific analytic decision (e.g., only monotonicity on a stated interval, or only the location of one extremum, or only concavity on a stated interval). Make that single decision genuinely hard through a subtle or counter-intuitive case, not through combining many facts.
+- Because the stem targets one decision, every option must be one short phrase or short expression stating a candidate answer to that same decision — never a multi-clause paragraph re-deriving multiple properties.
+- Keep each option comfortably short for a phone screen (preferably under 120 characters when the mathematics permits).
+- Options are answer choices, not mini-solutions: use one claim or expression, avoid sentences containing "because", and do not repeat the full stem in every option.
+- Example — avoid: options that each restate increasing/decreasing intervals AND local max/min AND inflection points AND concavity together.
+- Example — prefer: stem asks only "which statement about monotonicity is correct" with options like "Decreasing on $(-1,0)$, increasing on $(0,1)$" / "Increasing on $(-1,1)$" / "Decreasing on $(-1,1)$" — short, mutually exclusive, still hard to get right.
 - Options should be similar in length and style.
 - Do not use "all of the above" or "none of the above".
 - Do not make the correct answer obvious by wording length or detail.
@@ -1071,6 +1113,7 @@ Difficulty rules:
 - Do not make difficulty differ only by using larger numbers.
 {assessment_specific_rules}
 {prerequisite_probe_rules}
+{diagnostic_path_rules}
 
 Before returning JSON, internally verify:
 - exactly one correct answer
@@ -1104,28 +1147,23 @@ def _normalize_fresh_question_payload(
 ) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise QuestionGenerationPayloadError("Question payload must be an object.")
-    correct_option_id = str(
-        payload.get("correct_option_id")
-        or payload.get("correct_option")
-        or payload.get("correct_option_key")
-        or ""
-    ).strip()
-    raw_options = payload.get("options")
-    if not isinstance(raw_options, list):
-        raise QuestionGenerationPayloadError("Question options must be an array.")
-    options: list[dict[str, Any]] = []
-    for index, option in enumerate(raw_options):
-        if not isinstance(option, dict):
-            raise QuestionGenerationPayloadError("Each option must be an object.")
-        label = str(option.get("label") or option.get("id") or chr(ord("A") + index)).strip()
-        text = str(option.get("text") or "").strip()
-        options.append(
-            {
-                "label": label,
-                "text": text,
-                "is_correct": bool(option.get("is_correct") is True or label == correct_option_id),
-            }
-        )
+    correct_answer = str(payload.get("correct_answer") or "").strip()
+    raw_distractors = payload.get("distractors")
+    if not correct_answer:
+        raise QuestionGenerationPayloadError("Question is missing correct_answer.")
+    if not isinstance(raw_distractors, list) or len(raw_distractors) != 3:
+        raise QuestionGenerationPayloadError("Question must provide exactly 3 distractors.")
+    answer_choices = [(correct_answer, True)]
+    answer_choices.extend((str(item).strip(), False) for item in raw_distractors)
+    random.SystemRandom().shuffle(answer_choices)
+    options = [
+        {
+            "label": chr(ord("A") + index),
+            "text": text,
+            "is_correct": is_correct,
+        }
+        for index, (text, is_correct) in enumerate(answer_choices)
+    ]
     return {
         "concept_code": concept_code,
         "difficulty": difficulty,
@@ -1171,6 +1209,86 @@ def _validate_unique_question_prompts(questions: list[dict[str, Any]]) -> None:
         if normalized in seen:
             raise QuestionGenerationPayloadError("Generated questions must not duplicate prompts in the same batch.")
         seen.add(normalized)
+
+
+_UNRESOLVED_REASONING_MARKERS = (
+    "i need to adjust",
+    "i need to correct",
+    "let me correct",
+    "i'll rewrite",
+    "i will rewrite",
+    "needs to be revised",
+    "need to be revised",
+    "the correct answer should reflect",
+)
+
+
+def _validate_completed_reasoning(questions: list[dict[str, Any]]) -> None:
+    for question in questions:
+        diagnostic_text = " ".join(
+            (
+                str(question.get("expected_reasoning") or ""),
+                str(question.get("explanation") or ""),
+            )
+        ).casefold()
+        if any(marker in diagnostic_text for marker in _UNRESOLVED_REASONING_MARKERS):
+            raise QuestionGenerationPayloadError(
+                "Generated reasoning contains unresolved self-correction or drafting notes."
+            )
+        if re.search(r"\b(?:option|opsi|pilihan|choice)\b", diagnostic_text) or re.search(
+            r"\b(?:first|second|third|fourth|pertama|kedua|ketiga|keempat)\s+(?:statement|answer|pernyataan|jawaban)\b",
+            diagnostic_text,
+        ):
+            raise QuestionGenerationPayloadError(
+                "Generated reasoning must not discuss backend-assigned answer options."
+            )
+
+
+_SCHEMA_FIELD_LEAKAGE_MARKERS = (
+    "skill_trace",
+    "expected_reasoning",
+    "correct_answer",
+    "distractors",
+    "concept_code",
+    "question_type",
+)
+
+_META_COMMENTARY_MARKERS = (
+    "note:",
+    "note that this question",
+    "the stem includes",
+    "the options are",
+    "the distractors are",
+    "the question is easy because",
+    "the question is medium because",
+    "the question is hard because",
+    "this question tests",
+    "this question is designed",
+)
+
+
+def _validate_no_leaked_meta_commentary(questions: list[dict[str, Any]]) -> None:
+    for question in questions:
+        option_texts = [
+            str(option.get("text") or "")
+            for option in question.get("options", [])
+            if isinstance(option, dict)
+        ]
+        learner_facing_text = " ".join(
+            (
+                str(question.get("prompt") or ""),
+                str(question.get("helper_text") or ""),
+                *option_texts,
+            )
+        ).casefold()
+        if any(marker in learner_facing_text for marker in _SCHEMA_FIELD_LEAKAGE_MARKERS):
+            raise QuestionGenerationPayloadError(
+                "Generated question leaks internal schema field names into learner-facing text."
+            )
+        if any(marker in learner_facing_text for marker in _META_COMMENTARY_MARKERS):
+            raise QuestionGenerationPayloadError(
+                "Generated question stem contains design commentary instead of only the learner-facing question."
+            )
 
 
 def _normalize_skill_trace(value: object) -> list[dict[str, str]]:
@@ -1250,15 +1368,65 @@ def _solution_skill_catalog(
         code = str(candidate.get("concept_code") or "").strip()
         if not code or code in seen:
             continue
-        catalog.append(
-            {
+        item = {
                 "concept_code": code,
                 "title": str(candidate.get("title") or code).strip(),
                 "description": str(candidate.get("description") or "").strip()[:240],
             }
-        )
+        path_order = candidate.get("diagnostic_path_order")
+        if isinstance(path_order, int):
+            item["diagnostic_path_order"] = path_order
+        catalog.append(item)
         seen.add(code)
     return catalog
+
+
+def _diagnostic_path_candidates(
+    skill_candidates: list[dict[str, Any]] | None,
+) -> list[dict[str, str]]:
+    selected = [
+        candidate
+        for candidate in skill_candidates or []
+        if isinstance(candidate.get("diagnostic_path_order"), int)
+    ]
+    selected.sort(key=lambda item: int(item["diagnostic_path_order"]))
+    return [
+        {
+            "concept_code": str(item.get("concept_code") or "").strip(),
+            "title": str(item.get("title") or item.get("concept_code") or "").strip(),
+            "description": str(item.get("description") or "").strip(),
+        }
+        for item in selected
+        if str(item.get("concept_code") or "").strip()
+    ]
+
+
+def _validate_diagnostic_path_trace(
+    questions: list[dict[str, Any]],
+    *,
+    difficulties: list[str],
+    skill_candidates: list[dict[str, Any]] | None,
+) -> None:
+    required_codes = {
+        item["concept_code"]
+        for item in _diagnostic_path_candidates(skill_candidates)
+    }
+    if not required_codes:
+        return
+    for difficulty, question in zip(difficulties, questions, strict=True):
+        if difficulty != "hard":
+            continue
+        actual_codes = {
+            str(item.get("concept_code") or "").strip()
+            for item in question.get("skill_trace", [])
+            if isinstance(item, dict)
+        }
+        missing = required_codes - actual_codes
+        if missing:
+            raise QuestionGenerationPayloadError(
+                "Hard question skill_trace is missing graph-selected diagnostic path skills: "
+                f"{', '.join(sorted(missing))}."
+            )
 
 
 class QuestionGenerationPayloadError(ValueError):
@@ -1278,21 +1446,13 @@ def _fresh_question_response_format(
             "question_type": {
                 "enum": sorted(question_types or VALID_QUESTION_TYPES)
             },
-            "options": {
+            "correct_answer": {"type": "string"},
+            "distractors": {
                 "type": "array",
-                "minItems": 4,
-                "maxItems": 4,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "id": {"enum": ["A", "B", "C", "D"]},
-                        "text": {"type": "string"},
-                    },
-                    "required": ["id", "text"],
-                },
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {"type": "string"},
             },
-            "correct_option_id": {"enum": ["A", "B", "C", "D"]},
             "skill_trace": {
                 "type": "array",
                 "minItems": 1,
@@ -1313,8 +1473,8 @@ def _fresh_question_response_format(
         "required": [
             "stem",
             "question_type",
-            "options",
-            "correct_option_id",
+            "correct_answer",
+            "distractors",
             "skill_trace",
             "expected_reasoning",
             "explanation",
@@ -1390,7 +1550,7 @@ def _fresh_question_type_choices(
     node_role: str,
 ) -> set[str] | None:
     if node_role == "prerequisite":
-        return {"error_analysis"}
+        return {"direct_computation"}
     return None
 
 
