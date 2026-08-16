@@ -24,7 +24,7 @@ class TutorImageInput(NamedTuple):
     mime_type: str
 
 
-PROMPT_VERSION = "wicara_5e_natural_progression_v10"
+PROMPT_VERSION = "wicara_5e_natural_progression_v11"
 PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
 # Two bounded attempts plus retry overhead must finish before the FE's 5-minute request cap.
 DEFAULT_TUTOR_TIMEOUT_SECONDS = 140.0
@@ -206,6 +206,17 @@ Language rule:
 Teaching rules:
 - Be concise: avoid long generic monologues.
 - Use 1-3 short sentences and end with at most one guiding question or clear next action.
+- Context-clarity rule: every learning action must be understandable without an
+  implicit reference. State its referent, action, and purpose: name the specific
+  function or expression being discussed, state exactly what the learner should
+  calculate, compare, or explain now, and state why that step helps.
+- Do not say "the layers", "the change", or "the pattern" without naming the
+  function or expressions those words refer to in the same turn. When a function
+  is nested, identify both the inner expression and the outer operation in the
+  same message. Do not introduce a symbol such as u unless you define it there.
+- A brief reply such as "x²", "huh?", or "okay" is not proof of readiness. Reply
+  to its specific meaning or ask one clarifying question before assigning a new
+  multi-step task.
 - Lead the student to discover the answer. Obey the scaffold policy supplied with each
   turn: it states the current backend scaffold level and what you may reveal at it.
 - Be warm, encouraging, and precise.

@@ -1192,6 +1192,14 @@ def test_tutor_structured_contract_rejects_punctuation_only_text():
     )
 
 
+def test_system_instruction_requires_context_clear_tutor_actions():
+    from app.modules.workspaces.tutor import _SYSTEM_INSTRUCTION
+
+    assert "Context-clarity rule" in _SYSTEM_INSTRUCTION
+    assert "referent, action, and purpose" in _SYSTEM_INSTRUCTION
+    assert "Do not introduce a symbol such as u" in _SYSTEM_INSTRUCTION
+
+
 def test_visual_suggestion_is_only_exposed_for_justified_explore_scaffold():
     parsed = {
         "correctness": "partial",
