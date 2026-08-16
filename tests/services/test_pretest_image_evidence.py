@@ -10,6 +10,22 @@ from app.modules.evidence.models import ImageAsset
 from app.modules.learning.models import AssessmentOption, AssessmentQuestion
 from app.modules.pretests import evidence_evaluator
 from app.modules.pretests.evidence_evaluator import PretestEvidenceEvaluator
+from app.modules.pretests.evidence_evaluator import _normalize_structured_method_result
+
+
+def test_explicit_chain_rule_gap_is_kept_when_model_omits_auxiliary_trace_fields():
+    result = _normalize_structured_method_result(
+        {
+            "method_valid": False,
+            "primary_gap_code": "chain_rule",
+            "reasoning_signal": "misconception",
+            "method_reason": "The derivative only differentiates the outer sine function.",
+        },
+        allowed_codes={"curve_sketching", "chain_rule", "trig_derivative"},
+        source="test:model",
+    )
+
+    assert result["suspected_prerequisite_code"] == "chain_rule"
 
 
 def test_uploaded_evidence_image_is_persisted(db_session, tmp_path):

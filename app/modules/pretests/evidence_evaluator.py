@@ -324,11 +324,9 @@ def _normalize_structured_method_result(
         step["concept_code"] == suspected_code and step["status"] == "fail"
         for step in step_results
     ):
-        evidence_tags = [*evidence_tags, "primary_gap_rejected_without_failed_step"]
-        suspected_code = None
+        evidence_tags = [*evidence_tags, "primary_gap_without_step_trace"]
     if suspected_code and (gap_confidence is None or gap_confidence < 0.7):
-        evidence_tags = [*evidence_tags, "primary_gap_rejected_low_confidence"]
-        suspected_code = None
+        evidence_tags = [*evidence_tags, "primary_gap_low_confidence"]
     return {
         "reasoning_score": reasoning_score,
         "reasoning_signal": reasoning_signal,
