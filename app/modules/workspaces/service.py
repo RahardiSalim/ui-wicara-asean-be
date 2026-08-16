@@ -702,6 +702,8 @@ async def append_workspace_event(
         created_at=workspace.created_at,
     )
     current_phase = str(phase_metadata.get("current_phase") or "engage")
+    if current_phase == "evaluate" and bool(phase_metadata.get("posttest_eligible")):
+        raise ValueError("Guided workspace is complete. Start the posttest.")
     if checkpoint_declined:
         if not bool(phase_metadata.get("phase_transition_pending", False)):
             raise ValueError("There is no pending phase checkpoint to decline.")
@@ -711,7 +713,7 @@ async def append_workspace_event(
     first_engage_reply = (
         current_phase == "engage"
         and normalized_event_type == "text"
-        and bool(text_payload.strip())
+        and _is_substantive_engage_reply(text_payload)
         and not checkpoint_declined
         and _current_phase_turns(phase_metadata) == 0
     )
@@ -872,6 +874,10 @@ async def append_workspace_event(
         metadata_json["phase_history"] = history
 
     phase_ready = _phase_is_ready(metadata_json, phase=current_phase)
+    phase_min_turns = int(_phase_min_turns(metadata_json).get(current_phase, 1))
+    phase_transition_ready = (
+        phase_ready and _current_phase_turns(metadata_json) >= phase_min_turns
+    )
     auto_advance_engage = first_engage_reply and tutor_response is not None
     if auto_advance_engage:
         next_phase = "explore"
@@ -907,9 +913,7 @@ async def append_workspace_event(
     elif current_phase != "evaluate":
         # Every phase after Engage remains learner-confirmed through its
         # contextual checkpoint.
-        min_turns = int(_phase_min_turns(metadata_json).get(current_phase, 1))
-        current_turns = _current_phase_turns(metadata_json)
-        metadata_json["phase_transition_pending"] = phase_ready and current_turns >= min_turns
+        metadata_json["phase_transition_pending"] = phase_transition_ready
     elif tutor_response is not None:
         outcome = tutor_response.evaluation_outcome
         if phase_ready and (
@@ -962,7 +966,7 @@ async def append_workspace_event(
     if tutor_response is not None:
         next_phase_opening_prompt = tutor_response.next_phase_opening_prompt
         if (
-            phase_ready
+            phase_transition_ready
             and current_phase != "evaluate"
             and next_phase_opening_prompt is None
             and _PHASE_SEQUENCE[_PHASE_SEQUENCE.index(current_phase) + 1]
@@ -975,26 +979,26 @@ async def append_workspace_event(
                 learner_language=_preferred_language(user),
                 learning_context=metadata_json.get("learning_context"),
             )
-        if phase_ready and current_phase == "elaborate":
+        if phase_transition_ready and current_phase == "elaborate":
             # Elaborate now hands directly to the independent posttest. Do not
             # expose or persist a synthetic Evaluate exercise in the workspace.
             next_phase_opening_prompt = None
         tutor_response = tutor_response.model_copy(
             update={
-                "next_phase_ready": phase_ready and current_phase != "evaluate",
+                "next_phase_ready": phase_transition_ready and current_phase != "evaluate",
                 "phase_checkpoint_question": (
                     tutor_response.phase_checkpoint_question
-                    if phase_ready and current_phase != "evaluate"
+                    if phase_transition_ready and current_phase != "evaluate"
                     else None
                 ),
                 "next_phase_opening_prompt": (
                     next_phase_opening_prompt
-                    if phase_ready and current_phase != "evaluate"
+                    if phase_transition_ready and current_phase != "evaluate"
                     else None
                 ),
                 "evidence_request": (
                     None
-                    if phase_ready or tutor_response.evaluation_outcome == "passed"
+                    if phase_transition_ready or tutor_response.evaluation_outcome == "passed"
                     else tutor_response.evidence_request
                 ),
                 "scaffold_level": max(
@@ -1611,6 +1615,12 @@ def _current_phase_turns(metadata: dict[str, Any]) -> int:
     if not isinstance(last_entry, dict):
         return 0
     return max(0, _safe_int(last_entry.get("turn_count"), 0))
+
+
+def _is_substantive_engage_reply(text: str) -> bool:
+    """Keep a terse first reply conversationally in Engage before exploration."""
+    normalized = str(text or "").strip()
+    return len(normalized) >= 24 or len(normalized.split()) >= 4
 
 
 def _record_phase_evidence(

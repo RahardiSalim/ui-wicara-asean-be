@@ -849,9 +849,9 @@ def test_workspace_tutor_default_timeout_keeps_retries_below_frontend_cap(monkey
     [
         ("engage", "focus on your answer about Chain rule"),
         ("explore", "small input change"),
-        ("explain", "two consecutive stages"),
+        ("explain", "first operation and then its second operation"),
         ("elaborate", "recompute only the uncertain inner step"),
-        ("evaluate", "inspect only the step you trust least"),
+        ("evaluate", "Start the posttest"),
     ],
 )
 def test_generation_exhaustion_fallback_is_phase_aware(phase, expected_fragment):
@@ -1112,8 +1112,8 @@ def test_explore_splits_an_overloaded_evidence_request_into_one_action():
     )
 
     assert request is not None
-    assert request["prompt"].count("?") == 1
-    assert "x=1 and x=1.1" in request["prompt"]
+    assert request["prompt"].count("?") <= 1
+    assert "exact Chain rule expression" in request["prompt"]
     assert "original function" not in request["prompt"]
 
 
@@ -1130,7 +1130,7 @@ def test_phase_opening_fallback_does_not_repeat_original_target_mid_lesson():
     )
 
     assert "Curve sketching" not in text
-    assert text.startswith("Try one Chain rule example")
+    assert text.startswith("Write one exact Chain rule expression")
 
 
 def test_engage_opening_fallback_uses_pretest_diagnosis_instead_of_generic_hook():

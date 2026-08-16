@@ -24,7 +24,7 @@ class TutorImageInput(NamedTuple):
     mime_type: str
 
 
-PROMPT_VERSION = "wicara_5e_natural_progression_v11"
+PROMPT_VERSION = "wicara_5e_natural_progression_v12"
 PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
 # Two bounded attempts plus retry overhead must finish before the FE's 5-minute request cap.
 DEFAULT_TUTOR_TIMEOUT_SECONDS = 140.0
@@ -238,9 +238,12 @@ Teaching rules:
 - Avoid repeating the same opening pattern (for example repeated "Imagine..." hooks).
 - Treat the supplied learning context as authoritative. Ground the activity in the
   diagnosed evidence and remember the learner's original target.
-- Mention the original target only in the first Engage response and in final passed
-  Evaluate feedback. Explore, Explain, Elaborate, micro-checks, and phase-opening tasks
+- Mention the original target only in the first Engage response and final posttest
+  feedback. Explore, Explain, Elaborate, micro-checks, and phase-opening tasks
   must stay inside the current module and must not test original-target subskills.
+- Before affirming a numerical result, identify exactly which quantity the learner
+  computed. Do not turn a rate into a difference, or a difference into a rate. If
+  the quantity is unclear, ask for the one arithmetic operation before continuing.
 - Keep every task inside its current 5E phase. Never display a task for the next phase
   before the learner confirms the transition.
 - Report evidence only when the latest learner message actually demonstrates it.
@@ -277,14 +280,17 @@ _PROMPTS: dict[str, str] = {
         "Conversation so far:\n{history}\n\n"
         "Student: {message}\n\n"
         "Assess the learner's response to the current Explore task. While Explore is not "
-        "complete, give one probing challenge or mini experiment in {response_language} "
+        "complete, first respond to the exact claim, question, or obstacle in the latest "
+        "message. Then give one probing challenge or mini experiment in {response_language} "
         "that pushes discovery. If the learner is unsure why two effects combine, make the "
         "experiment concrete: choose a small input change, track how it changes at each "
-        "layer, and ask one fully specified numerical question the learner can answer. Do not "
-        "stop after merely announcing the input change. Compare the scale factors, and then "
-        "ask the learner to reapply the observed "
-        "pattern to the original task. Do not jump to another analogous example when the "
-        "missing issue is the causal link itself. Do not label a pattern as identified until "
+        "named expression, and ask one fully specified numerical question the learner can "
+        "answer without a calculator. Ask for only one quantity per turn. State why that "
+        "quantity is being found before asking it. Do not stop after merely announcing the "
+        "input change. Compare the scale factors, and then ask the learner to reapply the "
+        "observed pattern to the original task. Do not jump to another analogous example "
+        "unless you first say why it makes the same missing causal link simpler. Do not label "
+        "a pattern as identified until "
         "the learner states or uses it. Do not call an Explore activity transfer. When Explore is "
         "complete, give feedback only; put the Explain opening in "
         "next_phase_opening_prompt. Keep it 1-2 sentences."
@@ -298,7 +304,7 @@ _PROMPTS: dict[str, str] = {
         "shows they successfully applied the discovered model. If they explicitly say they "
         "still cannot explain the reason, stop eliciting and teach the missing conceptual "
         "model concisely (for example, sequential changes act as consecutive scale factors), "
-        "then ask one concrete application question rather than asking for the same "
+        "using the exact expression currently being discussed. Then ask one concrete application question rather than asking for the same "
         "explanation again. If the latest message "
         "itself demonstrates learner_explanation, give a concise grounded formal explanation "
         "and end with exactly one concrete micro-check for the next learner turn. Also return "
@@ -328,7 +334,9 @@ _PROMPTS: dict[str, str] = {
         "next_phase_ready=true only after the context shows three correct applications. "
         "If it is an incorrect attempt, return transfer_attempt and one focused hint. Only "
         "when there is no substantive solution yet, give one new guided application task in "
-        "{response_language}. Keep it strictly within the current topic; do not add analysis "
+        "{response_language}. Name the exact expression, the one step to perform, and which "
+        "already-demonstrated skill the new example keeps stable or which new skill it isolates. "
+        "Keep it strictly within the current topic; do not add analysis "
         "or skills from the original target. When the third application is correct, give "
         "feedback only and leave next_phase_opening_prompt null; the next step is the posttest."
     ),
@@ -337,15 +345,9 @@ _PROMPTS: dict[str, str] = {
         "Stage: Evaluate\n"
         "Conversation so far:\n{history}\n\n"
         "Student answer: {message}\n\n"
-        "Respond in {response_language}. Collect evaluation evidence naturally across turns. "
-        "First assess an independent solution. On the next turn ask the learner to identify "
-        "and correct one plausible error. Independent work plus error analysis completes the "
-        "evaluation; reflection is optional and must never be requested as a required extra "
-        "turn. Request only the next missing item shown by phase_evidence; "
-        "do not ask the learner to recite evidence labels. If incorrect, give a hint without "
-        "revealing the answer. When evaluation_outcome=passed, give concise final feedback "
-        "without a question, connect the demonstrated prerequisite back to the original "
-        "learning target once, and return evidence_request=null."
+        "The guided workspace is complete: the posttest is the Evaluate assessment. Do not "
+        "create a new exercise, ask for evidence, or give a remediation task here. Briefly "
+        "direct the learner to begin the posttest and return evidence_request=null."
     ),
     "chat": (
         "Topic: {topic}\n"
@@ -1254,22 +1256,21 @@ def _anti_repeat_response(
         prompts = {
             "engage": f"Kita fokus pada jawabanmu tentang {topic}. Bagian mana yang paling ingin kamu uji?",
             "explore": (
-                "Kita ganti cara: pilih perubahan kecil pada input, ikuti perubahan itu "
-                "melewati setiap lapisan, lalu bandingkan faktor skalanya. Apa yang berubah "
-                "pada lapisan pertama?"
+                "Kita ganti cara. Tulis ekspresi tepat yang sedang kita bahas, lalu pilih "
+                "satu perubahan kecil pada input dan hitung perubahan pada operasi pertamanya. "
+                "Ini menunjukkan nilai apa yang diteruskan ke operasi berikutnya."
             ),
             "explain": (
-                "Jangan ulangi rumusnya dulu: satu perubahan melewati dua tahap berurutan, "
-                "jadi skala tahap pertama memengaruhi input tahap kedua. Coba terapkan model "
-                "dua tahap itu pada contoh yang baru dibahas."
+                "Gunakan ekspresi yang baru dibahas: tulis operasi pertama lalu operasi kedua. "
+                "Perubahan dari operasi pertama menjadi input bagi operasi kedua; jelaskan "
+                "bagaimana dua faktor perubahan itu digabungkan."
             ),
             "elaborate": (
                 "Pertahankan struktur yang sudah benar dan periksa hanya hitungan bagian "
                 "dalam yang masih meragukan. Berapa hasil langkah itu setelah dihitung ulang?"
             ),
             "evaluate": (
-                "Pertahankan jawabanmu dan periksa satu langkah yang paling meragukan tanpa "
-                "mengganti seluruh metode. Apa koreksi spesifiknya?"
+                "Latihan workspace sudah selesai. Lanjutkan ke posttest untuk evaluasi mandiri."
             ),
         }
         return prompts.get(
@@ -1281,21 +1282,21 @@ def _anti_repeat_response(
     prompts = {
         "engage": f"Let's focus on your answer about {topic}. Which part would you test first?",
         "explore": (
-            "Let's switch methods: choose a small input change, track it through each "
-            "layer, and compare the scale factors. What changes at the first layer?"
+            "Let's switch methods. Write the exact expression we are discussing, then choose "
+            "one small input change and calculate the change after its first operation. This "
+            "shows what value reaches the next operation."
         ),
         "explain": (
-            "Pause the formula: one change passes through two consecutive stages, so the "
-            "first scale changes what reaches the second. Apply that two-stage model to "
-            "the example we just discussed."
+            "Use the expression we just discussed: write its first operation and then its "
+            "second operation. The first change becomes input to the second, so explain how "
+            "their change factors combine."
         ),
         "elaborate": (
             "Keep the structure that already works and recompute only the uncertain inner "
             "step. What does that step give after you check it?"
         ),
         "evaluate": (
-            "Keep your solution and inspect only the step you trust least instead of "
-            "replacing the whole method. What specific correction is needed?"
+            "The guided workspace is complete. Start the posttest for the independent evaluation."
         ),
     }
     return prompts.get(
@@ -1445,28 +1446,38 @@ def fallback_phase_opening_prompt(
         )
     if language_code == "id":
         prompts = {
-            "explore": f"Coba satu contoh {topic}: pisahkan bagian-bagiannya dan ceritakan pola yang kamu temukan.",
+            "explore": (
+                f"Tulis satu ekspresi tepat untuk contoh {topic} yang ingin kita cek. "
+                "Kita akan menamai setiap operasinya agar bisa melacak perubahan inputnya."
+            ),
             "explain": (
-                f"Dari pola yang baru kamu temukan, bagaimana kamu menjelaskan {topic} dengan kata-katamu sendiri?"
+                f"Gunakan ekspresi {topic} yang baru kamu selesaikan: sebutkan operasinya "
+                "secara berurutan dan jelaskan mengapa hasil tiap operasi memengaruhi operasi berikutnya."
             ),
             "elaborate": (
-                f"Sekarang kita latihan {topic} bertahap. Mulai dari contoh baru ini dan tunjukkan alasan untuk setiap langkahmu."
+                f"Pilih satu ekspresi baru untuk menerapkan {topic}. Tunjukkan satu langkah "
+                "yang ingin kamu periksa, supaya kita bisa memisahkan aturan yang sudah kuat dari yang baru dilatih."
             ),
             "evaluate": (
-                f"Kerjakan satu contoh baru tentang {topic} secara mandiri dan tuliskan langkah lengkapmu tanpa petunjuk."
+                "Latihan workspace sudah selesai. Lanjutkan ke posttest untuk evaluasi mandiri."
             ),
         }
     else:
         prompts = {
-            "explore": f"Try one {topic} example: separate its parts and describe the pattern you find.",
+            "explore": (
+                f"Write one exact {topic} expression you want to inspect. We will name each "
+                "operation so we can trace how an input change moves through it."
+            ),
             "explain": (
-                f"From the pattern you just found, how would you explain {topic} in your own words?"
+                f"Use the exact {topic} expression you just solved: name its operations in "
+                "order and explain why the output of one operation affects the next."
             ),
             "elaborate": (
-                f"Now we will practise {topic} in a short guided ladder. Start with this new example and justify each step."
+                f"Choose one new expression for applying {topic}. Show one step you want to "
+                "check, so we can separate the rule that is stable from the rule being practised."
             ),
             "evaluate": (
-                f"Solve one new {topic} example independently and show your complete reasoning without hints."
+                "The guided workspace is complete. Continue to the posttest for the independent evaluation."
             ),
         }
     return prompts.get(normalized, f"What do you already know about {topic}?")
@@ -1610,29 +1621,37 @@ def _fallback_current_phase_request(
         prompts = {
             "engage": f"Bagaimana kamu sekarang menangani satu contoh sederhana {topic}, dan bagian mana yang masih membuatmu ragu?",
             "explore": (
-                "Hitung nilai ekspresi bagian dalam pada x=1 dan x=1,1. "
-                "Ketika x berubah 0,1, berapa perubahan nilai bagian dalam itu?"
+                f"Tulis ekspresi tepat {topic} yang sedang kita gunakan. Lalu hitung satu "
+                "nilai bagian dalam sebelum dan sesudah perubahan input kecil; ini menunjukkan "
+                "perubahan yang diteruskan ke operasi berikutnya."
             ),
-            "explain": "Bagian mana dari idenya yang masih belum jelas, dan bagaimana kamu akan menjelaskan bagian itu sekarang?",
+            "explain": (
+                f"Pada ekspresi {topic} yang baru dibahas, sebutkan operasi pertama dan kedua, "
+                "lalu jelaskan mengapa faktor perubahan keduanya digabungkan."
+            ),
             "elaborate": (
                 f"Latihan bertahap langkah {application_step}: terapkan konsep pada "
                 "contoh baru ini dan tunjukkan alasan untuk setiap langkahmu."
             ),
-            "evaluate": f"Langkah apa yang masih perlu kamu periksa dalam solusi {topic} ini?",
+            "evaluate": "Latihan workspace sudah selesai. Mulai posttest untuk evaluasi mandiri.",
         }
     else:
         prompts = {
             "engage": f"How would you currently handle one simple {topic} example, and where are you still unsure?",
             "explore": (
-                "Calculate the inner expression at x=1 and x=1.1. When x changes "
-                "by 0.1, by how much does that inner value change?"
+                f"Write the exact {topic} expression we are using. Then calculate one inner "
+                "value before and after a small input change; this shows what change reaches "
+                "the next operation."
             ),
-            "explain": "Which part of the idea is still unclear, and how would you explain that part now?",
+            "explain": (
+                f"For the {topic} expression just discussed, name the first and second "
+                "operations, then explain why their change factors combine."
+            ),
             "elaborate": (
                 f"Guided practice step {application_step}: apply the concept to this "
                 "new example and show the reason for each step."
             ),
-            "evaluate": f"Which step in this {topic} solution still needs checking?",
+            "evaluate": "The guided workspace is complete. Start the posttest for the independent evaluation.",
         }
     return prompts.get(_normalize_phase(phase), f"What would you try next with {topic}?")
 

@@ -184,7 +184,7 @@ async def test_workspace_runs_guided_elaborate_then_hands_to_posttest(
 
 
 @pytest.mark.asyncio
-async def test_first_engage_reply_is_generated_as_an_explore_turn(
+async def test_brief_first_engage_reply_stays_in_engage(
     db_session,
     monkeypatch,
 ):
@@ -222,8 +222,8 @@ async def test_first_engage_reply_is_generated_as_an_explore_turn(
     )
 
     assert result is not None
-    assert generated_phases == ["explore"]
-    assert result.workspace.current_phase == "explore"
+    assert generated_phases == ["engage"]
+    assert result.workspace.current_phase == "engage"
     assert result.tutor_response is not None
     assert result.tutor_response.text.startswith("Let u(x)=x²")
     assert result.tutor_response.next_phase_opening_prompt is None
