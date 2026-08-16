@@ -1238,6 +1238,27 @@ def test_phase_opening_fallback_does_not_repeat_original_target_mid_lesson():
     assert text.startswith("Try one Chain rule example")
 
 
+def test_engage_opening_fallback_uses_pretest_diagnosis_instead_of_generic_hook():
+    from app.modules.workspaces.tutor import fallback_phase_opening_prompt
+
+    text = fallback_phase_opening_prompt(
+        phase="engage",
+        topic="Chain rule",
+        learner_language="en",
+        learning_context={
+            "original_target": {"title": "Curve sketching using derivatives"},
+            "diagnosis": {
+                "reason": "Your pretest work omitted the inner derivative."
+            },
+        },
+    )
+
+    assert "Your pretest work omitted the inner derivative." in text
+    assert "Curve sketching using derivatives" in text
+    assert "Let's start with" not in text
+    assert "\\sin(x^2)" in text
+
+
 def test_current_phase_request_does_not_duplicate_an_existing_question():
     tutor_text = (
         "A small change passes through the inner function before the outer one. "

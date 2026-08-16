@@ -1435,9 +1435,14 @@ def fallback_phase_opening_prompt(
     """Return a phase-local opening only for legacy handoffs without an AI prompt."""
     normalized = _normalize_phase(phase)
     language_code = normalize_language_code(learner_language)
+    if normalized == "engage":
+        return _engage_opening_from_pretest(
+            topic=topic,
+            language_code=language_code,
+            learning_context=learning_context or {},
+        )
     if language_code == "id":
         prompts = {
-            "engage": f"Kita mulai dari {topic}. Apa yang sudah kamu perhatikan atau ingat tentang topik ini?",
             "explore": f"Coba satu contoh {topic}: pisahkan bagian-bagiannya dan ceritakan pola yang kamu temukan.",
             "explain": (
                 f"Dari pola yang baru kamu temukan, bagaimana kamu menjelaskan {topic} dengan kata-katamu sendiri?"
@@ -1451,7 +1456,6 @@ def fallback_phase_opening_prompt(
         }
     else:
         prompts = {
-            "engage": f"Let's start with {topic}. What do you already notice or remember about it?",
             "explore": f"Try one {topic} example: separate its parts and describe the pattern you find.",
             "explain": (
                 f"From the pattern you just found, how would you explain {topic} in your own words?"
@@ -1464,6 +1468,48 @@ def fallback_phase_opening_prompt(
             ),
         }
     return prompts.get(normalized, f"What do you already know about {topic}?")
+
+
+def _engage_opening_from_pretest(
+    *,
+    topic: str,
+    language_code: str,
+    learning_context: dict[str, Any],
+) -> str:
+    diagnosis = learning_context.get("diagnosis")
+    diagnosis = diagnosis if isinstance(diagnosis, dict) else {}
+    reason = str(diagnosis.get("reason") or "").strip()
+    original_target = learning_context.get("original_target")
+    original_target = original_target if isinstance(original_target, dict) else {}
+    target = str(original_target.get("title") or "").strip()
+    topic_key = topic.casefold()
+    is_chain_rule = "chain" in topic_key or "rantai" in topic_key
+
+    if language_code == "id":
+        diagnosis_line = reason or f"Hasil pretest menunjukkan ada langkah penting pada {topic} yang perlu kita cek."
+        bridge = (
+            f"Kita rapikan ini sebelum kembali ke {target}."
+            if target
+            else f"Kita rapikan bagian {topic} ini dulu."
+        )
+        question = (
+            "Pada $f(x)=\\sin(x^2)$, bagian mana yang berubah lebih dulu ketika $x$ berubah?"
+            if is_chain_rule
+            else f"Pada satu contoh {topic}, langkah mana yang menurutmu perlu diperiksa lebih dulu?"
+        )
+    else:
+        diagnosis_line = reason or f"Your pretest points to one important step in {topic} to check."
+        bridge = (
+            f"Let's repair it before returning to {target}."
+            if target
+            else f"Let's repair that part of {topic}."
+        )
+        question = (
+            "In $f(x)=\\sin(x^2)$, which expression changes first when $x$ changes?"
+            if is_chain_rule
+            else f"In one {topic} example, which step would you check first?"
+        )
+    return f"{diagnosis_line} {bridge} {question}"
 
 
 def _tutor_response_format() -> dict[str, Any]:
