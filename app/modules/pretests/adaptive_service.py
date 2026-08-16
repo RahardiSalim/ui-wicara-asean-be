@@ -235,6 +235,14 @@ class AdaptivePretestService:
             asset = session.get(ImageAsset, canvas_asset_id)
             if asset is None or asset.user_id != user.id:
                 raise LookupError("Canvas asset was not found.")
+        if (
+            question.difficulty_label.lower() == "hard"
+            and not typed_reasoning.strip()
+            and canvas_asset_id is None
+        ):
+            raise ValueError(
+                "Hard questions require typed reasoning or a canvas/photo evidence attachment before submitting."
+            )
 
         evaluation = self.evidence_evaluator.evaluate(
             session,
