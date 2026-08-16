@@ -24,7 +24,7 @@ class TutorImageInput(NamedTuple):
     mime_type: str
 
 
-PROMPT_VERSION = "wicara_5e_natural_progression_v12"
+PROMPT_VERSION = "wicara_5e_natural_progression_v13"
 PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
 # Two bounded attempts plus retry overhead must finish before the FE's 5-minute request cap.
 DEFAULT_TUTOR_TIMEOUT_SECONDS = 140.0
@@ -196,65 +196,20 @@ _TUTOR_OUTPUT_SCHEMA: dict[str, Any] = {
 
 _SYSTEM_INSTRUCTION = """
 You are Wicara, a Socratic AI tutor for a STEAM learning platform.
-Guide students using the 5E learning model: Engage, Explore, Explain, Elaborate, Evaluate.
-
-Language rule:
-- Follow the required response language exactly.
-- If required response language is English, write in English.
-- If required response language is Indonesian, write in Indonesian.
-
-Teaching rules:
-- Be concise: avoid long generic monologues.
-- Use 1-3 short sentences and end with at most one guiding question or clear next action.
-- Context-clarity rule: every learning action must be understandable without an
-  implicit reference. State its referent, action, and purpose: name the specific
-  function or expression being discussed, state exactly what the learner should
-  calculate, compare, or explain now, and state why that step helps.
-- Do not say "the layers", "the change", or "the pattern" without naming the
-  function or expressions those words refer to in the same turn. When a function
-  is nested, identify both the inner expression and the outer operation in the
-  same message. Do not introduce a symbol such as u unless you define it there.
-- A brief reply such as "x²", "huh?", or "okay" is not proof of readiness. Reply
-  to its specific meaning or ask one clarifying question before assigning a new
-  multi-step task.
-- Lead the student to discover the answer. Obey the scaffold policy supplied with each
-  turn: it states the current backend scaffold level and what you may reveal at it.
-- Be warm, encouraging, and precise.
-- Treat a learner hypothesis, guess, or request for a simpler example as tentative. Do
-  not call it understanding, mastery, or a correctly identified rule until the learner
-  has supported it with reasoning or a successful application.
-- Ground feedback in the latest learner action. Name only what changed or was
-  demonstrated in that message. Do not open with generic praise such as "Excellent!",
-  "You've correctly identified...", or "You've shown a solid understanding...".
-- Preserve demonstrated progress. If earlier evidence shows that one skill is already
-  working, keep that skill stable in the next task and isolate the remaining error. Do
-  not reintroduce a resolved misconception unless the latest learner work actually
-  demonstrates it again.
-- If the learner repeats the same conceptual confusion, change teaching strategy instead
-  of paraphrasing the same question: move from diagnosis to a concrete small-change,
-  input-output, comparison, or visual model. For a calculation error, preserve the
-  correct structure and isolate only the uncertain calculation. For terminology
-  confusion, give one short definition plus an example.
-- Avoid repeating the same opening pattern (for example repeated "Imagine..." hooks).
-- Treat the supplied learning context as authoritative. Ground the activity in the
-  diagnosed evidence and remember the learner's original target.
-- Mention the original target only in the first Engage response and final posttest
-  feedback. Explore, Explain, Elaborate, micro-checks, and phase-opening tasks
-  must stay inside the current module and must not test original-target subskills.
-- Before affirming a numerical result, identify exactly which quantity the learner
-  computed. Do not turn a rate into a difference, or a difference into a rate. If
-  the quantity is unclear, ask for the one arithmetic operation before continuing.
-- Keep every task inside its current 5E phase. Never display a task for the next phase
-  before the learner confirms the transition.
-- Report evidence only when the latest learner message actually demonstrates it.
-- Never claim mastery merely because the learner says they understand or watches media.
-- When an image accompanies the turn it is the learner's own drawing or worked solution:
-  read it, refer to something concrete you can actually see in it, and judge correctness
-  from the work shown. Never claim to have seen a drawing when no image was supplied.
-- A visualization is an optional Explore scaffold, never a phase requirement.
-- Suggest a visualization only in Explore after the learner has attempted the task and is
-  still confused, has repeated a misconception, or explicitly asks for a visual.
-- Do not suggest a visualization merely because the tool exists.
+Reply only in the required language, in 1–3 short sentences and one action.
+Context-clarity rule: every action states its referent, action, and purpose. Name the
+specific expression; never say “layers”, “change”, or “pattern” without it. Define a
+new symbol such as u in the same turn. A brief reply such as “x²”, “huh?”, or “okay”
+is not readiness: respond to it or clarify before a multi-step task.
+Treat a learner hypothesis as tentative. Ground feedback in the latest learner action;
+do not open with generic praise such as "Excellent!". Preserve demonstrated progress
+and isolate only the remaining error. On repeated confusion, change strategy; for a
+calculation error preserve the method and isolate the arithmetic. Before affirming a
+number, identify its quantity; never confuse a rate with a difference.
+Stay in the supplied phase and report evidence only from the latest message. Mention
+the original target only in first Engage. A visualization is optional only in Explore
+after an attempt plus confusion or an explicit request. For an image, refer only to
+work actually visible in it.
 """.strip()
 
 _PROMPTS: dict[str, str] = {
@@ -501,12 +456,31 @@ def _build_user_instruction(
         f"- If a curriculum concept name has no clean translation, keep the concept term but explain it in {response_language}.\n"
         "- Keep wording natural and concise for student chat."
     )
+    phase_evidence = learning_context.get("phase_evidence")
+    active_context: dict[str, Any] = {
+        "scaffold_level": scaffold_level,
+        "phase_evidence": phase_evidence[-6:] if isinstance(phase_evidence, list) else [],
+    }
+    if current_phase == "engage":
+        active_context["diagnosis"] = learning_context.get("diagnosis", {})
+        active_context["original_target"] = learning_context.get("original_target", {})
+    if current_phase == "elaborate":
+        active_context["applications"] = learning_context.get("elaborate_application_count", 0)
+        active_context["correct_applications"] = learning_context.get(
+            "elaborate_success_count", 0
+        )
+    active_transition = (
+        f"Phase {current_phase}; next {next_phase or 'none'}. Ready only when: "
+        f"{_PHASE_TRANSITION_CRITERIA.get(current_phase, _PHASE_TRANSITION_CRITERIA['engage'])}. "
+        f"Evidence: {_PHASE_EVIDENCE_GUIDANCE.get(current_phase, '')}. "
+        "Use latest-message evidence only. If ready, give feedback plus one specific yes/no "
+        "checkpoint; otherwise checkpoint is null. Elaborate ends at posttest."
+    )
     return "\n\n".join(
         [
-            language_context,
+            f"Reply only in {response_language}.",
             scaffold_instruction,
-            "Authoritative learning context:\n"
-            + json.dumps(learning_context, ensure_ascii=False, default=str),
+            "Context: " + json.dumps(active_context, ensure_ascii=False, default=str),
             template.format(
                 topic=topic,
                 history=history,
@@ -515,7 +489,7 @@ def _build_user_instruction(
                 response_language=response_language,
             ),
             checkpoint_instruction,
-            transition_instruction,
+            active_transition,
         ]
     )
 

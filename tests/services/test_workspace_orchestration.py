@@ -332,8 +332,7 @@ def test_explore_prompt_defines_phase_specific_evidence_rubric():
     assert "Use exploration_attempt" in prompt
     assert "Use pattern_identified" in prompt
     assert "Both tags may be returned on the same turn" in prompt
-    assert "Ground it in the learner's actual evidence" in prompt
-    assert "Bad: 'Have you understood the learning goal" in prompt
+    assert "Use latest-message evidence only" in prompt
     assert "Do not call an Explore activity transfer" in prompt
     assert "put the Explain opening in next_phase_opening_prompt" in prompt
     assert "choose a small input change" in prompt
@@ -371,7 +370,7 @@ def test_elaborate_prompt_preserves_demonstrated_method_and_isolates_new_error()
     assert "recompute only that step" in prompt
     assert "do not claim the earlier concept was forgotten" in prompt
     assert "do not add analysis or skills from the original target" in prompt
-    assert "Never mention or test the original target in a phase opening" in prompt
+    assert "Elaborate ends at posttest" in prompt
 
 
 def test_feedback_policy_forbids_generic_or_ungrounded_mastery_claims():
@@ -386,7 +385,7 @@ def test_feedback_policy_forbids_generic_or_ungrounded_mastery_claims():
     )
 
     assert "Ground feedback in the latest learner action" in _SYSTEM_INSTRUCTION
-    assert 'Do not open with generic praise such as "Excellent!"' in _SYSTEM_INSTRUCTION
+    assert 'do not open with generic praise such as "Excellent!"' in _SYSTEM_INSTRUCTION
     assert "tentative" in _SYSTEM_INSTRUCTION
 
 
@@ -409,8 +408,7 @@ def test_engage_prompt_uses_diagnosis_and_keeps_explore_task_hidden():
     assert "current prerequisite will later support the original target" in prompt
     assert "Mention the original target only on that first turn" in prompt
     assert "bridges the hook directly to a concrete example" in prompt
-    assert "text must contain feedback" in prompt
-    assert "must not ask another learning question" in prompt
+    assert "If ready, give feedback plus one specific yes/no checkpoint" in prompt
 
 
 def test_engage_readiness_requires_acceptance_and_prior_knowledge():
@@ -1197,7 +1195,7 @@ def test_system_instruction_requires_context_clear_tutor_actions():
 
     assert "Context-clarity rule" in _SYSTEM_INSTRUCTION
     assert "referent, action, and purpose" in _SYSTEM_INSTRUCTION
-    assert "Do not introduce a symbol such as u" in _SYSTEM_INSTRUCTION
+    assert "new symbol such as u" in _SYSTEM_INSTRUCTION
 
 
 def test_visual_suggestion_is_only_exposed_for_justified_explore_scaffold():
