@@ -40,9 +40,8 @@ async def test_workspace_runs_guided_elaborate_then_hands_to_posttest(
     scenario = _create_workspace_scenario(db_session)
     responses = iter(
         [
-            _tutor(tags=["challenge_accepted"]),
             _tutor(
-                tags=["prior_knowledge_shared"],
+                tags=[],
                 next_phase_opening_prompt=(
                     "Try differentiating (2x + 1)^3 and tell me what changes at each layer."
                 ),
@@ -54,7 +53,9 @@ async def test_workspace_runs_guided_elaborate_then_hands_to_posttest(
                     "Using the pattern you found, explain the chain rule in your own words."
                 ),
             ),
-            _tutor(tags=["learner_explanation", "micro_check_correct"]),
+            _tutor(
+                tags=["learner_explanation"],
+            ),
             _tutor(
                 tags=["micro_check_correct"],
                 next_phase_opening_prompt=(
@@ -84,11 +85,10 @@ async def test_workspace_runs_guided_elaborate_then_hands_to_posttest(
         "I know a composite function puts one function inside another.",
         "I compared the inner and outer changes.",
         "The inner change also affects the result.",
-            "The outer derivative must be multiplied by the inner derivative.",
-            "The missing factor is the derivative of the inner function.",
-            "For guided application one I multiply both derivative layers.",
-            "For guided application two I still multiply the outer and inner rates.",
-            "For guided application three I can do the full chain rule without help.",
+        "The outer derivative must be multiplied by the inner derivative.",
+        "For guided application one I multiply both derivative layers.",
+        "For guided application two I still multiply the outer and inner rates.",
+        "For guided application three I can do the full chain rule without help.",
     ):
         result = await append_workspace_event(
             db_session,
@@ -114,7 +114,6 @@ async def test_workspace_runs_guided_elaborate_then_hands_to_posttest(
             phases.append(result.workspace.current_phase)
 
     assert phases == [
-        "engage",
         "explore",
         "explore",
         "explain",
@@ -142,7 +141,6 @@ async def test_workspace_runs_guided_elaborate_then_hands_to_posttest(
     ]
     assert [event.metadata["phase"] for event in learner_events] == [
         "engage",
-        "engage",
         "explore",
         "explore",
         "explain",
@@ -157,14 +155,21 @@ async def test_workspace_runs_guided_elaborate_then_hands_to_posttest(
         if event.metadata.get("source") == "workspace_phase_opening"
     ]
     assert [event.metadata["phase"] for event in phase_openings] == [
-        "explore",
         "explain",
         "elaborate",
     ]
     assert [event.text_payload for event in phase_openings] == [
-        "Try differentiating (2x + 1)^3 and tell me what changes at each layer.",
         "Using the pattern you found, explain the chain rule in your own words.",
         "Guided application 1: differentiate (3x - 2)^5 and justify each factor.",
+    ]
+    auto_openings = [
+        event
+        for event in final_workspace.events
+        if event.metadata.get("source") == "workspace_auto_phase_opening"
+    ]
+    assert [event.metadata["phase"] for event in auto_openings] == ["explore"]
+    assert [event.text_payload for event in auto_openings] == [
+        "Try differentiating (2x + 1)^3 and tell me what changes at each layer."
     ]
     assert [record["tags"] for record in final_workspace.phase_evidence["elaborate"]] == [
         ["transfer_attempt", "transfer_correct"],

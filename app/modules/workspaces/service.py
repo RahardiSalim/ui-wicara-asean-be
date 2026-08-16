@@ -863,11 +863,64 @@ async def append_workspace_event(
             ]
         metadata_json["phase_history"] = history
 
-    # Phase advance is learner-confirmed: the backend only flags readiness here and
-    # waits for POST /workspaces/{id}/advance-phase. Advancing inside this request
-    # would strand the tutor reply (generated for `current_phase`) in the next phase.
     phase_ready = _phase_is_ready(metadata_json, phase=current_phase)
-    if current_phase != "evaluate":
+    auto_advance_engage = (
+        current_phase == "engage"
+        and normalized_event_type == "text"
+        and bool(text_payload.strip())
+        and not checkpoint_declined
+        and _current_phase_turns(metadata_json) == 1
+    )
+    if auto_advance_engage:
+        next_phase = "explore"
+        opening_prompt = (
+            tutor_response.next_phase_opening_prompt
+            if tutor_response is not None
+            else None
+        ) or fallback_phase_opening_prompt(
+            phase=next_phase,
+            topic=workspace.current_topic or "this module",
+            learner_language=_preferred_language(user),
+            learning_context=metadata_json.get("learning_context"),
+        )
+        metadata_json = _advance_metadata_to_phase(
+            metadata_json,
+            next_phase=next_phase,
+        )
+        if tutor_response is not None:
+            tutor_response = tutor_response.model_copy(
+                update={
+                    "text": opening_prompt,
+                    "intent": "phase_opening",
+                    "next_actions": [],
+                    "next_phase_ready": False,
+                    "phase_reasoning": "automatic_transition_from_engage",
+                    "phase_checkpoint_question": None,
+                    "next_phase_opening_prompt": None,
+                    "evidence_tags": [],
+                    "evidence_request": None,
+                    "explanation_card": None,
+                    "tool_suggestion": None,
+                }
+            )
+        if tutor_event is not None:
+            tutor_event.text_payload = opening_prompt
+            tutor_event.metadata_json = {
+                **dict(tutor_event.metadata_json or {}),
+                "source": "workspace_auto_phase_opening",
+                "intent": "phase_opening",
+                "next_actions": [],
+                "next_phase_ready": False,
+                "phase_reasoning": "automatic_transition_from_engage",
+                "phase_checkpoint_question": None,
+                "next_phase_opening_prompt": None,
+                "evidence_tags": [],
+                "phase": next_phase,
+            }
+        phase_ready = False
+    elif current_phase != "evaluate":
+        # Every phase after Engage remains learner-confirmed through its
+        # contextual checkpoint.
         min_turns = int(_phase_min_turns(metadata_json).get(current_phase, 1))
         current_turns = _current_phase_turns(metadata_json)
         metadata_json["phase_transition_pending"] = phase_ready and current_turns >= min_turns
