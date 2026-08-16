@@ -9009,3 +9009,329 @@ class ChaosPendulumTemplate(WicaraTemplateScene):
 
         self.wait(self.hold_for(spec.get("summary")))
         self.clean_summary(spec, active_card=card)
+
+
+class FolkTaleTemplate(WicaraTemplateScene):
+    """A tale, rendered scene by scene from a spec.
+
+    Every other template in the pack explains something. This one narrates: the
+    spec declares a cast and a list of scenes, each with a setting, who is in
+    it, where they stand, what pose they hold and what is said. The template
+    stages them and joins them with wipes.
+
+    That makes the story data. Swap the scene list and the same code renders a
+    different tale -- which is the point, because there are hundreds of these
+    and no one is going to hand-animate them.
+
+    Narration is burned into the frame rather than left to audio, so the video
+    still works muted, which is how most of it will be watched.
+    """
+
+    STAGE_LEFT = -6.9
+    STAGE_RIGHT = 6.9
+    STAGE_TOP = 1.75
+    STAGE_BOTTOM = -1.55
+
+    SPEC = {
+        "eyebrow": "Dongeng Nusantara",
+        "title": "Malin Kundang",
+        "subtitle": "Cerita rakyat dari Sumatera Barat.",
+        "audience_level": "sd",
+        "characters": {
+            # The cast has to hold the frame against a full landscape; at 1.30
+            # they read as scenery rather than as the people the tale is about.
+            "malin": {"color": "#B9C0FF", "height": 1.85},
+            "ibu": {"color": "#F5B65C", "height": 1.72},
+        },
+        "scenes": [
+            {
+                "setting": "village",
+                "narration": "Di sebuah desa nelayan, Malin tinggal berdua dengan ibunya.",
+                "cast": [
+                    {"who": "ibu", "at": -1.5, "pose": "stand"},
+                    {"who": "malin", "at": 0.4, "pose": "stand"},
+                ],
+            },
+            {
+                "setting": "shore",
+                "narration": "Setelah dewasa, Malin pamit merantau ke seberang lautan.",
+                "cast": [
+                    {"who": "ibu", "at": -3.2, "pose": "stand"},
+                    {"who": "malin", "at": -1.4, "pose": "point"},
+                ],
+                "say": {"who": "malin", "text": "Aku akan kembali kaya, Bu."},
+            },
+            {
+                "setting": "sea",
+                "narration": "Bertahun-tahun ia berlayar, sampai menjadi saudagar yang kaya raya.",
+                "cast": [],
+            },
+            {
+                "setting": "shore",
+                "narration": "Suatu hari kapalnya berlabuh kembali. Sang ibu berlari menyambutnya.",
+                "cast": [
+                    {"who": "ibu", "at": -2.6, "pose": "cheer"},
+                    {"who": "malin", "at": 1.2, "pose": "stand"},
+                ],
+            },
+            {
+                "setting": "shore",
+                "narration": "Namun Malin malu mengakui ibunya yang miskin.",
+                "cast": [
+                    {"who": "ibu", "at": -2.6, "pose": "stand"},
+                    {"who": "malin", "at": 1.2, "pose": "point"},
+                ],
+                "say": {"who": "malin", "text": "Aku tidak mengenalmu!"},
+            },
+            {
+                "setting": "storm",
+                "narration": "Hati sang ibu hancur. Badai pun datang menghantam kapal itu.",
+                "cast": [
+                    {"who": "ibu", "at": -3.0, "pose": "stand"},
+                ],
+            },
+            {
+                "setting": "rock",
+                "narration": "Malin berubah menjadi batu, menjadi peringatan bagi siapa pun yang melupakan ibunya.",
+                "cast": [],
+            },
+        ],
+        "summary": "Sehebat apa pun kita menjadi, jangan pernah melupakan ibu.",
+    }
+
+    # -- staging -------------------------------------------------------
+
+    def _ground_y(self):
+        return self.stage_bottom + 0.25
+
+    def _setting(self, name):
+        """Compose a place out of the object library."""
+        g = self._ground_y()
+        span = self.stage_right - self.stage_left
+        parts = VGroup()
+
+        def stand(mob, x, width):
+            mob.scale_to_fit_width(width)
+            mob.shift(
+                RIGHT * (x - mob.get_center()[0]) + UP * (g - mob.get_bottom()[1])
+            )
+            return mob
+
+        ground = Line(
+            np.array([self.stage_left, g, 0.0]),
+            np.array([self.stage_right, g, 0.0]),
+        )
+        ground.set_stroke(color=theme.RULE, width=2.6)
+
+        if name == "village":
+            parts.add(
+                stand(objects.house(), 3.6, 1.7),
+                stand(objects.tree(), 1.9, 1.1),
+                stand(objects.mountain(), -4.6, 2.6),
+                objects.sun().scale_to_fit_width(0.85).move_to(np.array([5.4, 1.15, 0.0])),
+            )
+        elif name == "shore":
+            water = objects.sea(width=span * 0.9)
+            water.move_to(np.array([1.2, g + 0.05, 0.0]))
+            parts.add(
+                water,
+                stand(objects.boat(), 4.4, 1.5),
+                objects.sun().scale_to_fit_width(0.80).move_to(np.array([5.6, 1.20, 0.0])),
+                stand(objects.mountain(), -5.4, 2.0),
+            )
+        elif name == "sea":
+            water = objects.sea(width=span * 1.05, rows=5)
+            water.move_to(np.array([0.0, g + 0.35, 0.0]))
+            b = objects.boat().scale_to_fit_width(1.9)
+            b.move_to(np.array([0.4, g + 0.95, 0.0]))
+            birds = VGroup(
+                *[
+                    objects.bird().scale(0.7 + 0.2 * i).move_to(
+                        np.array([-3.4 + i * 1.05, 1.25 - 0.16 * (i % 2), 0.0])
+                    )
+                    for i in range(4)
+                ]
+            )
+            parts.add(water, b, birds,
+                      objects.sun().scale_to_fit_width(0.75).move_to(np.array([-5.2, 1.30, 0.0])))
+        elif name == "storm":
+            water = objects.sea(width=span * 1.05, rows=5, color=theme.chip(4))
+            water.move_to(np.array([0.6, g + 0.30, 0.0]))
+            clouds = VGroup(
+                *[
+                    objects.cloud().scale_to_fit_width(1.7 + 0.4 * i).move_to(
+                        np.array([-3.0 + i * 2.6, 1.25, 0.0])
+                    )
+                    for i in range(3)
+                ]
+            )
+            bolt = Polygon(
+                UP * 0.55, DOWN * 0.02 + LEFT * 0.16, DOWN * 0.02 + RIGHT * 0.04,
+                DOWN * 0.62, DOWN * 0.02 + RIGHT * 0.22, UP * 0.05 + RIGHT * 0.02,
+            )
+            bolt.set_fill(color=theme.GOLD, opacity=0.9).set_stroke(width=0)
+            bolt.move_to(np.array([2.2, 0.35, 0.0]))
+            b = objects.boat().scale_to_fit_width(1.5).rotate(-18 * DEGREES)
+            b.move_to(np.array([2.6, g + 0.85, 0.0]))
+            parts.add(clouds, water, b, bolt)
+        elif name == "rock":
+            water = objects.sea(width=span * 0.9)
+            water.move_to(np.array([2.0, g + 0.05, 0.0]))
+            parts.add(
+                water,
+                stand(objects.rock(), -0.6, 2.4),
+                objects.moon().move_to(np.array([4.8, 1.25, 0.0])),
+                objects.stars(count=30, spread=(11.0, 2.0)).move_to(
+                    np.array([-0.5, 1.05, 0.0])
+                ),
+            )
+        return VGroup(ground, parts)
+
+    def _actor(self, key, x, pose):
+        conf = (self.SPEC.get("characters") or {}).get(key, {})
+        fig = objects.figure(
+            pose=pose,
+            color=conf.get("color", theme.BLUE_ON_INK),
+            height=float(conf.get("height", 1.28)),
+        )
+        fig.shift(
+            RIGHT * (x - fig.get_center()[0])
+            + UP * (self._ground_y() - fig.get_bottom()[1])
+        )
+        return fig
+
+    def _caption(self, text):
+        """The narration band. Burned in, because most viewers watch muted."""
+        # Wrapping at 78 characters and then scaling the block down to a 9:16
+        # frame produced text about four pixels tall. Wrap to the frame instead.
+        body = Paragraph(
+            *wrap_text(str(text), 34 if self._portrait else 78).split("\n"),
+            font_size=theme.FS_LEDE,
+            line_spacing=0.9,
+            alignment="center",
+            color=theme.ON_INK,
+            **theme.font_kwargs("medium"),
+        )
+        if body.width > config.frame_width - 1.4:
+            body.scale_to_fit_width(config.frame_width - 1.4)
+        plate = theme.panel(
+            width=config.frame_width - 0.7,
+            height=body.height + 0.62,
+        )
+        body.move_to(plate.get_center())
+        band = VGroup(plate, body)
+        band.to_edge(DOWN, buff=0.28)
+        band.set_z_index(6)
+        return band
+
+    def _bubble(self, actor, text):
+        words = Paragraph(
+            *wrap_text(str(text), 26).split("\n"),
+            font_size=theme.FS_LABEL,
+            line_spacing=0.9,
+            alignment="center",
+            color=theme.INK,
+            **theme.font_kwargs("semibold"),
+        )
+        shell = RoundedRectangle(
+            width=words.width + 0.56,
+            height=words.height + 0.44,
+            corner_radius=0.20,
+        )
+        shell.set_fill(color=theme.ON_INK, opacity=0.94).set_stroke(width=0)
+        words.move_to(shell.get_center())
+        head = actor.get_top()
+        tail = Polygon(
+            ORIGIN, RIGHT * 0.22 + UP * 0.20, LEFT * 0.05 + UP * 0.22,
+        )
+        tail.set_fill(color=theme.ON_INK, opacity=0.94).set_stroke(width=0)
+        bubble = VGroup(shell, words)
+        bubble.next_to(head, UP, buff=0.34)
+        # Keep it inside the frame when the speaker stands near an edge.
+        limit = config.frame_width / 2 - 0.4
+        if bubble.get_right()[0] > limit:
+            bubble.shift(LEFT * (bubble.get_right()[0] - limit))
+        if bubble.get_left()[0] < -limit:
+            bubble.shift(RIGHT * (-limit - bubble.get_left()[0]))
+        tail.move_to(head + UP * 0.20)
+        group = VGroup(tail, bubble)
+        group.set_z_index(5)
+        return group
+
+    # -- construct -----------------------------------------------------
+
+    def construct(self):
+        spec = self.SPEC
+        title_block = self.make_title_block(spec)
+        title_block.set_z_index(6)
+        self.play(
+            FadeIn(title_block, shift=DOWN * 0.30),
+            run_time=motion.spring_seconds("gentle"),
+            rate_func=motion.spring_rate("gentle"),
+        )
+
+        scenes = spec.get("scenes", [])
+        held = None
+        for index, scene in enumerate(scenes):
+            place = self._setting(scene.get("setting", "village"))
+            actors = VGroup(
+                *[
+                    self._actor(
+                        c.get("who", ""), float(c.get("at", 0.0)),
+                        c.get("pose", "stand"),
+                    )
+                    for c in scene.get("cast", [])
+                ]
+            )
+            caption = self._caption(scene.get("narration", ""))
+            frame_group = VGroup(place, actors, caption)
+
+            if held is None:
+                self.play(
+                    FadeIn(place, shift=UP * 0.12),
+                    run_time=self.beat(0.8),
+                )
+                self.play(
+                    LaggedStart(
+                        *[motion.pop_in(a) for a in actors], lag_ratio=0.24
+                    ) if len(actors) else Wait(0.01),
+                    FadeIn(caption, shift=UP * 0.20),
+                    run_time=self.beat(0.9),
+                )
+            else:
+                # The wipe covers the cut, so a scene never has to dismantle
+                # itself on camera.
+                previous = held
+
+                def swap(prev=previous, nxt=frame_group):
+                    self.remove(prev, *prev.submobjects)
+                    for m in prev.submobjects:
+                        self.remove(*m.submobjects)
+                    self.add(nxt)
+
+                motion.wipe(
+                    self, swap, direction=RIGHT,
+                    color=theme.VIOLET if index % 2 else theme.chip(0),
+                    run_time=0.46,
+                )
+
+            said = scene.get("say")
+            if said and len(actors):
+                speaker_index = next(
+                    (
+                        i
+                        for i, c in enumerate(scene.get("cast", []))
+                        if c.get("who") == said.get("who")
+                    ),
+                    0,
+                )
+                bubble = self._bubble(actors[speaker_index], said.get("text", ""))
+                self.play(motion.pop_in(bubble, "snappy"))
+                frame_group.add(bubble)
+
+            self.wait(self.hold_for(scene.get("narration"), (said or {}).get("text")))
+            held = frame_group
+
+        if held is not None:
+            self.play(FadeOut(held, shift=DOWN * 0.2), run_time=self.beat(0.5))
+        self.clean_summary(spec, active_card=None)

@@ -1,0 +1,112 @@
+{
+  "eyebrow": "Dongeng Nusantara",
+  "title": "Malin Kundang",
+  "subtitle": "Cerita rakyat dari Sumatera Barat.",
+  "audience_level": "sd",
+  "characters": {
+    "malin": {
+      "color": "#B9C0FF",
+      "height": 1.85
+    },
+    "ibu": {
+      "color": "#F5B65C",
+      "height": 1.72
+    }
+  },
+  "scenes": [
+    {
+      "setting": "village",
+      "narration": "Di sebuah desa nelayan, Malin tinggal berdua dengan ibunya.",
+      "cast": [
+        {
+          "who": "ibu",
+          "at": -1.5,
+          "pose": "stand"
+        },
+        {
+          "who": "malin",
+          "at": 0.4,
+          "pose": "stand"
+        }
+      ]
+    },
+    {
+      "setting": "shore",
+      "narration": "Setelah dewasa, Malin pamit merantau ke seberang lautan.",
+      "cast": [
+        {
+          "who": "ibu",
+          "at": -3.2,
+          "pose": "stand"
+        },
+        {
+          "who": "malin",
+          "at": -1.4,
+          "pose": "point"
+        }
+      ],
+      "say": {
+        "who": "malin",
+        "text": "Aku akan kembali kaya, Bu."
+      }
+    },
+    {
+      "setting": "sea",
+      "narration": "Bertahun-tahun ia berlayar, sampai menjadi saudagar yang kaya raya.",
+      "cast": []
+    },
+    {
+      "setting": "shore",
+      "narration": "Suatu hari kapalnya berlabuh kembali. Sang ibu berlari menyambutnya.",
+      "cast": [
+        {
+          "who": "ibu",
+          "at": -2.6,
+          "pose": "cheer"
+        },
+        {
+          "who": "malin",
+          "at": 1.2,
+          "pose": "stand"
+        }
+      ]
+    },
+    {
+      "setting": "shore",
+      "narration": "Namun Malin malu mengakui ibunya yang miskin.",
+      "cast": [
+        {
+          "who": "ibu",
+          "at": -2.6,
+          "pose": "stand"
+        },
+        {
+          "who": "malin",
+          "at": 1.2,
+          "pose": "point"
+        }
+      ],
+      "say": {
+        "who": "malin",
+        "text": "Aku tidak mengenalmu!"
+      }
+    },
+    {
+      "setting": "storm",
+      "narration": "Hati sang ibu hancur. Badai pun datang menghantam kapal itu.",
+      "cast": [
+        {
+          "who": "ibu",
+          "at": -3.0,
+          "pose": "stand"
+        }
+      ]
+    },
+    {
+      "setting": "rock",
+      "narration": "Malin berubah menjadi batu, menjadi peringatan bagi siapa pun yang melupakan ibunya.",
+      "cast": []
+    }
+  ],
+  "summary": "Sehebat apa pun kita menjadi, jangan pernah melupakan ibu."
+}

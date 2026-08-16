@@ -751,3 +751,132 @@ def hand_of(fig):
 
 OBJECTS["figure"] = figure
 __all__.extend(["figure", "POSES", "hand_of"])
+
+
+# ----------------------------------------------------------------------
+# Story properties
+# ----------------------------------------------------------------------
+#
+# A lesson needs a diagram; a tale needs a place. These are the pieces a
+# narrative scene is built from -- sea, boat, moon, stars, rock -- drawn to the
+# same conventions as everything above so they compose with the objects and the
+# figure without any special handling.
+
+
+def sea(width=8.0, color=None, rows=4):
+    """Water as stacked wave rules, darkest at the horizon."""
+    color = color or theme.BLUE_ON_INK
+    band = VGroup()
+    for i in range(rows):
+        line = VMobject()
+        span = width * (0.72 + 0.09 * i)
+        pts = []
+        n = 26
+        for j in range(n + 1):
+            x = -span / 2 + span * j / n
+            y = -i * 0.30 + 0.055 * np.sin(j * 1.35 + i * 0.8)
+            pts.append(np.array([x, y, 0.0]))
+        line.set_points_smoothly(pts)
+        line.set_stroke(color=color, width=2.2, opacity=0.28 + 0.13 * i)
+        band.add(line)
+    return band
+
+
+def boat(color=None):
+    """Hull, mast, sail -- the smallest thing that reads as a voyage."""
+    color = color or theme.chip(1)
+    hull = _solid(
+        Polygon(
+            LEFT * 1.05 + UP * 0.22, RIGHT * 1.05 + UP * 0.22,
+            RIGHT * 0.72 + DOWN * 0.28, LEFT * 0.72 + DOWN * 0.28,
+        ),
+        color,
+        opacity=0.34,
+    )
+    mast = Line(UP * 0.22, UP * 1.42).set_stroke(color=theme.ON_INK_2, width=3.0)
+    sail = _solid(
+        Polygon(UP * 1.36, UP * 0.30, RIGHT * 0.82 + UP * 0.52),
+        theme.ON_INK,
+        opacity=0.20,
+    )
+    pennant = _solid(
+        Polygon(UP * 1.42, UP * 1.18, RIGHT * 0.34 + UP * 1.30),
+        theme.GOLD,
+        opacity=0.75,
+        stroke_width=0,
+    )
+    return normalise(VGroup(hull, mast, sail, pennant))
+
+
+def moon(phase=0.62, color=None):
+    """A crescent, cut by a second disc rather than drawn as an arc."""
+    color = color or theme.GOLD
+    disc = Circle(radius=0.58)
+    disc.set_fill(color=color, opacity=0.80).set_stroke(color=color, width=1.4)
+    bite = Circle(radius=0.58)
+    bite.shift(RIGHT * 0.58 * phase)
+    bite.set_fill(color=theme.INK, opacity=1.0).set_stroke(width=0)
+    halo = Circle(radius=0.86)
+    halo.set_fill(color=color, opacity=0.10).set_stroke(width=0)
+    return VGroup(halo, disc, bite)
+
+
+def stars(count=26, spread=(6.4, 2.2), seed=7):
+    """A scatter of points. Deterministic: the same tale must render alike."""
+    field = VGroup()
+    # A small LCG rather than random, so a re-render is byte-identical.
+    state = int(seed)
+    def nxt():
+        nonlocal state
+        state = (1103515245 * state + 12345) % 2147483648
+        return state / 2147483648.0
+
+    for i in range(count):
+        x = (nxt() - 0.5) * spread[0]
+        y = (nxt() - 0.5) * spread[1]
+        r = 0.018 + nxt() * 0.030
+        dot = Dot(radius=r, color=theme.ON_INK)
+        dot.set_opacity(0.35 + nxt() * 0.55)
+        dot.move_to(np.array([x, y, 0.0]))
+        field.add(dot)
+    return field
+
+
+def bird(color=None):
+    """Two strokes. Anything more and it stops reading as distance."""
+    color = color or theme.ON_INK_3
+    wing = VMobject()
+    wing.set_points_smoothly([
+        LEFT * 0.26, LEFT * 0.10 + UP * 0.10, ORIGIN,
+        RIGHT * 0.10 + UP * 0.10, RIGHT * 0.26,
+    ])
+    wing.set_stroke(color=color, width=2.2, opacity=0.85)
+    return VGroup(wing)
+
+
+def rock(color=None):
+    """A boulder. Also what a certain ungrateful son ends up as."""
+    color = color or theme.ON_INK_3
+    body = _solid(
+        Polygon(
+            LEFT * 0.95 + DOWN * 0.55, LEFT * 0.70 + UP * 0.30,
+            LEFT * 0.10 + UP * 0.62, RIGHT * 0.52 + UP * 0.40,
+            RIGHT * 0.92 + DOWN * 0.20, RIGHT * 0.75 + DOWN * 0.55,
+        ),
+        color,
+        opacity=0.30,
+    )
+    crack = VMobject()
+    crack.set_points_smoothly([
+        LEFT * 0.30 + UP * 0.50, LEFT * 0.12 + UP * 0.10,
+        RIGHT * 0.05 + DOWN * 0.12, LEFT * 0.02 + DOWN * 0.48,
+    ])
+    crack.set_stroke(color=theme.INK, width=2.0, opacity=0.7)
+    return normalise(VGroup(body, crack))
+
+
+OBJECTS.update({
+    "sea": sea, "boat": boat, "moon": moon, "stars": stars,
+    "bird": bird, "rock": rock,
+})
+__all__.extend(["sea", "boat", "moon", "stars", "bird", "rock"])
