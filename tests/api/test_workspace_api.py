@@ -71,7 +71,7 @@ def test_workspace_events_are_persisted_in_module_timeline(client, monkeypatch):
         "client_event_id": "local-1",
         "phase": "engage",
     }
-    assert text_payload["tutor_response"]["intent"] == "phase_opening"
+    assert text_payload["tutor_response"]["intent"] == "probe_understanding"
     assert text_payload["tutor_response"]["text"]
     assert text_payload["workspace"]["current_phase"] == "explore"
     assert text_payload["workspace"]["phase_transition_pending"] is False

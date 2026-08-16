@@ -789,15 +789,6 @@ async def generate_tutor_response(
         )
     if next_phase_ready or (phase == "evaluate" and completes_evaluate):
         parsed["evidence_request"] = None
-    else:
-        tutor_text = _ensure_current_phase_request_visible(
-            tutor_text=tutor_text,
-            evidence_request=parsed["evidence_request"],
-            phase=phase,
-            topic=topic,
-            language_code=language_code,
-            learning_context=learning_context,
-        )
     audit["structured_parse_ok"] = parsed["parse_ok"]
     if not parsed["parse_ok"]:
         audit["structured_parse_fallback"] = True
@@ -1478,7 +1469,9 @@ def _engage_opening_from_pretest(
 ) -> str:
     diagnosis = learning_context.get("diagnosis")
     diagnosis = diagnosis if isinstance(diagnosis, dict) else {}
-    reason = str(diagnosis.get("reason") or "").strip()
+    reason = _learner_facing_diagnosis_reason(
+        str(diagnosis.get("reason") or "").strip()
+    )
     original_target = learning_context.get("original_target")
     original_target = original_target if isinstance(original_target, dict) else {}
     target = str(original_target.get("title") or "").strip()
@@ -1512,6 +1505,21 @@ def _engage_opening_from_pretest(
     return f"{diagnosis_line} {bridge} {question}"
 
 
+def _learner_facing_diagnosis_reason(reason: str) -> str:
+    """Keep pretest processing telemetry out of the learner-facing opening."""
+    telemetry_markers = (
+        "written explanations were analyzed",
+        "work images were vision-evaluated",
+        "canvas submissions were stored",
+        "diagnostic insight",
+        "penjelasan tertulis dianalisis",
+        "foto/coretan dianalisis",
+    )
+    if any(marker in reason.casefold() for marker in telemetry_markers):
+        return ""
+    return reason
+
+
 def _tutor_response_format() -> dict[str, Any]:
     return {
         "type": "json_schema",
@@ -1521,80 +1529,6 @@ def _tutor_response_format() -> dict[str, Any]:
             "schema": _TUTOR_OUTPUT_SCHEMA,
         },
     }
-
-
-def _ensure_current_phase_request_visible(
-    *,
-    tutor_text: str,
-    evidence_request: dict[str, Any] | None,
-    phase: str,
-    topic: str,
-    language_code: str,
-    learning_context: dict[str, Any],
-) -> str:
-    request = evidence_request if isinstance(evidence_request, dict) else {}
-    prompt = str(request.get("prompt") or "").strip()
-    if "?" in tutor_text or _contains_visible_action(tutor_text):
-        return tutor_text
-    normalized_phase = _normalize_phase(phase)
-    if normalized_phase == "explore" and re.search(
-        r"\b(?:small (?:step|change)|input step|h\s*=|delta x|Δx)\b",
-        tutor_text,
-        flags=re.IGNORECASE,
-    ):
-        fallback = (
-            "Dengan langkah input yang baru disebut, hitung nilai bagian dalam sebelum "
-            "dan sesudah perubahan. Berapa besar perubahannya?"
-            if language_code == "id"
-            else "Using the input step just stated, calculate the inner-function value "
-            "before and after the change. By how much does it change?"
-        )
-    elif normalized_phase == "explore" and re.search(
-        r"\bouter (?:function|layer)\b",
-        tutor_text,
-        flags=re.IGNORECASE,
-    ):
-        fallback = (
-            "Gunakan dua nilai bagian dalam yang baru kamu temukan untuk menghitung "
-            "nilai fungsi luarnya. Berapa perubahan pada bagian luar?"
-            if language_code == "id"
-            else "Use the two inner values you just found to calculate the corresponding "
-            "outer-function values. What change do you get in the outer function?"
-        )
-    elif normalized_phase == "explore" and re.search(
-        r"\b(?:scaling factor|scale factor|twice as|faktor skala|dua kali|pola)\b",
-        tutor_text,
-        flags=re.IGNORECASE,
-    ):
-        fallback = (
-            "Sekarang terapkan faktor skala yang kamu temukan pada turunan di "
-            "contoh awalmu. Apa turunan lengkap yang kamu peroleh?"
-            if language_code == "id"
-            else "Now reapply that observed scale factor to the derivative in your "
-            "original example. What complete derivative do you get?"
-        )
-    elif prompt and prompt.casefold() not in tutor_text.casefold():
-        return f"{tutor_text.rstrip()}\n\n{prompt}".strip()
-    elif prompt:
-        return tutor_text
-    else:
-        fallback = _fallback_current_phase_request(
-            phase=phase,
-            topic=topic,
-            language_code=language_code,
-            learning_context=learning_context,
-        )
-    return f"{tutor_text.rstrip()}\n\n{fallback}".strip()
-
-
-def _contains_visible_action(text: str) -> bool:
-    return bool(
-        re.search(
-            r"(?:^|[.!]\s+)(?:now\s+)?(?:calculate|compute|try|apply|explain|write|compare|state|identify|differentiate|solve|hitung|coba|terapkan|jelaskan|tulis|bandingkan|sebutkan|tentukan)\b",
-            str(text or ""),
-            flags=re.IGNORECASE,
-        )
-    )
 
 
 def _limit_phase_evidence_request(

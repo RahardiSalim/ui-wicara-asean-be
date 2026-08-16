@@ -708,6 +708,14 @@ async def append_workspace_event(
         phase_metadata["phase_transition_pending"] = False
         phase_metadata["phase_readiness_recheck_required"] = current_phase
     workspace.metadata_json = phase_metadata
+    first_engage_reply = (
+        current_phase == "engage"
+        and normalized_event_type == "text"
+        and bool(text_payload.strip())
+        and not checkpoint_declined
+        and _current_phase_turns(phase_metadata) == 0
+    )
+    tutor_generation_phase = "explore" if first_engage_reply else current_phase
 
     # Call AI before saving so audit info goes into event metadata.
     tutor_response, ai_audit = await generate_tutor_response(
@@ -715,14 +723,14 @@ async def append_workspace_event(
         event_type=normalized_event_type,
         text_payload=text_payload,
         events=list(workspace.events),
-        current_phase=current_phase,
+        current_phase=tutor_generation_phase,
         learner_language=_preferred_language(user),
         image_input=tutor_image,
         learner_event_metadata=learner_metadata,
     )
     tutor_response = _sanitize_tutor_response_for_phase(
         phase_metadata,
-        phase=current_phase,
+        phase=tutor_generation_phase,
         event_type=normalized_event_type,
         text_payload=text_payload,
         tutor_response=tutor_response,
@@ -864,25 +872,9 @@ async def append_workspace_event(
         metadata_json["phase_history"] = history
 
     phase_ready = _phase_is_ready(metadata_json, phase=current_phase)
-    auto_advance_engage = (
-        current_phase == "engage"
-        and normalized_event_type == "text"
-        and bool(text_payload.strip())
-        and not checkpoint_declined
-        and _current_phase_turns(metadata_json) == 1
-    )
+    auto_advance_engage = first_engage_reply and tutor_response is not None
     if auto_advance_engage:
         next_phase = "explore"
-        opening_prompt = (
-            tutor_response.next_phase_opening_prompt
-            if tutor_response is not None
-            else None
-        ) or fallback_phase_opening_prompt(
-            phase=next_phase,
-            topic=workspace.current_topic or "this module",
-            learner_language=_preferred_language(user),
-            learning_context=metadata_json.get("learning_context"),
-        )
         metadata_json = _advance_metadata_to_phase(
             metadata_json,
             next_phase=next_phase,
@@ -890,9 +882,6 @@ async def append_workspace_event(
         if tutor_response is not None:
             tutor_response = tutor_response.model_copy(
                 update={
-                    "text": opening_prompt,
-                    "intent": "phase_opening",
-                    "next_actions": [],
                     "next_phase_ready": False,
                     "phase_reasoning": "automatic_transition_from_engage",
                     "phase_checkpoint_question": None,
@@ -904,12 +893,9 @@ async def append_workspace_event(
                 }
             )
         if tutor_event is not None:
-            tutor_event.text_payload = opening_prompt
             tutor_event.metadata_json = {
                 **dict(tutor_event.metadata_json or {}),
                 "source": "workspace_auto_phase_opening",
-                "intent": "phase_opening",
-                "next_actions": [],
                 "next_phase_ready": False,
                 "phase_reasoning": "automatic_transition_from_engage",
                 "phase_checkpoint_question": None,

@@ -42,8 +42,9 @@ async def test_workspace_runs_guided_elaborate_then_hands_to_posttest(
         [
             _tutor(
                 tags=[],
-                next_phase_opening_prompt=(
-                    "Try differentiating (2x + 1)^3 and tell me what changes at each layer."
+                text=(
+                    "Let u(x)=(2x + 1)^3. When x moves from 1 to 1.1, what are "
+                    "u(1) and u(1.1)?"
                 ),
             ),
             _tutor(tags=["exploration_attempt"]),
@@ -169,7 +170,7 @@ async def test_workspace_runs_guided_elaborate_then_hands_to_posttest(
     ]
     assert [event.metadata["phase"] for event in auto_openings] == ["explore"]
     assert [event.text_payload for event in auto_openings] == [
-        "Try differentiating (2x + 1)^3 and tell me what changes at each layer."
+        "Let u(x)=(2x + 1)^3. When x moves from 1 to 1.1, what are u(1) and u(1.1)?"
     ]
     assert [record["tags"] for record in final_workspace.phase_evidence["elaborate"]] == [
         ["transfer_attempt", "transfer_correct"],
@@ -180,6 +181,52 @@ async def test_workspace_runs_guided_elaborate_then_hands_to_posttest(
     assert result.tutor_response.next_phase_ready is True
     assert result.tutor_response.next_phase_opening_prompt is None
     assert result.tutor_response.evidence_request is None
+
+
+@pytest.mark.asyncio
+async def test_first_engage_reply_is_generated_as_an_explore_turn(
+    db_session,
+    monkeypatch,
+):
+    scenario = _create_workspace_scenario(db_session)
+    generated_phases: list[str] = []
+
+    async def explore_tutor(**kwargs):
+        generated_phases.append(kwargs["current_phase"])
+        return (
+            _tutor(
+                tags=[],
+                text=(
+                    "Let u(x)=x². When x moves from 1 to 1.1, what are u(1) "
+                    "and u(1.1)?"
+                ),
+            ),
+            {"ai_source": "test_double"},
+        )
+
+    monkeypatch.setattr(
+        "app.modules.workspaces.service.generate_tutor_response",
+        explore_tutor,
+    )
+
+    result = await append_workspace_event(
+        db_session,
+        user=scenario["user"],
+        workspace_id=scenario["workspace"].id,
+        event_type="text",
+        actor_type="learner",
+        text_payload="the x²",
+        image_asset_id=None,
+        media_artifact_id=None,
+        metadata={},
+    )
+
+    assert result is not None
+    assert generated_phases == ["explore"]
+    assert result.workspace.current_phase == "explore"
+    assert result.tutor_response is not None
+    assert result.tutor_response.text.startswith("Let u(x)=x²")
+    assert result.tutor_response.next_phase_opening_prompt is None
 
 
 def test_repeated_visual_request_reuses_active_media_job(db_session, monkeypatch):
@@ -627,12 +674,13 @@ def test_media_worker_generates_context_spec_before_validation(db_session, monke
 def _tutor(
     *,
     tags: list[str],
+    text: str = "Continue with the next evidence task.",
     evaluation_outcome: str | None = None,
     next_phase_opening_prompt: str | None = None,
     evidence_request: dict | None = None,
 ) -> TutorResponseRead:
     return TutorResponseRead(
-        text="Continue with the next evidence task.",
+        text=text,
         intent="probe_understanding",
         evidence_tags=tags,
         correctness="correct",
