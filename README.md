@@ -56,10 +56,12 @@ The current backend AI provider is OpenRouter. The default model is defined in `
 ```text
 AI_PROVIDER=openrouter
 AI_MODEL=deepseek/deepseek-v4-flash
+AI_IMAGE_MODEL=qwen/qwen3.7-flash
 AI_REASONING_EFFORT=high
 ```
 
-Override it with `AI_MODEL` or `WICARA_AI_MODEL` in `.env`.
+Text requests use `AI_MODEL`; requests with an image input automatically use
+`AI_IMAGE_MODEL`. Override either setting in `.env`.
 
 The hackathon writeup describes Gemma 4 via LiteRT-LM as the local-first target architecture. This repository does not currently load a LiteRT runtime, DLL, `.task`, `.tflite`, `.gguf`, or other local model file. If the team adds on-device LiteRT later, document the model download source, runtime library placement, checksum, and mobile build flags in the mobile README.
 
@@ -339,6 +341,7 @@ OPENROUTER_API_KEY=replace-with-your-openrouter-key
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 AI_PROVIDER=openrouter
 AI_MODEL=deepseek/deepseek-v4-flash
+AI_IMAGE_MODEL=qwen/qwen3.7-flash
 AI_REASONING_EFFORT=high
 ```
 

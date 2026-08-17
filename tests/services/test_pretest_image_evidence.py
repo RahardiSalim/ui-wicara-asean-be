@@ -140,6 +140,7 @@ def test_written_method_evaluator_sends_attached_image_to_ai(monkeypatch, tmp_pa
         }
     ]
     assert "attached work image" in captured["user_instruction"]
+    assert captured["params"]["reasoning"] == {"enabled": False}
 
 
 def test_image_only_evidence_becomes_vision_scored_canvas(monkeypatch, tmp_path):

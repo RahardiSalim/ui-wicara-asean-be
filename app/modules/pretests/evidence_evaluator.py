@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 from typing import Any
@@ -19,6 +20,9 @@ from app.modules.assessments.metrics import (
 from app.modules.evidence.canvas_upload_service import image_asset_file_path
 from app.modules.evidence.models import ImageAsset
 from app.modules.learning.models import AssessmentOption, AssessmentQuestion
+
+
+logger = logging.getLogger(__name__)
 
 
 class PretestEvidenceEvaluator(AssessmentEvidenceEvaluator):
@@ -96,6 +100,8 @@ class PretestEvidenceEvaluator(AssessmentEvidenceEvaluator):
                 reasoning_score=evaluation["reasoning_score"],
                 canvas_score=evaluation["canvas_score"],
             )
+        elif image_asset is not None:
+            evaluation["canvas_status"] = "vision_evaluation_failed"
         if evaluation["is_correct"] and method["method_valid"] is False:
             evaluation["diagnostic_signal"] = "method_invalid_despite_correct_answer"
         return evaluation
@@ -195,6 +201,15 @@ def _evaluate_written_method_with_ai(
         typed_reasoning=reasoning,
         candidates=candidates,
     )
+    params: dict[str, Any] = {
+        "temperature": 0.0,
+        "response_format": {"type": "json_object"},
+    }
+    if image_asset is not None and image_path is not None:
+        # Vision evaluation only extracts visible mathematical evidence. It does
+        # not need a long hidden chain of thought, which otherwise consumes the
+        # small structured-output budget before JSON can be returned.
+        params.update({"max_tokens": 800, "reasoning": {"enabled": False}})
     try:
         response = asyncio.run(
             ai_client.generate(
@@ -211,11 +226,12 @@ def _evaluate_written_method_with_ai(
                     if image_asset is not None and image_path is not None
                     else []
                 ),
-                params={"temperature": 0.0, "response_format": {"type": "json_object"}},
+                params=params,
             )
         )
         payload = json.loads(response.text)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Pretest vision/method evaluation failed: %s", exc)
         return None
     if not isinstance(payload, dict):
         return None

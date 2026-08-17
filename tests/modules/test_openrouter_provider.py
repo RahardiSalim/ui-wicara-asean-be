@@ -5,7 +5,8 @@ import json
 import httpx
 import pytest
 
-from app.modules.ai.config import AISettings, DEFAULT_AI_MODEL
+from app.modules.ai.client import AIClient
+from app.modules.ai.config import AISettings, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_MODEL
 from app.modules.ai.errors import AIConfigurationError, AIProviderError
 from app.modules.ai.providers.openrouter import OpenRouterProvider
 from app.modules.ai.schemas import AIGenerationRequest
@@ -153,6 +154,27 @@ def test_image_input_becomes_data_uri_image_url():
             "image_url": {"url": f"data:image/png;base64,{encoded}"},
         },
     ]
+
+
+def test_client_routes_image_input_to_the_vision_model():
+    client = AIClient(settings=_settings(), providers=[])
+
+    request = client._build_request(
+        provider=None,
+        model=None,
+        system_instruction=None,
+        user_instruction="Read the learner work.",
+        inputs=[
+            {
+                "type": "image",
+                "mime_type": "image/png",
+                "data": base64.b64encode(b"fake-image").decode("ascii"),
+            }
+        ],
+        params=None,
+    )
+
+    assert request.model == DEFAULT_AI_IMAGE_MODEL
 
 
 def test_http_error_body_is_reported():

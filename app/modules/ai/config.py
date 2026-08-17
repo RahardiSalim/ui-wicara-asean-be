@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_AI_PROVIDER = "openrouter"
 DEFAULT_AI_MODEL = "deepseek/deepseek-v4-flash"
+DEFAULT_AI_IMAGE_MODEL = "qwen/qwen3.7-flash"
 DEFAULT_AI_REASONING_EFFORT = "high"
 _ENV_PATH = Path(__file__).resolve().parents[3] / ".env"
 
@@ -21,6 +22,10 @@ class AISettings(BaseSettings):
     ai_model: str = Field(
         default=DEFAULT_AI_MODEL,
         validation_alias=AliasChoices("AI_MODEL", "WICARA_AI_MODEL"),
+    )
+    ai_image_model: str = Field(
+        default=DEFAULT_AI_IMAGE_MODEL,
+        validation_alias=AliasChoices("AI_IMAGE_MODEL", "WICARA_AI_IMAGE_MODEL"),
     )
     ai_reasoning_effort: str = Field(
         default=DEFAULT_AI_REASONING_EFFORT,
