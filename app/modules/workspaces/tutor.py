@@ -127,7 +127,11 @@ def _demo_script_response(
 
     scripted: dict[int, dict[str, Any]] = {
         0: {
-            "phase": "explore",
+            # The learner's first reply answers the fixed Engage opening. The
+            # service advances to Explore only after returning this scripted
+            # response, so labelling it Explore made the first turn miss the
+            # script and invoke the live provider.
+            "phase": "engage",
             "text": (
                 "Exactly. Let’s see why that matters.\n\n"
                 "Before I explain it, try changing x here: x → πx² → sin(πx²). "
