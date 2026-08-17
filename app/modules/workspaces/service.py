@@ -497,6 +497,10 @@ def start_posttest(
         session.commit()
 
     try:
+        # The prepared Chain Rule demo owns a fixed, local question pack. Do
+        # not queue it behind the normal async LLM post-test pipeline: the
+        # answer set is already known and can be made active in this request.
+        is_demo_posttest = bool(metadata.get("demo_script", False))
         posttest = _posttest_service.start(
             session,
             user=user,
@@ -504,7 +508,7 @@ def start_posttest(
             learning_goal_id=track.learning_goal_id,
             track_id=track.id,
             module_id=module.id,
-            generate_questions=False,
+            generate_questions=is_demo_posttest,
         )
     except ValueError as exc:
         # Drop anything the failed generation left pending before recording the
