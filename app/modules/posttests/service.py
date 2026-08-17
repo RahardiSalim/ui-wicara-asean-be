@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.config import get_settings
 from app.core.language import normalize_language_code, preferred_language_code
 from app.modules.accounts.models import UserAccount
 from app.modules.assessments.metrics import AssessmentEvidenceEvaluator, PASS_PERCENT
@@ -16,6 +17,7 @@ from app.modules.curriculum.models import KnowledgeConcept
 from app.modules.evidence.models import ImageAsset
 from app.modules.learning.models import (
     AssessmentAttempt,
+    AssessmentOption,
     AssessmentQuestion,
     AssessmentQuestionPack,
     AssessmentSession,
@@ -1103,6 +1105,12 @@ def _create_posttest_questions(
             .order_by(AssessmentQuestion.sort_order)
         )
     )
+    if _use_demo_chain_rule_posttest(concept) and not questions:
+        return _create_demo_chain_rule_posttest_questions(
+            session,
+            assessment=assessment,
+            concept=concept,
+        )
     generation_batches = [
         ["medium", "medium", "medium"],
         ["hard", "hard", "hard"],
@@ -1163,6 +1171,83 @@ def _create_posttest_questions(
         raise AssessmentQuestionGenerationError(
             f"Posttest question generation produced {len(questions)} questions, expected {len(full_sequence)}."
         )
+    return questions
+
+
+def _use_demo_chain_rule_posttest(concept: KnowledgeConcept) -> bool:
+    if not get_settings().workspace_demo_script_mode:
+        return False
+    code = concept.code.casefold()
+    title = concept.title.casefold()
+    return any(marker in f"{code} {title}" for marker in ("chain_rule", "chain rule", "aturan_rantai", "aturan rantai"))
+
+
+def _create_demo_chain_rule_posttest_questions(
+    session: Session,
+    *,
+    assessment: AssessmentSession,
+    concept: KnowledgeConcept,
+) -> list[AssessmentQuestion]:
+    """Store a repeatable, checked Chain Rule set for the live presentation."""
+
+    items = [
+        ("Differentiate f(x) = sin(x²).", ["2x cos(x²)", "cos(x²)", "2x sin(x²)", "x² cos(x)"], 0),
+        ("Differentiate f(x) = cos(3x).", ["-3 sin(3x)", "3 sin(3x)", "-sin(3x)", "-3 cos(3x)"], 0),
+        ("Differentiate f(x) = (x² + 1)⁴.", ["8x(x² + 1)³", "4(x² + 1)³", "8x(x² + 1)⁴", "4x(x² + 1)³"], 0),
+        ("Differentiate f(x) = sin(πx²).", ["2πx cos(πx²)", "π cos(πx²)", "2x cos(πx²)", "cos(πx²)"], 0),
+        ("Differentiate f(x) = cos(2x³).", ["-6x² sin(2x³)", "-2x² sin(2x³)", "6x² cos(2x³)", "-sin(2x³)"], 0),
+        ("Differentiate f(x) = e^(x² − 1).", ["2x e^(x² − 1)", "e^(x² − 1)", "2e^(x² − 1)", "x²e^(x² − 1)"], 0),
+        ("Differentiate f(x) = ln(5x² + 1).", ["10x / (5x² + 1)", "1 / (5x² + 1)", "10 / (5x² + 1)", "ln(10x)"], 0),
+        ("Differentiate f(x) = (3x − 2)⁵.", ["15(3x − 2)⁴", "5(3x − 2)⁴", "15x(3x − 2)⁴", "(3x − 2)⁵"], 0),
+        ("Differentiate f(x) = √(x³ + 1).", ["3x² / (2√(x³ + 1))", "x² / (2√(x³ + 1))", "3x² / √(x³ + 1)", "√(3x²)"], 0),
+        ("Differentiate f(x) = sin((x² + 1)³).", ["6x(x² + 1)² cos((x² + 1)³)", "3(x² + 1)² cos((x² + 1)³)", "6x(x² + 1)³ cos((x² + 1)³)", "cos((x² + 1)³)"], 0),
+    ]
+    pack = AssessmentQuestionPack(
+        session_id=assessment.id,
+        concept_id=concept.id,
+        generation_source="demo_fixed",
+        llm_provider="",
+        llm_model="",
+        prompt_version="chain_rule_demo_posttest_v1",
+        status="ready",
+    )
+    session.add(pack)
+    session.flush()
+    questions: list[AssessmentQuestion] = []
+    for index, (prompt, options, correct_index) in enumerate(items, start=1):
+        question = AssessmentQuestion(
+            session_id=assessment.id,
+            concept_id=concept.id,
+            pack_id=pack.id,
+            step_label="Posttest",
+            topic="Chain Rule",
+            prompt=prompt,
+            helper_text="Choose the derivative that includes every required factor.",
+            difficulty_label=POSTTEST_DIFFICULTIES[index - 1].title(),
+            sort_order=index,
+            metadata_json={"demo_fixed": True, "correct_option_key": chr(65 + correct_index)},
+            generation_source="demo_fixed",
+            generation_prompt_version="chain_rule_demo_posttest_v1",
+            llm_metadata_json={"source": "demo_fixed"},
+            expected_reasoning="Differentiate the outside function, then multiply by the derivative of the inside function.",
+            rubric_json={},
+        )
+        session.add(question)
+        session.flush()
+        for option_index, text in enumerate(options):
+            key = chr(65 + option_index)
+            session.add(
+                AssessmentOption(
+                    question_id=question.id,
+                    option_key=key,
+                    label=key,
+                    text=text,
+                    is_correct=option_index == correct_index,
+                    sort_order=option_index + 1,
+                )
+            )
+        questions.append(question)
+    session.flush()
     return questions
 
 
