@@ -165,12 +165,13 @@ def _demo_script_response(
                 "d/dx sin(πx²) = cos(πx²) · 2πx\n\n"
                 "We multiply the derivative of the outside by the derivative of the inside. "
                 "This is the Chain Rule.\n\n"
-                "Now let’s see if that idea transfers. Differentiate cos(2x³)."
+                "Here is a short video to help you visualize how the change moves through both functions."
             ),
             "ready": True,
             "tags": ["learner_explanation", "micro_check_correct"],
             "tool": "demo_chain_rule_video",
             "prompt": "/demo-media/ChainRuleLesson.mp4",
+            "after_text": "Now let’s see if that idea transfers. Differentiate cos(2x³).",
         },
         5: {
             "phase": "elaborate",
@@ -205,6 +206,9 @@ def _demo_script_response(
                 else "Follow the change through the nested functions."
             ),
             prompt=str(turn["prompt"]),
+            after_text=(
+                str(turn["after_text"]) if turn.get("after_text") else None
+            ),
         )
     response = TutorResponseRead(
         text=str(turn["text"]),

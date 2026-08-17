@@ -113,6 +113,7 @@ class WorkspaceToolSuggestionRead(BaseModel):
     tool: str
     reason: str
     prompt: str
+    after_text: str | None = None
 
 
 class TutorResponseRead(BaseModel):
