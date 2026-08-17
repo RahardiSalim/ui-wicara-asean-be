@@ -301,6 +301,13 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("WICARA_DEMO_SCRIPT_MODE", "DEMO_SCRIPT_MODE"),
     )
+    workspace_demo_chain_rule_video_path: str = Field(
+        default="../output/manim-chain-rule/media-en-final/videos/chain_rule_lesson/1080p30/ChainRuleLesson.mp4",
+        validation_alias=AliasChoices(
+            "WICARA_DEMO_CHAIN_RULE_VIDEO_PATH",
+            "DEMO_CHAIN_RULE_VIDEO_PATH",
+        ),
+    )
 
     cors_allow_origins: list[str] = [
         "http://localhost",

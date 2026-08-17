@@ -43,6 +43,16 @@ def create_app() -> FastAPI:
             media_mount_path,
         )
 
+    demo_video_path = resolve_project_path(settings.workspace_demo_chain_rule_video_path)
+    if settings.workspace_demo_script_mode and demo_video_path.is_file():
+        application.mount(
+            "/demo-media",
+            StaticFiles(directory=str(demo_video_path.parent)),
+            name="demo-media",
+        )
+    elif settings.workspace_demo_script_mode:
+        logger.warning("Demo Chain Rule video is unavailable: %s", demo_video_path)
+
     application.include_router(api_router, prefix=settings.api_v1_prefix)
     application.include_router(speech_router, prefix="/api/speech")
     return application

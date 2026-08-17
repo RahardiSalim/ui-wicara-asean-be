@@ -159,6 +159,8 @@ def _demo_script_response(
             "ready": True,
             "tags": ["learner_explanation", "micro_check_correct"],
             "checkpoint": "Ready to apply the same idea to a new function?",
+            "tool": "demo_chain_rule_video",
+            "prompt": "/demo-media/ChainRuleLesson.mp4",
         },
         5: {
             "phase": "elaborate",
@@ -188,7 +190,11 @@ def _demo_script_response(
     if turn.get("tool"):
         tool = WorkspaceToolSuggestionRead(
             tool=str(turn["tool"]),
-            reason="Follow the change through the nested functions.",
+            reason=(
+                "Watch the Chain Rule explanation before applying it."
+                if turn["tool"] == "demo_chain_rule_video"
+                else "Follow the change through the nested functions."
+            ),
             prompt=str(turn["prompt"]),
         )
     response = TutorResponseRead(
