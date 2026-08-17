@@ -26,8 +26,8 @@ class TutorImageInput(NamedTuple):
 
 PROMPT_VERSION = "wicara_5e_natural_progression_v13"
 PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
-# Two bounded attempts plus retry overhead must finish before the FE's 5-minute request cap.
-DEFAULT_TUTOR_TIMEOUT_SECONDS = 140.0
+# The combined retry budget matches the FE's five-minute request cap.
+DEFAULT_TUTOR_TIMEOUT_SECONDS = 300.0
 MAX_SCAFFOLD_LEVEL = 6
 WORKED_EXAMPLE_SCAFFOLD_LEVEL = 3
 _TUTOR_MAX_ATTEMPTS = 2
@@ -624,7 +624,15 @@ async def generate_tutor_response(
     ai_response: AIGenerationResponse | None = None
     generation_instruction = user_instruction
     generation_attempt = 0
+    timeout_budget_seconds = _tutor_timeout_seconds()
+    deadline = asyncio.get_running_loop().time() + timeout_budget_seconds
     for generation_attempt in range(1, _TUTOR_MAX_ATTEMPTS + 1):
+        remaining_seconds = deadline - asyncio.get_running_loop().time()
+        if remaining_seconds <= 0:
+            last_error = TimeoutError(
+                f"Tutor response exceeded the {timeout_budget_seconds:.0f}-second total timeout."
+            )
+            break
         try:
             ai_response = await asyncio.wait_for(
                 ai_client.generate(
@@ -636,7 +644,7 @@ async def generate_tutor_response(
                         "response_format": _tutor_response_format(),
                     },
                 ),
-                timeout=_tutor_timeout_seconds(),
+                timeout=remaining_seconds,
             )
         except (AIError, TimeoutError) as exc:
             last_error = exc
