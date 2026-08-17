@@ -1822,6 +1822,12 @@ def _sanitize_tutor_response_for_phase(
                 tutor_response.tool_suggestion
                 if phase == "explore"
                 or (
+                    phase == "engage"
+                    and tutor_response.tool_suggestion is not None
+                    and tutor_response.tool_suggestion.tool
+                    == "interactive_function_flow"
+                )
+                or (
                     phase == "explain"
                     and tutor_response.tool_suggestion is not None
                     and tutor_response.tool_suggestion.tool == "demo_chain_rule_video"
