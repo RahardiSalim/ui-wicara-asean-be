@@ -14,6 +14,7 @@ class WorkspaceCreateRequest(BaseModel):
     content_mode: str = Field(default="chat", min_length=2, max_length=32)
     workspace_session_id: UUID | None = None
     start_new_session: bool = False
+    demo_session: bool = False
 
 
 class WorkspaceEventCreateRequest(BaseModel):

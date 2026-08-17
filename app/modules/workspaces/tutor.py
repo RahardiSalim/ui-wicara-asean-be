@@ -45,6 +45,8 @@ def _is_demo_chain_rule_workspace(workspace: WorkspaceSession) -> bool:
     if not demo_script_enabled():
         return False
     metadata = workspace.metadata_json if isinstance(workspace.metadata_json, dict) else {}
+    if bool(metadata.get("demo_script", False)):
+        return True
     context = metadata.get("learning_context")
     context = context if isinstance(context, dict) else {}
     candidates = [
@@ -67,6 +69,7 @@ def demo_phase_opening_prompt(
     topic: str,
     learner_language: str | None,
     learning_context: dict[str, Any] | None = None,
+    force_demo: bool = False,
 ) -> str:
     """Presentation-only phase openings for the deterministic Chain Rule path."""
 
@@ -74,7 +77,7 @@ def demo_phase_opening_prompt(
         marker in topic.casefold()
         for marker in ("chain rule", "chain_rule", "aturan rantai", "aturan_rantai")
     )
-    if not demo_script_enabled() or not is_chain_rule:
+    if not demo_script_enabled() or (not force_demo and not is_chain_rule):
         return fallback_phase_opening_prompt(
             phase=phase,
             topic=topic,

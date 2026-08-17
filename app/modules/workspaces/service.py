@@ -127,6 +127,7 @@ def create_or_resume_workspace(
     content_mode: str,
     workspace_session_id: UUID | None = None,
     start_new_session: bool = False,
+    demo_session: bool = False,
 ) -> WorkspaceRead:
     track, module = _resolve_owned_track_module(
         session,
@@ -192,6 +193,7 @@ def create_or_resume_workspace(
                     }
                 ],
                 "visited_5e_phases": ["engage"],
+                "demo_script": bool(demo_session),
             },
         )
         session.add(workspace)
@@ -226,6 +228,7 @@ def create_or_resume_workspace(
             topic=workspace.current_topic or "this module",
             learner_language=language,
             learning_context=workspace.metadata_json.get("learning_context"),
+            force_demo=bool(workspace.metadata_json.get("demo_script", False)),
         )
         session.add(
             WorkspaceEvent(
