@@ -1215,6 +1215,12 @@ def _create_demo_chain_rule_posttest_questions(
     session.flush()
     questions: list[AssessmentQuestion] = []
     for index, (prompt, options, correct_index) in enumerate(items, start=1):
+        # Keep the fixed mathematical content, but rotate its presentation so
+        # the demo never teaches that the first choice is always correct.
+        rotation = index % len(options)
+        ordered_options = options[rotation:] + options[:rotation]
+        correct_text = options[correct_index]
+        ordered_correct_index = ordered_options.index(correct_text)
         question = AssessmentQuestion(
             session_id=assessment.id,
             concept_id=concept.id,
@@ -1225,7 +1231,7 @@ def _create_demo_chain_rule_posttest_questions(
             helper_text="Choose the derivative that includes every required factor.",
             difficulty_label=POSTTEST_DIFFICULTIES[index - 1].title(),
             sort_order=index,
-            metadata_json={"demo_fixed": True, "correct_option_key": chr(65 + correct_index)},
+            metadata_json={"demo_fixed": True, "correct_option_key": chr(65 + ordered_correct_index)},
             generation_source="demo_fixed",
             generation_prompt_version="chain_rule_demo_posttest_v1",
             llm_metadata_json={"source": "demo_fixed"},
@@ -1234,7 +1240,7 @@ def _create_demo_chain_rule_posttest_questions(
         )
         session.add(question)
         session.flush()
-        for option_index, text in enumerate(options):
+        for option_index, text in enumerate(ordered_options):
             key = chr(65 + option_index)
             session.add(
                 AssessmentOption(
@@ -1242,7 +1248,7 @@ def _create_demo_chain_rule_posttest_questions(
                     option_key=key,
                     label=key,
                     text=text,
-                    is_correct=option_index == correct_index,
+                    is_correct=option_index == ordered_correct_index,
                     sort_order=option_index + 1,
                 )
             )
