@@ -33,6 +33,188 @@ WORKED_EXAMPLE_SCAFFOLD_LEVEL = 3
 _TUTOR_MAX_ATTEMPTS = 2
 _TUTOR_RETRY_BACKOFF_SECONDS = 0.5
 
+
+def demo_script_enabled() -> bool:
+    """Whether the fixed Chain Rule demo is enabled for a local presentation."""
+
+    return os.getenv("WICARA_DEMO_SCRIPT_MODE", "false").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _is_demo_chain_rule_workspace(workspace: WorkspaceSession) -> bool:
+    if not demo_script_enabled():
+        return False
+    metadata = workspace.metadata_json if isinstance(workspace.metadata_json, dict) else {}
+    context = metadata.get("learning_context")
+    context = context if isinstance(context, dict) else {}
+    candidates = [
+        workspace.current_topic or "",
+        str(metadata.get("active_node_id") or ""),
+        str(context.get("active_node_id") or ""),
+    ]
+    return any(
+        "chain rule" in candidate.casefold()
+        or "chain_rule" in candidate.casefold()
+        or "aturan rantai" in candidate.casefold()
+        or "aturan_rantai" in candidate.casefold()
+        for candidate in candidates
+    )
+
+
+def demo_phase_opening_prompt(
+    *,
+    phase: str,
+    topic: str,
+    learner_language: str | None,
+    learning_context: dict[str, Any] | None = None,
+) -> str:
+    """Presentation-only phase openings for the deterministic Chain Rule path."""
+
+    is_chain_rule = any(
+        marker in topic.casefold()
+        for marker in ("chain rule", "chain_rule", "aturan rantai", "aturan_rantai")
+    )
+    if not demo_script_enabled() or not is_chain_rule:
+        return fallback_phase_opening_prompt(
+            phase=phase,
+            topic=topic,
+            learner_language=learner_language,
+            learning_context=learning_context,
+        )
+    prompts = {
+        "engage": (
+            "Let’s look at one answer from your pretest.\n\n"
+            "f(x) = sin(πx²)  →  f′(x) = cos(πx²)\n\n"
+            "You differentiated the sine correctly, but something inside it was left unchanged. "
+            "What part do you think that is?"
+        ),
+        "explain": (
+            "Exactly. Now explain it in your own words: why can’t we stop at cos(πx²)?"
+        ),
+        "elaborate": (
+            "Now let’s see if that idea transfers. Differentiate cos(2x³)."
+        ),
+        "evaluate": "The guided practice is complete. Continue to the post-test.",
+    }
+    prompt = prompts.get(_normalize_phase(phase))
+    if prompt is not None:
+        return prompt
+    return fallback_phase_opening_prompt(
+        phase=phase,
+        topic=topic,
+        learner_language=learner_language,
+        learning_context=learning_context,
+    )
+
+
+def _demo_script_response(
+    *,
+    workspace: WorkspaceSession,
+    phase: str,
+) -> tuple[TutorResponseRead, dict[str, Any]] | None:
+    """Return the next fixed demo turn; learner text intentionally is not judged."""
+
+    if not _is_demo_chain_rule_workspace(workspace):
+        return None
+    metadata = workspace.metadata_json if isinstance(workspace.metadata_json, dict) else {}
+    try:
+        step = max(0, int(metadata.get("demo_script_step", 0)))
+    except (TypeError, ValueError):
+        step = 0
+
+    scripted: dict[int, dict[str, Any]] = {
+        0: {
+            "phase": "explore",
+            "text": (
+                "Exactly. Let’s see why that matters.\n\n"
+                "Before I explain it, try changing x here: x → πx² → sin(πx²). "
+                "Which part reacts first when x changes?"
+            ),
+            "tool": "interactive_function_flow",
+            "prompt": "Drag x and watch the change move through πx², then sin(πx²).",
+        },
+        1: {
+            "phase": "explore",
+            "text": "Yes—the inner part πx² reacts first. And after πx² changes, what changes next?",
+        },
+        2: {
+            "phase": "explore",
+            "text": "Right. So does the change happen in one step, or does it pass through both functions?",
+        },
+        3: {
+            "phase": "explore",
+            "text": "Exactly: it passes through both. You have traced the two stages of change.",
+            "ready": True,
+            "tags": ["exploration_attempt", "pattern_identified"],
+            "checkpoint": "Ready to explain why both rates matter?",
+        },
+        4: {
+            "phase": "explain",
+            "text": (
+                "That’s it. Because πx² is also changing, both rates of change matter.\n\n"
+                "d/dx sin(πx²) = cos(πx²) · 2πx\n\n"
+                "We multiply the derivative of the outside by the derivative of the inside. "
+                "This is the Chain Rule."
+            ),
+            "ready": True,
+            "tags": ["learner_explanation", "micro_check_correct"],
+            "checkpoint": "Ready to apply the same idea to a new function?",
+        },
+        5: {
+            "phase": "elaborate",
+            "text": (
+                "Your Chain Rule structure is correct. Keep that. Check only one thing: "
+                "what is d/dx(2x³)?"
+            ),
+            "tags": ["transfer_attempt"],
+        },
+        6: {
+            "phase": "elaborate",
+            "text": "Right. So your final derivative?",
+            "tags": ["transfer_attempt"],
+        },
+        7: {
+            "phase": "elaborate",
+            "text": "Correct. You can now apply the Chain Rule independently. Continue to the post-test.",
+            "ready": True,
+            "tags": ["transfer_attempt", "transfer_correct"],
+            "checkpoint": "Ready for the independent post-test?",
+        },
+    }
+    turn = scripted.get(step)
+    if turn is None or turn["phase"] != phase:
+        return None
+    tool = None
+    if turn.get("tool"):
+        tool = WorkspaceToolSuggestionRead(
+            tool=str(turn["tool"]),
+            reason="Follow the change through the nested functions.",
+            prompt=str(turn["prompt"]),
+        )
+    response = TutorResponseRead(
+        text=str(turn["text"]),
+        intent=_STAGE_INTENT.get(phase, "ask_followup"),
+        next_actions=_STAGE_ACTIONS.get(phase, ["ask_followup"]),
+        next_phase_ready=bool(turn.get("ready", False)),
+        phase_reasoning="demo_script",
+        phase_checkpoint_question=turn.get("checkpoint"),
+        evidence_tags=list(turn.get("tags", [])),
+        correctness="correct" if turn.get("tags") else "unknown",
+        misconception_status="none",
+        confidence=1.0,
+        tool_suggestion=tool,
+    )
+    return response, {
+        "ai_source": "demo_script",
+        "demo_script_step": step,
+        "demo_script_next_step": step + 1,
+        "degraded": False,
+    }
+
 _ALLOWED_EVIDENCE_TAGS = {
     "challenge_accepted",
     "prior_knowledge_shared",
@@ -516,6 +698,12 @@ async def generate_tutor_response(
     topic = workspace.current_topic or "this module"
     history = _build_history(events)
     phase = _normalize_phase(current_phase)
+    demo_response = _demo_script_response(workspace=workspace, phase=phase)
+    if demo_response is not None:
+        # A small deliberate pause makes the pre-scripted tutor feel like a real
+        # turn without risking a provider timeout during a live presentation.
+        await asyncio.sleep(2)
+        return demo_response
     language_code, response_language, language_source = _resolve_response_language(
         learner_language=learner_language,
         latest_message=text_payload,

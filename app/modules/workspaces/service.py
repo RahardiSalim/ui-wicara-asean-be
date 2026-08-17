@@ -47,7 +47,7 @@ from app.modules.workspaces.schemas import (
 )
 from app.modules.workspaces.tutor import (
     TutorImageInput,
-    fallback_phase_opening_prompt,
+    demo_phase_opening_prompt,
     generate_tutor_response,
 )
 
@@ -221,7 +221,7 @@ def create_or_resume_workspace(
         and str(workspace.metadata_json.get("current_phase") or "engage") == "engage"
     ):
         session.flush()
-        opening_prompt = fallback_phase_opening_prompt(
+        opening_prompt = demo_phase_opening_prompt(
             phase="engage",
             topic=workspace.current_topic or "this module",
             learner_language=language,
@@ -385,7 +385,7 @@ def advance_workspace_phase(
             current_phase=current_phase,
         )
         if not opening_prompt:
-            opening_prompt = fallback_phase_opening_prompt(
+            opening_prompt = demo_phase_opening_prompt(
                 phase=next_phase,
                 topic=workspace.current_topic or "this module",
                 learner_language=_preferred_language(user),
@@ -842,6 +842,8 @@ async def append_workspace_event(
         dict(workspace.metadata_json or {}),
         created_at=workspace.created_at,
     )
+    if "demo_script_next_step" in ai_audit:
+        metadata_json["demo_script_step"] = ai_audit["demo_script_next_step"]
     metadata_json = _record_phase_evidence(
         metadata_json,
         phase=current_phase,
@@ -973,7 +975,7 @@ async def append_workspace_event(
             != "evaluate"
         ):
             phase_index = _PHASE_SEQUENCE.index(current_phase)
-            next_phase_opening_prompt = fallback_phase_opening_prompt(
+            next_phase_opening_prompt = demo_phase_opening_prompt(
                 phase=_PHASE_SEQUENCE[phase_index + 1],
                 topic=workspace.current_topic or "this module",
                 learner_language=_preferred_language(user),
@@ -1727,6 +1729,7 @@ def _sanitize_tutor_response_for_phase(
     if phase == "elaborate" and "transfer_correct" in evidence_tags:
         evidence_tags.insert(0, "transfer_attempt")
         evidence_tags = list(dict.fromkeys(evidence_tags))
+    demo_script = tutor_response.phase_reasoning == "demo_script"
     if (
         phase == "explain"
         and "micro_check_correct" in evidence_tags
@@ -1735,6 +1738,7 @@ def _sanitize_tutor_response_for_phase(
             phase="explain",
             tag="learner_explanation",
         )
+        and not demo_script
     ):
         evidence_tags.remove("micro_check_correct")
     if phase == "evaluate":
