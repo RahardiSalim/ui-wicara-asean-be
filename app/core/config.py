@@ -297,6 +297,10 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("WICARA_TEACHER_EMAILS", "TEACHER_EMAILS"),
     )
+    workspace_demo_script_mode: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("WICARA_DEMO_SCRIPT_MODE", "DEMO_SCRIPT_MODE"),
+    )
 
     cors_allow_origins: list[str] = [
         "http://localhost",

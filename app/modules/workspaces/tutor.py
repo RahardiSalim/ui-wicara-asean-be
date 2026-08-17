@@ -11,6 +11,7 @@ from typing import Any, NamedTuple
 from app.modules.ai import ai_client
 from app.modules.ai.errors import AIError, AIProviderError
 from app.modules.ai.schemas import AIGenerationResponse
+from app.core.config import get_settings
 from app.core.language import language_display_name, normalize_language_code
 from app.modules.workspaces.models import WorkspaceEvent, WorkspaceSession
 from app.modules.workspaces.schemas import TutorResponseRead, WorkspaceToolSuggestionRead
@@ -37,12 +38,7 @@ _TUTOR_RETRY_BACKOFF_SECONDS = 0.5
 def demo_script_enabled() -> bool:
     """Whether the fixed Chain Rule demo is enabled for a local presentation."""
 
-    return os.getenv("WICARA_DEMO_SCRIPT_MODE", "false").strip().casefold() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return bool(get_settings().workspace_demo_script_mode)
 
 
 def _is_demo_chain_rule_workspace(workspace: WorkspaceSession) -> bool:
