@@ -897,7 +897,6 @@ async def append_workspace_event(
                     "evidence_tags": [],
                     "evidence_request": None,
                     "explanation_card": None,
-                    "tool_suggestion": None,
                 }
             )
         if tutor_event is not None:
@@ -912,6 +911,42 @@ async def append_workspace_event(
                 "phase": next_phase,
             }
         phase_ready = False
+    elif (
+        ai_audit.get("ai_source") == "demo_script"
+        and phase_transition_ready
+        and current_phase != "evaluate"
+    ):
+        # The presentation script is a continuous, fixed sequence.  It must
+        # not depend on a learner pressing a hidden checkpoint between turns:
+        # an extra typed reply previously left the script cursor and server
+        # phase out of sync, which made the flow fall back to live AI.
+        phase_index = _PHASE_SEQUENCE.index(current_phase)
+        next_phase = _PHASE_SEQUENCE[phase_index + 1]
+        metadata_json = _advance_metadata_to_phase(
+            metadata_json,
+            next_phase=next_phase,
+        )
+        if current_phase == "elaborate":
+            metadata_json["posttest_eligible"] = True
+            metadata_json["posttest_handoff_reason"] = "demo_elaborate_complete"
+        tutor_response = tutor_response.model_copy(
+            update={
+                "next_phase_ready": False,
+                "phase_checkpoint_question": None,
+                "next_phase_opening_prompt": None,
+                "evidence_request": None,
+            }
+        )
+        if tutor_event is not None:
+            tutor_event.metadata_json = {
+                **dict(tutor_event.metadata_json or {}),
+                "source": "workspace_demo_auto_transition",
+                "next_phase_ready": False,
+                "phase_checkpoint_question": None,
+                "next_phase_opening_prompt": None,
+                "phase": next_phase,
+            }
+        phase_transition_ready = False
     elif current_phase != "evaluate":
         # Every phase after Engage remains learner-confirmed through its
         # contextual checkpoint.
@@ -1781,7 +1816,14 @@ def _sanitize_tutor_response_for_phase(
                 tutor_response.explanation_card if has_explanation else None
             ),
             "tool_suggestion": (
-                tutor_response.tool_suggestion if phase == "explore" else None
+                tutor_response.tool_suggestion
+                if phase == "explore"
+                or (
+                    phase == "explain"
+                    and tutor_response.tool_suggestion is not None
+                    and tutor_response.tool_suggestion.tool == "demo_chain_rule_video"
+                )
+                else None
             ),
         }
     )
