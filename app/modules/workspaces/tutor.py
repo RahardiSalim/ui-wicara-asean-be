@@ -139,6 +139,7 @@ def _demo_script_response(
             ),
             "tool": "interactive_function_flow",
             "prompt": "Drag x and watch the change move through πx², then sin(πx²).",
+            "ready": True,
         },
         1: {
             "phase": "explore",
@@ -714,6 +715,24 @@ async def generate_tutor_response(
         # turn without risking a provider timeout during a live presentation.
         await asyncio.sleep(2)
         return demo_response
+    if _is_demo_chain_rule_workspace(workspace):
+        # A presentation session must never silently fall back to the live
+        # provider. This only occurs if an old/corrupt session has an
+        # impossible script cursor; the learner can reopen the prepared demo.
+        return (
+            TutorResponseRead(
+                text=(
+                    "This prepared demo has reached an out-of-sequence step. "
+                    "Please reopen Prepared Chain Rule demo from Tracks."
+                ),
+                intent="ask_followup",
+                next_actions=["restart_demo"],
+                phase_reasoning="demo_script_out_of_sequence",
+                misconception_status="none",
+                confidence=1.0,
+            ),
+            {"ai_source": "demo_script_out_of_sequence", "degraded": False},
+        )
     language_code, response_language, language_source = _resolve_response_language(
         learner_language=learner_language,
         latest_message=text_payload,

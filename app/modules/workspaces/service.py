@@ -705,6 +705,7 @@ async def append_workspace_event(
         created_at=workspace.created_at,
     )
     current_phase = str(phase_metadata.get("current_phase") or "engage")
+    is_demo_script = bool(phase_metadata.get("demo_script", False))
     if current_phase == "evaluate" and bool(phase_metadata.get("posttest_eligible")):
         raise ValueError("Guided workspace is complete. Start the posttest.")
     if checkpoint_declined:
@@ -720,7 +721,13 @@ async def append_workspace_event(
         and not checkpoint_declined
         and _current_phase_turns(phase_metadata) == 0
     )
-    tutor_generation_phase = "explore" if first_engage_reply else current_phase
+    # Demo has its own fixed state machine. It must be generated against the
+    # actual server phase, never the normal Engage shortcut.
+    tutor_generation_phase = (
+        current_phase
+        if is_demo_script
+        else ("explore" if first_engage_reply else current_phase)
+    )
 
     # Call AI before saving so audit info goes into event metadata.
     tutor_response, ai_audit = await generate_tutor_response(
@@ -883,7 +890,9 @@ async def append_workspace_event(
     phase_transition_ready = (
         phase_ready and _current_phase_turns(metadata_json) >= phase_min_turns
     )
-    auto_advance_engage = first_engage_reply and tutor_response is not None
+    auto_advance_engage = (
+        not is_demo_script and first_engage_reply and tutor_response is not None
+    )
     if auto_advance_engage:
         next_phase = "explore"
         metadata_json = _advance_metadata_to_phase(
@@ -916,7 +925,8 @@ async def append_workspace_event(
         phase_ready = False
     elif (
         ai_audit.get("ai_source") == "demo_script"
-        and phase_transition_ready
+        and tutor_response is not None
+        and tutor_response.next_phase_ready
         and current_phase != "evaluate"
     ):
         # The presentation script is a continuous, fixed sequence.  It must
