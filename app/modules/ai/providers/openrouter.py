@@ -98,7 +98,24 @@ class OpenRouterProvider(AIProvider):
             payload["reasoning"] = {"effort": reasoning_effort}
         if params:
             payload.update(params)
+        provider_routing = self._provider_routing(params.get("provider"))
+        if provider_routing:
+            payload["provider"] = provider_routing
         return payload
+
+    def _provider_routing(self, requested: Any) -> dict[str, Any]:
+        """Merge the caller's provider block with the default routing policy.
+
+        Callers set things like require_parameters per request; the sort order
+        is a deployment-wide choice, so it belongs here rather than in every
+        call site. An explicit sort from the caller still wins.
+        """
+
+        routing: dict[str, Any] = dict(requested) if isinstance(requested, dict) else {}
+        sort = self._settings.ai_provider_sort.strip()
+        if sort and "sort" not in routing:
+            routing["sort"] = sort
+        return routing
 
     def _response_from_payload(
         self,

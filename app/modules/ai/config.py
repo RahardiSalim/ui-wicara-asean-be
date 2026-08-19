@@ -11,6 +11,14 @@ DEFAULT_AI_PROVIDER = "openrouter"
 DEFAULT_AI_MODEL = "deepseek/deepseek-v4-flash"
 DEFAULT_AI_IMAGE_MODEL = "qwen/qwen3.7-flash"
 DEFAULT_AI_REASONING_EFFORT = "high"
+# OpenRouter load-balances a model across providers, and for
+# deepseek-v4-flash they are not interchangeable. Measured on the pretest
+# generation prompt: Alibaba 22-25s, Venice 12s, DeepInfra 34s, Parasail 18s
+# — and DigitalOcean 256-703s for the same request, slow enough to blow a
+# 300s serverless budget on its own. Routing by throughput picks a fast one
+# instead of whichever is cheapest. Set AI_PROVIDER_SORT="" to let
+# OpenRouter choose again.
+DEFAULT_AI_PROVIDER_SORT = "throughput"
 _ENV_PATH = Path(__file__).resolve().parents[3] / ".env"
 
 
@@ -32,6 +40,13 @@ class AISettings(BaseSettings):
         validation_alias=AliasChoices(
             "AI_REASONING_EFFORT",
             "WICARA_AI_REASONING_EFFORT",
+        ),
+    )
+    ai_provider_sort: str = Field(
+        default=DEFAULT_AI_PROVIDER_SORT,
+        validation_alias=AliasChoices(
+            "AI_PROVIDER_SORT",
+            "WICARA_AI_PROVIDER_SORT",
         ),
     )
     openrouter_api_key: str = Field(
