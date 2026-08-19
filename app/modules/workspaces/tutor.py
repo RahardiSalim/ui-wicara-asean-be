@@ -414,6 +414,14 @@ Context-clarity rule: every action states its referent, action, and purpose. Nam
 specific expression; never say “layers”, “change”, or “pattern” without it. Define a
 new symbol such as u in the same turn. A brief reply such as “x²”, “huh?”, or “okay”
 is not readiness: respond to it or clarify before a multi-step task.
+Never ask a question the learner has already been asked. If they did not engage with
+your last question, that question did not work: pick a different route into the same
+idea rather than restating it with a new preamble. Repeating yourself reads as not
+listening, and the learner cannot tell you are waiting for something specific.
+When the learner asks you a direct question, answer it first, in a sentence or two,
+before steering back to the phase. Deflecting a genuine question into your own probe
+is the fastest way to lose them. Answering it is not off-task: it is the moment they
+are most ready to learn.
 Treat a learner hypothesis as tentative. Ground feedback in the latest learner action;
 do not open with generic praise such as "Excellent!". Preserve demonstrated progress
 and isolate only the remaining error. On repeated confusion, change strategy; for a
@@ -963,7 +971,10 @@ async def generate_tutor_response(
     previous_tutor_text = _latest_tutor_text(events)
     if (
         not (phase == "evaluate" and completes_evaluate)
-        and _is_repetitive_response(tutor_text, previous_tutor_text)
+        and (
+            _is_repetitive_response(tutor_text, previous_tutor_text)
+            or _repeats_recent_question(tutor_text, _recent_tutor_questions(events))
+        )
     ):
         tutor_text = _anti_repeat_response(
             language_code=language_code,
@@ -1449,6 +1460,53 @@ def _latest_tutor_text(events: list[WorkspaceEvent]) -> str | None:
         if text:
             return text
     return None
+
+
+_TUTOR_QUESTION_LOOKBACK = 4
+
+
+def _recent_tutor_questions(events: list[WorkspaceEvent]) -> list[str]:
+    """The questions the tutor has already put to this learner, newest first."""
+
+    questions: list[str] = []
+    seen_turns = 0
+    for event in reversed(events):
+        if event.actor_type != "tutor":
+            continue
+        seen_turns += 1
+        if seen_turns > _TUTOR_QUESTION_LOOKBACK:
+            break
+        questions.extend(_question_sentences(event.text_payload))
+    return questions
+
+
+def _question_sentences(text: str) -> list[str]:
+    return [
+        sentence.strip().lower()
+        for sentence in re.split(r"(?<=[.!?？])\s+", text)
+        if sentence.strip().endswith(("?", "？")) and len(sentence.strip()) > 15
+    ]
+
+
+def _repeats_recent_question(current_text: str, asked: list[str]) -> bool:
+    """Catch the same question wearing a new preamble.
+
+    _is_repetitive_response compares whole replies against the previous one, so
+    a tutor that keeps re-asking "jika x berubah dari 1 menjadi 1.1, berapa
+    perubahan x^2?" under a fresh opening sentence slips past it every time.
+    """
+
+    for sentence in _question_sentences(current_text):
+        for previous in asked:
+            # Containment, not similarity: the repeat is usually the old
+            # question with a fresh sentence bolted on the front, which drags a
+            # plain ratio well below any useful threshold.
+            match = SequenceMatcher(a=sentence, b=previous).find_longest_match(
+                0, len(sentence), 0, len(previous)
+            )
+            if match.size >= 0.8 * min(len(sentence), len(previous)):
+                return True
+    return False
 
 
 def _is_repetitive_response(current_text: str, previous_text: str | None) -> bool:
