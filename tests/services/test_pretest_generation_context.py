@@ -1,3 +1,5 @@
+import json
+
 from sqlalchemy import select
 
 import pytest
@@ -12,7 +14,6 @@ from app.modules.pretests.adaptive_service import (
 )
 from app.modules.pretests.generation_service import (
     AdaptivePretestGenerationService,
-    _fresh_generation_max_tokens,
     _fresh_generation_timeout_seconds,
     _fresh_question_prompt,
     _fresh_question_response_format,
@@ -83,10 +84,10 @@ def test_fresh_prompt_uses_curriculum_evidence_misconceptions_and_guidance():
     assert "Prerequisite checks happen only" not in prompt
 
 
-def test_pretest_generation_allows_two_attempts(monkeypatch):
+def test_pretest_generation_allows_three_attempts(monkeypatch):
     monkeypatch.delenv("WICARA_PRETEST_LLM_MAX_ATTEMPTS", raising=False)
 
-    assert _max_generation_attempts(assessment_type="pretest") == 2
+    assert _max_generation_attempts(assessment_type="pretest") == 3
 
 
 def test_fresh_generation_uses_strict_batch_and_option_counts():
@@ -101,6 +102,7 @@ def test_fresh_generation_uses_strict_batch_and_option_counts():
     skill_trace = questions["items"]["properties"]["skill_trace"]
     assert skill_trace["minItems"] == 1
     assert questions["items"]["required"] == [
+        "scratchpad",
         "stem",
         "question_type",
         "correct_answer",
@@ -121,10 +123,35 @@ def test_fresh_generation_uses_strict_batch_and_option_counts():
     }.isdisjoint(questions["items"]["properties"])
 
 
-def test_fresh_generation_output_budget_scales_with_batch_size():
-    assert _fresh_generation_max_tokens(question_count=1) == 6000
-    assert _fresh_generation_max_tokens(question_count=2) == 10000
-    assert _fresh_generation_max_tokens(question_count=3) == 14000
+def test_scratchpad_is_required_and_generated_before_learner_facing_fields():
+    """The model gets a private field to work in, and writes it first.
+
+    Without it the model does its arithmetic inside expected_reasoning and
+    ships the false starts to the learner.
+    """
+
+    schema = _fresh_question_response_format(question_count=3)
+    properties = schema["json_schema"]["schema"]["properties"]["questions"]["items"]
+    assert "scratchpad" in properties["required"]
+    assert list(properties["properties"])[0] == "scratchpad"
+
+
+def test_scratchpad_is_dropped_before_the_question_reaches_a_learner():
+    normalized = _normalize_fresh_question_payload(
+        {
+            "scratchpad": "coba a=3: hasilnya 10, bukan 11. ganti stem.",
+            "stem": "Berapa turunan f(x) = x^2 di x = 3?",
+            "correct_answer": "6",
+            "distractors": ["3", "9", "12"],
+            "expected_reasoning": "f'(x) = 2x, sehingga f'(3) = 6.",
+            "explanation": "Turunan x^2 adalah 2x.",
+            "skill_trace": [{"concept_code": "c", "criterion": "k"}],
+        },
+        concept_code="c",
+        difficulty="easy",
+    )
+    assert "scratchpad" not in normalized
+    assert "ganti stem" not in json.dumps(normalized, ensure_ascii=False)
 
 
 def test_pretest_generation_timeout_is_capped_below_frontend_timeout(monkeypatch):
@@ -243,9 +270,26 @@ def test_reasoning_cannot_reference_backend_assigned_option_labels():
 
     with pytest.raises(
         QuestionGenerationPayloadError,
-        match="must not discuss backend-assigned answer options",
+        match="must not point at a backend-assigned answer position",
     ):
         _validate_completed_reasoning([question])
+
+
+def test_reasoning_may_mention_options_without_naming_a_position():
+    """Only positions break when the backend shuffles.
+
+    "dibandingkan opsi lain" reads correctly whatever order the learner sees,
+    so rejecting it just burned a generation attempt.
+    """
+
+    _validate_completed_reasoning(
+        [
+            {
+                "expected_reasoning": "Gradien 1.5 memberi galat terkecil.",
+                "explanation": "Model ini memiliki kesalahan terkecil dibandingkan opsi lain.",
+            }
+        ]
+    )
 
 
 def test_duplicate_skill_trace_entries_are_merged_by_concept_code():

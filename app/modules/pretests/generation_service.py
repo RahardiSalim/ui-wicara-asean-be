@@ -1295,7 +1295,9 @@ Question quality requirements:
 - stem must contain only the learner-facing question. Never append a note, summary, or commentary explaining why the question is well-designed, what the distractors represent, or how skill_trace/expected_reasoning/explanation were written.
 - Never mention field names from this schema (stem, skill_trace, expected_reasoning, explanation, distractors, correct_answer, question_type) to the learner in any field's visible text.
 - expected_reasoning and explanation must contain only the derivation or justification of the correct result. Never discuss, compare, number, or name answer options there because the backend assigns and shuffles options after generation.
-- Hard lexical rule for expected_reasoning and explanation: the words "option", "opsi", "pilihan", "choice", and the phrases "jawaban pertama/kedua/ketiga/keempat" and "first/second/third/fourth answer" are forbidden there. Write "hasilnya" or "nilai yang benar" instead of "pilihan yang benar". A pack containing any of those words is rejected outright.
+- Use the scratchpad field for all working: trial arithmetic, checking that correct_answer really follows from the stem, and any revision you decide to make. The backend deletes scratchpad and never shows it to anyone, so put every false start there and nowhere else.
+- By the time you write stem, correct_answer, expected_reasoning and explanation you must already agree with them. Those fields must never contain a retraction, a recalculation, a "mungkin maksudnya", or a note that the answer is not among the choices. If your scratchpad shows the question does not work, rewrite the stem and the answer before emitting them.
+- Never point at an answer position in expected_reasoning or explanation ("opsi A", "pilihan pertama", "jawaban di atas"). The backend shuffles options after generation, so a position named there is wrong by the time a learner reads it. Naming the value ("hasilnya 12") is always safe.
 - Keep the stem short enough to read on a phone screen in a few seconds.
 - Difficulty must come from the reasoning, not from reading burden. Do not ask the learner to verify or describe an entire multi-part analysis in one question (e.g., "which statement correctly describes the whole curve" combining monotonicity, extrema, concavity, and inflection points all at once) — that forces every option into a long paragraph and tests reading stamina instead of the target skill.
 - Narrow the stem to one specific analytic decision (e.g., only monotonicity on a stated interval, or only the location of one extremum, or only concavity on a stated interval). Make that single decision genuinely hard through a subtle or counter-intuitive case, not through combining many facts.
@@ -1436,6 +1438,31 @@ _UNRESOLVED_REASONING_MARKERS = (
     "needs to be revised",
     "need to be revised",
     "the correct answer should reflect",
+    # Indonesian equivalents, all observed in live packs once the provider
+    # reasoning pass was disabled.
+    "saya ubah soal",
+    "saya akan mengubah soal",
+    "mungkin maksudnya",
+    "mungkin soal meminta",
+    "kemungkinan soal meminta",
+    "tidak ada di opsi",
+    "tidak ada dalam opsi",
+    "opsi tidak sesuai",
+    "tidak ada yang cocok",
+)
+
+
+# Options are assigned labels and shuffled after generation, so any text that
+# points at a *position* is wrong by the time a learner reads it. A bare
+# mention ("nilainya lebih kecil dibanding opsi lain") survives the shuffle
+# intact and is not worth burning a retry attempt on.
+_POSITIONAL_OPTION_REFERENCE = re.compile(
+    r"\b(?:option|opsi|pilihan|choice|jawaban)\s*"
+    r"(?:[a-e]\b|[1-4]\b|pertama|kedua|ketiga|keempat|terakhir|first|second|third|fourth|last)"
+    r"|\b(?:first|second|third|fourth|last|pertama|kedua|ketiga|keempat|terakhir)\s+"
+    r"(?:statement|answer|option|choice|pernyataan|jawaban|opsi|pilihan)\b"
+    r"|\b(?:opsi|pilihan|jawaban)\s+(?:di\s+)?(?:atas|bawah)\b"
+    r"|\b(?:the\s+)?(?:above|below)\s+(?:option|choice|answer)\b"
 )
 
 
@@ -1451,17 +1478,15 @@ def _validate_completed_reasoning(questions: list[dict[str, Any]]) -> None:
             raise QuestionGenerationPayloadError(
                 "Generated reasoning contains unresolved self-correction or drafting notes."
             )
-        banned = re.search(r"\b(?:option|opsi|pilihan|choice)\b", diagnostic_text) or re.search(
-            r"\b(?:first|second|third|fourth|pertama|kedua|ketiga|keempat)\s+(?:statement|answer|pernyataan|jawaban)\b",
-            diagnostic_text,
-        )
+        banned = _POSITIONAL_OPTION_REFERENCE.search(diagnostic_text)
         if banned:
-            # Name the offending word: this message is fed back into the retry
-            # prompt, and "must not discuss options" was too abstract to act on.
+            # Name the offending phrase: this message is fed back into the
+            # retry prompt, and "must not discuss options" was too abstract to
+            # act on.
             raise QuestionGenerationPayloadError(
-                "Generated reasoning must not discuss backend-assigned answer options. "
-                f"Remove the word {banned.group(0)!r} from expected_reasoning and explanation "
-                "and state the derivation on its own instead."
+                "Generated reasoning must not point at a backend-assigned answer position. "
+                f"Remove {banned.group(0)!r} from expected_reasoning and explanation and "
+                "state the derivation on its own instead."
             )
 
 
@@ -1663,6 +1688,13 @@ def _fresh_question_response_format(
         "type": "object",
         "additionalProperties": False,
         "properties": {
+            # Written first, discarded by _normalize_fresh_question_payload.
+            # With reasoning disabled the model has nowhere to work, so it was
+            # doing its arithmetic inside expected_reasoning and shipping the
+            # false starts ("Tidak ada di opsi. Mungkin maksudnya...") to the
+            # learner. Giving it a field it knows is private keeps the
+            # scratch work out of the learner-facing text.
+            "scratchpad": {"type": "string"},
             "stem": {"type": "string"},
             "question_type": {
                 "enum": sorted(question_types or VALID_QUESTION_TYPES)
@@ -1692,6 +1724,7 @@ def _fresh_question_response_format(
             "explanation": {"type": "string"},
         },
         "required": [
+            "scratchpad",
             "stem",
             "question_type",
             "correct_answer",
