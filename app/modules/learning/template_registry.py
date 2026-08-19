@@ -115,16 +115,37 @@ def _registry_by_template_id() -> dict[str, TemplateRegistryEntry]:
     return result
 
 
+# When the same lesson exists for more than one renderer, the short alias has
+# to land on exactly one of them. Manim comes first because those templates
+# predate the Remotion set and the aliases already meant them; letting Remotion
+# win would silently change the engine for every existing caller. Either
+# variant is still addressable by its canonical id.
+_ALIAS_ENGINE_PRECEDENCE = ("manim", "remotion")
+
+
 @lru_cache
 def _registry_by_alias() -> dict[str, str]:
     alias_map: dict[str, str] = {}
-    for template_id, entry in _registry_by_template_id().items():
+    registry = _registry_by_template_id()
+    for template_id, entry in registry.items():
         for alias in entry.aliases:
-            if alias in alias_map and alias_map[alias] != template_id:
+            held_by = alias_map.get(alias)
+            if held_by is None or held_by == template_id:
+                alias_map[alias] = template_id
+                continue
+            incumbent = registry[held_by]
+            if incumbent.render_engine == entry.render_engine:
+                # Two templates for the same renderer claiming one alias is a
+                # genuine data error — there is no principled way to pick.
                 raise TemplateRegistryError(
                     f"Alias collision in template registry: {alias} maps to multiple templates."
                 )
-            alias_map[alias] = template_id
+            alias_map[alias] = min(
+                (held_by, template_id),
+                key=lambda candidate: _ALIAS_ENGINE_PRECEDENCE.index(
+                    registry[candidate].render_engine
+                ),
+            )
     return alias_map
 
 
