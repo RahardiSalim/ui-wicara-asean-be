@@ -153,6 +153,12 @@ class AdaptivePretestService:
                 }
             },
             "node_results": {},
+            # The queue of prerequisite nodes the engine descends into once the
+            # target's easy question has been answered. Without it
+            # _ask_next_prerequisite finds nothing to ask and every pretest
+            # stops at target_basic_checked after two questions, which turns
+            # the adaptive pretest into a fixed two-item quiz.
+            "probe_queue": self.graph_builder.build_probe_queue(graph_scope),
             "confidence": 0.0,
             "stop_reason": None,
         }
