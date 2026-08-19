@@ -1814,9 +1814,13 @@ def _max_generation_attempts(*, assessment_type: str | None = None) -> int:
         default_attempts = 2
     else:
         raw_value = os.getenv("WICARA_PRETEST_LLM_MAX_ATTEMPTS", "").strip()
-        # Three 75s attempts still fit inside a 300s function; two did not once
-        # the first one stalled.
-        default_attempts = 3 if assessment_type == "pretest" else DEFAULT_PACK_GENERATION_MAX_ATTEMPTS
+        # Attempts are bounded by the request budget, not by this number: the
+        # loop stops as soon as another attempt could not finish in what is
+        # left. Once throughput routing removed the 250-700s provider draws, a
+        # rejected pack came back in ~20s, so three attempts left most of a
+        # 240s budget unspent. Six lets fast rejections keep retrying while a
+        # slow generation still gets the whole window to itself.
+        default_attempts = 6 if assessment_type == "pretest" else DEFAULT_PACK_GENERATION_MAX_ATTEMPTS
     if not raw_value:
         return default_attempts
     try:

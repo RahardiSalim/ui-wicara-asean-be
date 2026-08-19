@@ -84,10 +84,16 @@ def test_fresh_prompt_uses_curriculum_evidence_misconceptions_and_guidance():
     assert "Prerequisite checks happen only" not in prompt
 
 
-def test_pretest_generation_allows_three_attempts(monkeypatch):
+def test_pretest_generation_allows_six_attempts(monkeypatch):
+    """The request budget, not this number, is what bounds generation.
+
+    A rejected pack comes back in ~20s, so a low attempt cap left most of the
+    240s budget unspent and returned a 503 with time still on the clock.
+    """
+
     monkeypatch.delenv("WICARA_PRETEST_LLM_MAX_ATTEMPTS", raising=False)
 
-    assert _max_generation_attempts(assessment_type="pretest") == 3
+    assert _max_generation_attempts(assessment_type="pretest") == 6
 
 
 def test_fresh_generation_uses_strict_batch_and_option_counts():

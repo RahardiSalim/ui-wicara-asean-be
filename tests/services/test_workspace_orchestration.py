@@ -839,7 +839,10 @@ async def test_checkpoint_decline_metadata_reaches_ai_prompt(monkeypatch):
 
 def test_workspace_tutor_default_timeout_keeps_retries_below_frontend_cap(monkeypatch):
     monkeypatch.delenv("WICARA_WORKSPACE_TUTOR_TIMEOUT_SECONDS", raising=False)
-    assert _tutor_timeout_seconds() == 500.0
+    # Has to leave room inside a 300s serverless function, not just under the
+    # frontend cap: 500s meant the platform killed the request before the
+    # timeout could ever fire.
+    assert _tutor_timeout_seconds() == 240.0
 
 
 @pytest.mark.parametrize(
