@@ -85,12 +85,15 @@ def test_get_knowledge_map_returns_mobile_ready_kurikulum_graph(client, seeded_c
     assert nodes_by_id["km_d_matematika_bilangan_bulat"]["description"] == (
         nodes_by_id["km_d_matematika_bilangan_bulat"]["id_desc"]
     )
-    assert nodes_by_id["km_d_matematika_bilangan_bulat"]["id_desc"].startswith(
-        "Memahami dan menerapkan konsep Bilangan bulat"
-    )
-    assert nodes_by_id["km_d_matematika_bilangan_bulat"]["en_desc"].startswith(
-        "Understand and apply integer concepts"
-    )
+    # Assert the shape the mobile client depends on — a learner-outcome
+    # sentence in each language, about this concept — rather than the exact
+    # seed copy, which is edited far more often than the contract is.
+    id_desc = nodes_by_id["km_d_matematika_bilangan_bulat"]["id_desc"]
+    en_desc = nodes_by_id["km_d_matematika_bilangan_bulat"]["en_desc"]
+    assert id_desc.startswith("Learner dapat ")
+    assert "bilangan bulat" in id_desc.lower()
+    assert en_desc.startswith("Learners can ")
+    assert "integer" in en_desc.lower()
     assert (
         nodes_by_id["km_d_matematika_bilangan_bulat"]["en_desc"]
         != nodes_by_id["km_d_matematika_bilangan_bulat"]["id_desc"]

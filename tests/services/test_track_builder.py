@@ -168,10 +168,13 @@ def test_repair_path_materializes_diagnosed_gap_connectors_and_target(db_session
     )
     db_session.add(artifact)
     db_session.flush()
+    # Creating a workspace already seeds the tutor's opening at index 1, so
+    # this has to append rather than assume an empty event list.
+    next_index = max((event.event_index for event in workspace.events), default=0) + 1
     db_session.add(
         WorkspaceEvent(
             workspace_session_id=workspace.id,
-            event_index=1,
+            event_index=next_index,
             event_type="media_generated",
             actor_type="system",
             text_payload="",
