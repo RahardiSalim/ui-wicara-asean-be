@@ -15,3 +15,7 @@ wicara_mvp_10_manim_templates/**/__pycache__/
 bank_soal/scripts/
 app/modules/question_bank/seed.py
 app/modules/curriculum/data/wicara_kurikulum_merdeka_graph_complete_with_matematika_tingkat_lanjut_dan_aturan_rantai.json
+.vercel
+.env
+.env.*
+!.env.example
