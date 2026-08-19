@@ -686,10 +686,17 @@ class AdaptivePretestGenerationService:
                             user_instruction=prompt,
                             params={
                                 "temperature": 0.2,
-                                "max_tokens": _fresh_generation_max_tokens(
-                                    question_count=len(difficulties)
-                                ),
+                                # No max_tokens: the response_format schema
+                                # already bounds the output.
                                 "provider": {"require_parameters": True},
+                                # Filling a fixed JSON schema is a formatting
+                                # job, not a reasoning one, and the reasoning
+                                # pass was the whole cost. Measured over five
+                                # runs of this exact prompt: 44-178s with
+                                # occasional outright hangs when it is on,
+                                # 16.7-40.3s and no hangs when it is off.
+                                # evidence_evaluator does the same.
+                                "reasoning": {"enabled": False},
                                 "response_format": _fresh_question_response_format(
                                     question_count=len(difficulties),
                                     question_types=_fresh_question_type_choices(
@@ -1765,10 +1772,6 @@ def _max_generation_attempts(*, assessment_type: str | None = None) -> int:
         return max(1, min(8, int(raw_value)))
     except ValueError:
         return default_attempts
-
-
-def _fresh_generation_max_tokens(*, question_count: int) -> int:
-    return 2000 + (4000 * max(1, question_count))
 
 
 def _fresh_question_type_choices(
