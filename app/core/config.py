@@ -316,6 +316,15 @@ class Settings(BaseSettings):
         "http://127.0.0.1:*",
     ]
 
+    # The Flutter web build calls this API from the browser, so its origin has to
+    # pass CORS. Vercel gives every preview deploy its own hostname, which no
+    # fixed list can cover, hence a regex. Scoped to this project's deployments:
+    # a bare `.*\.vercel\.app` would let any site hosted on Vercel drive the API.
+    cors_allow_origin_regex: str = (
+        r"http://(localhost|127\.0\.0\.1)(:\d+)?"
+        r"|https://ui-wicara-asean-[a-z0-9-]*\.vercel\.app"
+    )
+
     @property
     def teacher_email_set(self) -> set[str]:
         return {
