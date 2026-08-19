@@ -34,7 +34,8 @@ DEFAULT_PACK_GENERATION_MAX_ATTEMPTS = 4
 # whole serverless budget (Vercel maxDuration is 300s) and the learner got a
 # 503 after ~298s instead of a retry. Fail the stalled attempt early -- 75s is
 # still five times the normal latency -- so the retry can succeed.
-DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 75.0
+DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 100.0
+MIN_GENERATION_ATTEMPT_SECONDS = 20.0
 
 
 class AssessmentQuestionGenerationError(ValueError):
@@ -666,7 +667,27 @@ class AdaptivePretestGenerationService:
         max_attempts = _max_generation_attempts(assessment_type=assessment_type)
         started_at = time.monotonic()
         total_budget = _generation_total_budget_seconds()
+        nominal_timeout = _fresh_generation_timeout_seconds(
+            assessment_type=assessment_type,
+            ai_request_timeout_seconds=settings.ai_request_timeout_seconds,
+        )
         for attempt in range(1, max_attempts + 1):
+            remaining_budget = total_budget - (time.monotonic() - started_at)
+            # The fastest observed pack takes ~11s; starting an attempt with
+            # less than that on the clock only trades a real error message for
+            # a timeout one.
+            if remaining_budget < MIN_GENERATION_ATTEMPT_SECONDS:
+                break
+            # Generation takes 11-68s when it works and stalls past 90s when it
+            # does not, so a flat per-attempt cap either kills slow-but-valid
+            # packs or leaves budget unspent. Hold back a full attempt's worth
+            # of time only while another attempt could still use it; otherwise
+            # let this one run to the end of the request budget.
+            attempt_timeout = (
+                nominal_timeout
+                if remaining_budget >= nominal_timeout * 2
+                else remaining_budget
+            )
             prompt = _fresh_question_prompt(
                 concept=concept,
                 difficulties=difficulties,
@@ -706,10 +727,7 @@ class AdaptivePretestGenerationService:
                                 ),
                             },
                         ),
-                        timeout=_fresh_generation_timeout_seconds(
-                            assessment_type=assessment_type,
-                            ai_request_timeout_seconds=settings.ai_request_timeout_seconds,
-                        ),
+                        timeout=attempt_timeout,
                     )
                 )
                 try:
@@ -765,20 +783,14 @@ class AdaptivePretestGenerationService:
                     "skill_candidates": skill_candidates or [],
                 }
             except TimeoutError:
-                timeout_seconds = _fresh_generation_timeout_seconds(
-                    assessment_type=assessment_type,
-                    ai_request_timeout_seconds=settings.ai_request_timeout_seconds,
-                )
                 validation_errors.append(
-                    f"attempt {attempt}: generation timed out after {timeout_seconds:g} seconds."
+                    f"attempt {attempt}: generation timed out after {attempt_timeout:g} seconds."
                 )
                 # A stall is the failure most worth retrying: the model answers
                 # in ~14s normally, so the next attempt usually succeeds. This
                 # used to give up here, which made one hung call fail the whole
-                # pretest. Only stop when another attempt could not finish in
-                # what is left of the request budget.
-                if time.monotonic() - started_at + timeout_seconds > total_budget:
-                    break
+                # pretest. The budget check at the top of the loop stops us
+                # when there is no time left to retry in.
             except Exception as exc:
                 validation_errors.append(f"attempt {attempt}: {exc}")
         return None, {
