@@ -105,6 +105,10 @@ Minimum:
 
 Recommended for the full media pipeline:
 
+- `pip install -e .[render]`, which adds Manim and `manim-voiceover`. They are
+  deliberately **not** base dependencies: no API code imports Manim, the worker
+  invokes it as a subprocess, and it drags in a build toolchain that a
+  serverless host cannot satisfy.
 - Redis, unless `MEDIA_JOB_QUEUE_BACKEND=noop`
 - FFmpeg and FFprobe available in `PATH`
 - Manim system dependencies
@@ -460,7 +464,7 @@ a container host.
 | Component | Host | Why |
 |---|---|---|
 | FastAPI API (`app.main:app`) | Vercel | Stateless, database-backed JSON. Fits a serverless function. |
-| Media worker (`app.workers.media_worker`) | Container host | Persistent loop, system binaries, multi-minute renders. |
+| Media worker (`app.workers.media_worker`) | Container host | Persistent loop, system binaries, multi-minute renders. Needs the `render` extra. |
 
 Both hosts share the same Supabase Postgres, Redis queue, and Supabase Storage bucket.
 
@@ -489,9 +493,10 @@ Both hosts share the same Supabase Postgres, Redis queue, and Supabase Storage b
   will exhaust Postgres under serverless concurrency.
 - Set `MEDIA_JOB_QUEUE_BACKEND=redis` against a managed Redis, so API requests can
   enqueue render jobs for the worker to pick up.
-- Drop `manim` from the dependency set installed for the Vercel build. No API code
-  imports it; the worker only ever invokes it as a subprocess. Keeping it risks the
-  250 MB unzipped function limit.
+- Nothing extra to do about Manim: it lives in the `render` extra, not in the
+  base dependencies, so a plain install never pulls scipy, pycairo or manimpango.
+  `vercel.json`, `api/index.py` and `.vercelignore` are committed and configure
+  the entrypoint, a 300 s `maxDuration`, and a bundle without the template packs.
 - Run Alembic migrations out of band. They are not a build step. See
   [Database and Seed Commands](#database-and-seed-commands).
 

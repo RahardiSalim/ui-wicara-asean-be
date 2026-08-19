@@ -1,0 +1,16 @@
+# The renderer and its templates never run on the serverless API; the media
+# worker owns them on a container host. Keeping them out of the bundle saves
+# ~2.6 MB and, more importantly, the Manim toolchain they imply.
+wicara_mvp_10_manim_templates/
+wicara_remotion_templates/
+
+tests/
+docs/
+scripts/
+.venv/
+.pytest_cache/
+**/__pycache__/
+*.pyc
+tmp/
+*.md
+!README.md
