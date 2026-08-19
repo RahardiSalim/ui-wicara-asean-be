@@ -393,7 +393,20 @@ _TUTOR_OUTPUT_SCHEMA: dict[str, Any] = {
 
 _SYSTEM_INSTRUCTION = """
 You are Wicara, a Socratic AI tutor for a STEAM learning platform.
-Reply only in the required language, in 1–3 short sentences and one action.
+You are a warm, patient teacher who is glad this learner showed up. Talk to them
+like a person you know, not like a grading function. Open by acknowledging the
+specific thing they just tried, naming what was right about it however small, so
+they can tell you actually read their work; keep that grounded in what they wrote
+rather than generic praise. Let your phrasing vary the way a real teacher's does,
+and when a learner is stuck make them feel accompanied rather than audited. Never
+lecture, never flatter, but do not be curt.
+Explain, do not just rule. When you affirm or correct something, give the one
+concrete reason it holds — the step, the substitution, the quantity being
+compared — so the learner walks away understanding why, not only that they were
+right or wrong. That is the difference between a verdict and teaching. Earn every
+sentence: elaborate on the idea, never pad with restatement, filler openers, or a
+summary of what you are about to say.
+Reply only in the required language, in 2–4 sentences and one action.
 Context-clarity rule: every action states its referent, action, and purpose. Name the
 specific expression; never say “layers”, “change”, or “pattern” without it. Define a
 new symbol such as u in the same turn. A brief reply such as “x²”, “huh?”, or “okay”
@@ -415,7 +428,7 @@ _PROMPTS: dict[str, str] = {
         "Stage: Engage\n"
         "Conversation so far:\n{history}\n\n"
         "Student latest message: {message}\n\n"
-        "Respond in {response_language} with 1-2 short sentences.\n"
+        "Respond in {response_language} with 2-3 sentences.\n"
         "If this is the first engage turn, use one natural sentence explaining that the "
         "current prerequisite will later support the original target. Do not claim the "
         "learner said they wanted that target, and do not invent a mistake absent from the "
@@ -445,7 +458,7 @@ _PROMPTS: dict[str, str] = {
         "a pattern as identified until "
         "the learner states or uses it. Do not call an Explore activity transfer. When Explore is "
         "complete, give feedback only; put the Explain opening in "
-        "next_phase_opening_prompt. Keep it 1-2 sentences."
+        "next_phase_opening_prompt. Keep it 2-3 sentences."
     ),
     "explain": (
         "Topic: {topic}\n"
@@ -505,7 +518,7 @@ _PROMPTS: dict[str, str] = {
         "Topic: {topic}\n"
         "Conversation so far:\n{history}\n\n"
         "Student: {message}\n\n"
-        "Respond in {response_language} as a Socratic tutor. Be concise (1-3 sentences). "
+        "Respond in {response_language} as a Socratic tutor. Be concise (2-4 sentences). "
         "End with a guiding question or next action suggestion."
     ),
 }
@@ -861,7 +874,10 @@ async def generate_tutor_response(
                     user_instruction=generation_instruction,
                     inputs=ai_inputs,
                     params={
-                        "temperature": 0.0,
+                        # A tutor at 0.0 answers every learner in the same flat
+                        # register. Enough warmth to sound human, low enough to
+                        # keep the phase discipline below.
+                        "temperature": 0.6,
                         "response_format": _tutor_response_format(),
                     },
                 ),
@@ -1406,12 +1422,12 @@ def _fallback_phase_checkpoint_question(
 
 def _enforce_brevity(text: str, *, phase: str) -> str:
     max_sentences = {
-        "engage": 2,
-        "explore": 2,
-        "explain": 4,
-        "elaborate": 3,
-        "evaluate": 3,
-    }.get(phase, 3)
+        "engage": 4,
+        "explore": 4,
+        "explain": 6,
+        "elaborate": 5,
+        "evaluate": 4,
+    }.get(phase, 4)
     stripped = str(text or "").strip()
     if not stripped:
         return stripped
