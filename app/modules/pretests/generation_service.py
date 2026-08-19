@@ -5,6 +5,7 @@ import json
 import os
 import random
 import re
+import time
 from typing import Any
 from uuid import UUID
 
@@ -663,6 +664,8 @@ class AdaptivePretestGenerationService:
 
         validation_errors: list[str] = []
         max_attempts = _max_generation_attempts(assessment_type=assessment_type)
+        started_at = time.monotonic()
+        total_budget = _generation_total_budget_seconds()
         for attempt in range(1, max_attempts + 1):
             prompt = _fresh_question_prompt(
                 concept=concept,
@@ -762,7 +765,13 @@ class AdaptivePretestGenerationService:
                 validation_errors.append(
                     f"attempt {attempt}: generation timed out after {timeout_seconds:g} seconds."
                 )
-                break
+                # A stall is the failure most worth retrying: the model answers
+                # in ~14s normally, so the next attempt usually succeeds. This
+                # used to give up here, which made one hung call fail the whole
+                # pretest. Only stop when another attempt could not finish in
+                # what is left of the request budget.
+                if time.monotonic() - started_at + timeout_seconds > total_budget:
+                    break
             except Exception as exc:
                 validation_errors.append(f"attempt {attempt}: {exc}")
         return None, {
@@ -1722,6 +1731,23 @@ def _extract_pack_payload(payload: Any) -> Any:
         return None
     questions = payload.get("questions")
     return questions if isinstance(questions, dict) else payload
+
+
+def _generation_total_budget_seconds() -> float:
+    """Wall-clock ceiling for all generation attempts in one request.
+
+    The whole HTTP request has to finish inside the serverless function budget
+    (Vercel maxDuration is 300s), so retries are only worth starting while
+    there is room for one to complete.
+    """
+
+    raw_value = os.getenv("WICARA_PRETEST_LLM_TOTAL_BUDGET_SECONDS", "").strip()
+    if raw_value:
+        try:
+            return max(10.0, float(raw_value))
+        except ValueError:
+            pass
+    return 240.0
 
 
 def _max_generation_attempts(*, assessment_type: str | None = None) -> int:
