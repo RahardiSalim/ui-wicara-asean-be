@@ -306,9 +306,13 @@ def test_pretest_start_returns_503_after_ai_generation_timeout(client, monkeypat
     )
 
     assert response.status_code == 503
-    assert "failed validation after bounded retries" in response.json()["detail"]
-    assert "attempt 1: generation timed out after 1 seconds" in response.json()["detail"]
-    assert "attempt 2" not in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert "failed validation after bounded retries" in detail
+    assert "generation timed out after 1 seconds" in detail
+    # A stall is the failure most worth retrying, so the timeout no longer
+    # gives up after the first attempt; it keeps going while the request
+    # budget allows. The detail reports the last few attempts, not all of them.
+    assert "attempt 6" in detail
 
 
 def test_answers_reuse_target_set_reject_duplicate_and_enter_prerequisite_after_easy(client):
@@ -415,7 +419,12 @@ def test_finalize_and_path_selection_create_track(client):
     assert target_metric["evidence_percent"] == 100
     assert target_metric["score_percent"] == 100
     assert target_metric["mastery_estimate_percent"] == 90
-    assert target_metric["confidence_percent"] == 68
+    # 68 is what a bare correct answer scores. This learner also typed their
+    # reasoning, and confidence_for_attempt raises the floor to 0.75 once
+    # reasoning or canvas evidence backs a correct answer, so pinning 68 here
+    # asserted that written work counts for nothing.
+    assert target_metric["confidence_percent"] == 80
+    assert target_metric["confidence_percent"] > 68
     assert target_metric["metric_source"] == "adaptive_pretest_diagnosis"
     assert target_metric["answer_metric_source"] == "official_mcq"
 
