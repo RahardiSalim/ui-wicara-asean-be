@@ -308,25 +308,6 @@ Learner written method:
 """.strip()
 
 
-def _normalize_structured_method_result(
-    payload: dict[str, Any],
-    *,
-    allowed_codes: set[str],
-    source: str,
-) -> dict[str, Any]:
-    method_valid = _optional_bool(payload.get("method_valid"))
-    reasoning_score = _bounded_score(payload.get("reasoning_score"))
-    if reasoning_score is None:
-        reasoning_score = 0.85 if method_valid is True else 0.3 if method_valid is False else 0.5
-    reasoning_signal = str(payload.get("reasoning_signal") or "ai_evaluated").strip()[:64]
-    feedback = str(payload.get("feedback") or "").strip()[:500]
-    evidence_tags = _evidence_tags(payload.get("evidence_tags"))
-    step_results = _normalize_step_results(
-        payload.get("step_results"),
-        allowed_codes=allowed_codes,
-    )
-
-
 def _parse_method_evaluation_json(raw: str) -> dict[str, Any]:
     """Accept the provider's common near-JSON wrapper without trusting its schema."""
 
@@ -353,6 +334,25 @@ def _parse_method_evaluation_json(raw: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Method evaluator response must be a JSON object.")
     return payload
+
+
+def _normalize_structured_method_result(
+    payload: dict[str, Any],
+    *,
+    allowed_codes: set[str],
+    source: str,
+) -> dict[str, Any]:
+    method_valid = _optional_bool(payload.get("method_valid"))
+    reasoning_score = _bounded_score(payload.get("reasoning_score"))
+    if reasoning_score is None:
+        reasoning_score = 0.85 if method_valid is True else 0.3 if method_valid is False else 0.5
+    reasoning_signal = str(payload.get("reasoning_signal") or "ai_evaluated").strip()[:64]
+    feedback = str(payload.get("feedback") or "").strip()[:500]
+    evidence_tags = _evidence_tags(payload.get("evidence_tags"))
+    step_results = _normalize_step_results(
+        payload.get("step_results"),
+        allowed_codes=allowed_codes,
+    )
     raw_code = str(
         payload.get("primary_gap_code")
         or payload.get("suspected_prerequisite_code")
