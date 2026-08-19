@@ -43,7 +43,11 @@ class AISettings(BaseSettings):
         validation_alias=AliasChoices("OPENROUTER_BASE_URL", "WICARA_OPENROUTER_BASE_URL"),
     )
     ai_request_timeout_seconds: float = Field(
-        default=270.0,
+        # Goal resolution makes up to two of these per request and the whole
+        # thing has to land inside a 300s serverless function, so a single call
+        # cannot be allowed to sit for 270s. Observed latency is ~15s; 90s
+        # leaves six times that while still bounding a hung call.
+        default=90.0,
         gt=0,
         validation_alias=AliasChoices(
             "AI_REQUEST_TIMEOUT_SECONDS",
