@@ -28,7 +28,12 @@ from app.modules.review.flagger import enqueue_flag
 PACK_PROMPT_VERSION = "adaptive_node_pack_v6_flexible_subject_tasks"
 FRESH_QUESTION_PROMPT_VERSION = "fresh_assessment_node_batch_v12_graph_path_blueprint"
 DEFAULT_PACK_GENERATION_MAX_ATTEMPTS = 4
-DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 270.0
+# Measured against the live model: a pack normally comes back in ~14s, but the
+# call occasionally hangs outright. At the old 270s a single hang consumed the
+# whole serverless budget (Vercel maxDuration is 300s) and the learner got a
+# 503 after ~298s instead of a retry. Fail the stalled attempt early -- 75s is
+# still five times the normal latency -- so the retry can succeed.
+DEFAULT_PRETEST_LLM_GENERATION_TIMEOUT_SECONDS = 75.0
 
 
 class AssessmentQuestionGenerationError(ValueError):
@@ -1725,7 +1730,9 @@ def _max_generation_attempts(*, assessment_type: str | None = None) -> int:
         default_attempts = 2
     else:
         raw_value = os.getenv("WICARA_PRETEST_LLM_MAX_ATTEMPTS", "").strip()
-        default_attempts = 2 if assessment_type == "pretest" else DEFAULT_PACK_GENERATION_MAX_ATTEMPTS
+        # Three 75s attempts still fit inside a 300s function; two did not once
+        # the first one stalled.
+        default_attempts = 3 if assessment_type == "pretest" else DEFAULT_PACK_GENERATION_MAX_ATTEMPTS
     if not raw_value:
         return default_attempts
     try:

@@ -28,7 +28,10 @@ class TutorImageInput(NamedTuple):
 PROMPT_VERSION = "wicara_5e_natural_progression_v13"
 PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
 # The combined retry budget matches the workspace client's request cap.
-DEFAULT_TUTOR_TIMEOUT_SECONDS = 500.0
+# Must stay under the serverless function budget (Vercel maxDuration 300s) or
+# the platform kills the request before the tutor can return its own graceful
+# degraded reply.
+DEFAULT_TUTOR_TIMEOUT_SECONDS = 240.0
 MAX_SCAFFOLD_LEVEL = 6
 WORKED_EXAMPLE_SCAFFOLD_LEVEL = 3
 _TUTOR_MAX_ATTEMPTS = 2
