@@ -908,7 +908,14 @@ class GoalResolverService:
             response = await ai_client.generate(
                 system_instruction="Return valid JSON only.",
                 user_instruction=prompt,
-                params={"temperature": 0.0, "response_format": {"type": "json_object"}},
+                params={
+                    "temperature": 0.0,
+                    "response_format": {"type": "json_object"},
+                    # Picking the closest concept from a supplied candidate
+                    # list is a matching job, and this runs up to twice per
+                    # resolve inside one serverless request.
+                    "reasoning": {"enabled": False},
+                },
             )
             payload = json.loads(response.text)
             payload["provider"] = response.provider

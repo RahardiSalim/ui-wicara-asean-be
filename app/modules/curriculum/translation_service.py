@@ -47,7 +47,11 @@ def _ai_translate(title: str, description: str, lang_code: str) -> dict[str, str
             ai_client.generate(
                 system_instruction=system,
                 user_instruction=user,
-                params={"temperature": 0.0, "response_format": {"type": "json_object"}},
+                params={
+                    "temperature": 0.0,
+                    "response_format": {"type": "json_object"},
+                    "reasoning": {"enabled": False},
+                },
             )
         )
         data = json.loads(response.text)

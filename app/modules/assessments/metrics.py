@@ -255,7 +255,14 @@ def _evaluate_reasoning_with_ai(
             ai_client.generate(
                 system_instruction="Return valid JSON only.",
                 user_instruction=prompt,
-                params={"temperature": 0.0, "response_format": {"type": "json_object"}},
+                params={
+                    "temperature": 0.0,
+                    "response_format": {"type": "json_object"},
+                    # Scoring a learner's written reasoning into fixed JSON
+                    # fields is a classification job. The reasoning pass runs
+                    # on every answer submission and dominated its latency.
+                    "reasoning": {"enabled": False},
+                },
             )
         )
         payload = json.loads(response.text)
