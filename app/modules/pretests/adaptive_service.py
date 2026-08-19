@@ -235,6 +235,14 @@ class AdaptivePretestService:
             asset = session.get(ImageAsset, canvas_asset_id)
             if asset is None or asset.user_id != user.id:
                 raise LookupError("Canvas asset was not found.")
+        if (
+            question.difficulty_label.lower() == "hard"
+            and not typed_reasoning.strip()
+            and canvas_asset_id is None
+        ):
+            raise ValueError(
+                "Hard questions require typed reasoning or a canvas/photo evidence attachment before submitting."
+            )
 
         evaluation = self.evidence_evaluator.evaluate(
             session,
@@ -688,9 +696,6 @@ def _validated_method_evaluation(
         and str(step.get("status") or "").strip().lower()
         in {"pass", "fail", "not_observed"}
     ] if isinstance(raw_step_results, list) else []
-    failed_codes = {
-        step["concept_code"] for step in step_results if step["status"] == "fail"
-    }
     raw_gap_confidence = normalized.get("gap_confidence")
     gap_confidence = (
         max(0.0, min(1.0, float(raw_gap_confidence)))
@@ -702,9 +707,6 @@ def _validated_method_evaluation(
         raw_code
         if method_valid is False
         and raw_code in allowed_codes
-        and raw_code in failed_codes
-        and gap_confidence is not None
-        and gap_confidence >= 0.7
         else None
     )
     if raw_code and raw_code not in allowed_codes:

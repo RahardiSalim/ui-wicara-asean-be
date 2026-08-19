@@ -50,6 +50,7 @@ def create_workspace(
             content_mode=payload.content_mode,
             workspace_session_id=payload.workspace_session_id,
             start_new_session=payload.start_new_session,
+            demo_session=payload.demo_session,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

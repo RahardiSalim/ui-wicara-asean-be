@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 from typing import Any
@@ -19,6 +20,9 @@ from app.modules.assessments.metrics import (
 from app.modules.evidence.canvas_upload_service import image_asset_file_path
 from app.modules.evidence.models import ImageAsset
 from app.modules.learning.models import AssessmentOption, AssessmentQuestion
+
+
+logger = logging.getLogger(__name__)
 
 
 class PretestEvidenceEvaluator(AssessmentEvidenceEvaluator):
@@ -96,6 +100,8 @@ class PretestEvidenceEvaluator(AssessmentEvidenceEvaluator):
                 reasoning_score=evaluation["reasoning_score"],
                 canvas_score=evaluation["canvas_score"],
             )
+        elif image_asset is not None:
+            evaluation["canvas_status"] = "vision_evaluation_failed"
         if evaluation["is_correct"] and method["method_valid"] is False:
             evaluation["diagnostic_signal"] = "method_invalid_despite_correct_answer"
         return evaluation
@@ -195,6 +201,15 @@ def _evaluate_written_method_with_ai(
         typed_reasoning=reasoning,
         candidates=candidates,
     )
+    params: dict[str, Any] = {
+        "temperature": 0.0,
+        "response_format": {"type": "json_object"},
+    }
+    if image_asset is not None and image_path is not None:
+        # Vision evaluation only extracts visible mathematical evidence. It does
+        # not need a long hidden chain of thought, which otherwise consumes the
+        # small structured-output budget before JSON can be returned.
+        params.update({"max_tokens": 800, "reasoning": {"enabled": False}})
     try:
         response = asyncio.run(
             ai_client.generate(
@@ -211,11 +226,12 @@ def _evaluate_written_method_with_ai(
                     if image_asset is not None and image_path is not None
                     else []
                 ),
-                params={"temperature": 0.0, "response_format": {"type": "json_object"}},
+                params=params,
             )
         )
-        payload = json.loads(response.text)
-    except Exception:
+        payload = _parse_method_evaluation_json(response.text)
+    except Exception as exc:
+        logger.warning("Pretest method evaluation failed: %s", exc)
         return None
     if not isinstance(payload, dict):
         return None
@@ -309,6 +325,34 @@ def _normalize_structured_method_result(
         payload.get("step_results"),
         allowed_codes=allowed_codes,
     )
+
+
+def _parse_method_evaluation_json(raw: str) -> dict[str, Any]:
+    """Accept the provider's common near-JSON wrapper without trusting its schema."""
+
+    candidate = str(raw or "").strip()
+    if candidate.startswith("```"):
+        candidate = re.sub(r"^```(?:json)?\s*", "", candidate, flags=re.IGNORECASE)
+        candidate = re.sub(r"\s*```$", "", candidate).strip()
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start >= 0 and end > start:
+        candidate = candidate[start : end + 1]
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        # Some providers occasionally return a JavaScript-like object despite
+        # response_format=json_object. Repair only bare identifier keys; values
+        # still have to pass JSON decoding and the normal scope validator below.
+        repaired = re.sub(
+            r'([,{]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:',
+            r'\1"\2":',
+            candidate,
+        )
+        payload = json.loads(repaired)
+    if not isinstance(payload, dict):
+        raise ValueError("Method evaluator response must be a JSON object.")
+    return payload
     raw_code = str(
         payload.get("primary_gap_code")
         or payload.get("suspected_prerequisite_code")
@@ -324,11 +368,9 @@ def _normalize_structured_method_result(
         step["concept_code"] == suspected_code and step["status"] == "fail"
         for step in step_results
     ):
-        evidence_tags = [*evidence_tags, "primary_gap_rejected_without_failed_step"]
-        suspected_code = None
+        evidence_tags = [*evidence_tags, "primary_gap_without_step_trace"]
     if suspected_code and (gap_confidence is None or gap_confidence < 0.7):
-        evidence_tags = [*evidence_tags, "primary_gap_rejected_low_confidence"]
-        suspected_code = None
+        evidence_tags = [*evidence_tags, "primary_gap_low_confidence"]
     return {
         "reasoning_score": reasoning_score,
         "reasoning_signal": reasoning_signal,

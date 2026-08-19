@@ -68,7 +68,12 @@ class AIClient:
             return AIGenerationRequest.model_validate(
                 {
                     "provider": provider or self._settings.ai_provider,
-                    "model": model or self._settings.ai_model,
+                    "model": model
+                    or (
+                        self._settings.ai_image_model
+                        if _contains_image_input(inputs)
+                        else self._settings.ai_model
+                    ),
                     "system_instruction": system_instruction,
                     "user_instruction": user_instruction,
                     "inputs": inputs or [],
@@ -80,3 +85,10 @@ class AIClient:
 
 
 ai_client = AIClient()
+
+
+def _contains_image_input(inputs: list[dict[str, Any]] | None) -> bool:
+    return any(
+        isinstance(item, dict) and str(item.get("type") or "").strip().lower() == "image"
+        for item in inputs or []
+    )

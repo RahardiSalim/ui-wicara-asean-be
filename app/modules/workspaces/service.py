@@ -47,7 +47,7 @@ from app.modules.workspaces.schemas import (
 )
 from app.modules.workspaces.tutor import (
     TutorImageInput,
-    fallback_phase_opening_prompt,
+    demo_phase_opening_prompt,
     generate_tutor_response,
 )
 
@@ -127,6 +127,7 @@ def create_or_resume_workspace(
     content_mode: str,
     workspace_session_id: UUID | None = None,
     start_new_session: bool = False,
+    demo_session: bool = False,
 ) -> WorkspaceRead:
     track, module = _resolve_owned_track_module(
         session,
@@ -192,6 +193,7 @@ def create_or_resume_workspace(
                     }
                 ],
                 "visited_5e_phases": ["engage"],
+                "demo_script": bool(demo_session),
             },
         )
         session.add(workspace)
@@ -221,11 +223,12 @@ def create_or_resume_workspace(
         and str(workspace.metadata_json.get("current_phase") or "engage") == "engage"
     ):
         session.flush()
-        opening_prompt = fallback_phase_opening_prompt(
+        opening_prompt = demo_phase_opening_prompt(
             phase="engage",
             topic=workspace.current_topic or "this module",
             learner_language=language,
             learning_context=workspace.metadata_json.get("learning_context"),
+            force_demo=bool(workspace.metadata_json.get("demo_script", False)),
         )
         session.add(
             WorkspaceEvent(
@@ -385,7 +388,7 @@ def advance_workspace_phase(
             current_phase=current_phase,
         )
         if not opening_prompt:
-            opening_prompt = fallback_phase_opening_prompt(
+            opening_prompt = demo_phase_opening_prompt(
                 phase=next_phase,
                 topic=workspace.current_topic or "this module",
                 learner_language=_preferred_language(user),
@@ -494,6 +497,10 @@ def start_posttest(
         session.commit()
 
     try:
+        # The prepared Chain Rule demo owns a fixed, local question pack. Do
+        # not queue it behind the normal async LLM post-test pipeline: the
+        # answer set is already known and can be made active in this request.
+        is_demo_posttest = bool(metadata.get("demo_script", False))
         posttest = _posttest_service.start(
             session,
             user=user,
@@ -501,7 +508,7 @@ def start_posttest(
             learning_goal_id=track.learning_goal_id,
             track_id=track.id,
             module_id=module.id,
-            generate_questions=False,
+            generate_questions=is_demo_posttest,
         )
     except ValueError as exc:
         # Drop anything the failed generation left pending before recording the
@@ -702,12 +709,29 @@ async def append_workspace_event(
         created_at=workspace.created_at,
     )
     current_phase = str(phase_metadata.get("current_phase") or "engage")
+    is_demo_script = bool(phase_metadata.get("demo_script", False))
+    if current_phase == "evaluate" and bool(phase_metadata.get("posttest_eligible")):
+        raise ValueError("Guided workspace is complete. Start the posttest.")
     if checkpoint_declined:
         if not bool(phase_metadata.get("phase_transition_pending", False)):
             raise ValueError("There is no pending phase checkpoint to decline.")
         phase_metadata["phase_transition_pending"] = False
         phase_metadata["phase_readiness_recheck_required"] = current_phase
     workspace.metadata_json = phase_metadata
+    first_engage_reply = (
+        current_phase == "engage"
+        and normalized_event_type == "text"
+        and _is_substantive_engage_reply(text_payload)
+        and not checkpoint_declined
+        and _current_phase_turns(phase_metadata) == 0
+    )
+    # Demo has its own fixed state machine. It must be generated against the
+    # actual server phase, never the normal Engage shortcut.
+    tutor_generation_phase = (
+        current_phase
+        if is_demo_script
+        else ("explore" if first_engage_reply else current_phase)
+    )
 
     # Call AI before saving so audit info goes into event metadata.
     tutor_response, ai_audit = await generate_tutor_response(
@@ -715,14 +739,14 @@ async def append_workspace_event(
         event_type=normalized_event_type,
         text_payload=text_payload,
         events=list(workspace.events),
-        current_phase=current_phase,
+        current_phase=tutor_generation_phase,
         learner_language=_preferred_language(user),
         image_input=tutor_image,
         learner_event_metadata=learner_metadata,
     )
     tutor_response = _sanitize_tutor_response_for_phase(
         phase_metadata,
-        phase=current_phase,
+        phase=tutor_generation_phase,
         event_type=normalized_event_type,
         text_payload=text_payload,
         tutor_response=tutor_response,
@@ -832,6 +856,8 @@ async def append_workspace_event(
         dict(workspace.metadata_json or {}),
         created_at=workspace.created_at,
     )
+    if "demo_script_next_step" in ai_audit:
+        metadata_json["demo_script_step"] = ai_audit["demo_script_next_step"]
     metadata_json = _record_phase_evidence(
         metadata_json,
         phase=current_phase,
@@ -863,14 +889,85 @@ async def append_workspace_event(
             ]
         metadata_json["phase_history"] = history
 
-    # Phase advance is learner-confirmed: the backend only flags readiness here and
-    # waits for POST /workspaces/{id}/advance-phase. Advancing inside this request
-    # would strand the tutor reply (generated for `current_phase`) in the next phase.
     phase_ready = _phase_is_ready(metadata_json, phase=current_phase)
-    if current_phase != "evaluate":
-        min_turns = int(_phase_min_turns(metadata_json).get(current_phase, 1))
-        current_turns = _current_phase_turns(metadata_json)
-        metadata_json["phase_transition_pending"] = phase_ready and current_turns >= min_turns
+    phase_min_turns = int(_phase_min_turns(metadata_json).get(current_phase, 1))
+    phase_transition_ready = (
+        phase_ready and _current_phase_turns(metadata_json) >= phase_min_turns
+    )
+    auto_advance_engage = (
+        not is_demo_script and first_engage_reply and tutor_response is not None
+    )
+    if auto_advance_engage:
+        next_phase = "explore"
+        metadata_json = _advance_metadata_to_phase(
+            metadata_json,
+            next_phase=next_phase,
+        )
+        if tutor_response is not None:
+            tutor_response = tutor_response.model_copy(
+                update={
+                    "next_phase_ready": False,
+                    "phase_reasoning": "automatic_transition_from_engage",
+                    "phase_checkpoint_question": None,
+                    "next_phase_opening_prompt": None,
+                    "evidence_tags": [],
+                    "evidence_request": None,
+                    "explanation_card": None,
+                }
+            )
+        if tutor_event is not None:
+            tutor_event.metadata_json = {
+                **dict(tutor_event.metadata_json or {}),
+                "source": "workspace_auto_phase_opening",
+                "next_phase_ready": False,
+                "phase_reasoning": "automatic_transition_from_engage",
+                "phase_checkpoint_question": None,
+                "next_phase_opening_prompt": None,
+                "evidence_tags": [],
+                "phase": next_phase,
+            }
+        phase_ready = False
+    elif (
+        ai_audit.get("ai_source") == "demo_script"
+        and tutor_response is not None
+        and tutor_response.next_phase_ready
+        and current_phase != "evaluate"
+    ):
+        # The presentation script is a continuous, fixed sequence.  It must
+        # not depend on a learner pressing a hidden checkpoint between turns:
+        # an extra typed reply previously left the script cursor and server
+        # phase out of sync, which made the flow fall back to live AI.
+        phase_index = _PHASE_SEQUENCE.index(current_phase)
+        next_phase = _PHASE_SEQUENCE[phase_index + 1]
+        metadata_json = _advance_metadata_to_phase(
+            metadata_json,
+            next_phase=next_phase,
+        )
+        if current_phase == "elaborate":
+            metadata_json["posttest_eligible"] = True
+            metadata_json["posttest_handoff_reason"] = "demo_elaborate_complete"
+        tutor_response = tutor_response.model_copy(
+            update={
+                "next_phase_ready": False,
+                "phase_checkpoint_question": None,
+                "next_phase_opening_prompt": None,
+                "evidence_request": None,
+            }
+        )
+        if tutor_event is not None:
+            tutor_event.metadata_json = {
+                **dict(tutor_event.metadata_json or {}),
+                "source": "workspace_demo_auto_transition",
+                "next_phase_ready": False,
+                "phase_checkpoint_question": None,
+                "next_phase_opening_prompt": None,
+                "phase": next_phase,
+            }
+        phase_transition_ready = False
+    elif current_phase != "evaluate":
+        # Every phase after Engage remains learner-confirmed through its
+        # contextual checkpoint.
+        metadata_json["phase_transition_pending"] = phase_transition_ready
     elif tutor_response is not None:
         outcome = tutor_response.evaluation_outcome
         if phase_ready and (
@@ -923,39 +1020,39 @@ async def append_workspace_event(
     if tutor_response is not None:
         next_phase_opening_prompt = tutor_response.next_phase_opening_prompt
         if (
-            phase_ready
+            phase_transition_ready
             and current_phase != "evaluate"
             and next_phase_opening_prompt is None
             and _PHASE_SEQUENCE[_PHASE_SEQUENCE.index(current_phase) + 1]
             != "evaluate"
         ):
             phase_index = _PHASE_SEQUENCE.index(current_phase)
-            next_phase_opening_prompt = fallback_phase_opening_prompt(
+            next_phase_opening_prompt = demo_phase_opening_prompt(
                 phase=_PHASE_SEQUENCE[phase_index + 1],
                 topic=workspace.current_topic or "this module",
                 learner_language=_preferred_language(user),
                 learning_context=metadata_json.get("learning_context"),
             )
-        if phase_ready and current_phase == "elaborate":
+        if phase_transition_ready and current_phase == "elaborate":
             # Elaborate now hands directly to the independent posttest. Do not
             # expose or persist a synthetic Evaluate exercise in the workspace.
             next_phase_opening_prompt = None
         tutor_response = tutor_response.model_copy(
             update={
-                "next_phase_ready": phase_ready and current_phase != "evaluate",
+                "next_phase_ready": phase_transition_ready and current_phase != "evaluate",
                 "phase_checkpoint_question": (
                     tutor_response.phase_checkpoint_question
-                    if phase_ready and current_phase != "evaluate"
+                    if phase_transition_ready and current_phase != "evaluate"
                     else None
                 ),
                 "next_phase_opening_prompt": (
                     next_phase_opening_prompt
-                    if phase_ready and current_phase != "evaluate"
+                    if phase_transition_ready and current_phase != "evaluate"
                     else None
                 ),
                 "evidence_request": (
                     None
-                    if phase_ready or tutor_response.evaluation_outcome == "passed"
+                    if phase_transition_ready or tutor_response.evaluation_outcome == "passed"
                     else tutor_response.evidence_request
                 ),
                 "scaffold_level": max(
@@ -1574,6 +1671,12 @@ def _current_phase_turns(metadata: dict[str, Any]) -> int:
     return max(0, _safe_int(last_entry.get("turn_count"), 0))
 
 
+def _is_substantive_engage_reply(text: str) -> bool:
+    """Keep a terse first reply conversationally in Engage before exploration."""
+    normalized = str(text or "").strip()
+    return len(normalized) >= 24 or len(normalized.split()) >= 4
+
+
 def _record_phase_evidence(
     metadata: dict[str, Any],
     *,
@@ -1678,6 +1781,7 @@ def _sanitize_tutor_response_for_phase(
     if phase == "elaborate" and "transfer_correct" in evidence_tags:
         evidence_tags.insert(0, "transfer_attempt")
         evidence_tags = list(dict.fromkeys(evidence_tags))
+    demo_script = tutor_response.phase_reasoning == "demo_script"
     if (
         phase == "explain"
         and "micro_check_correct" in evidence_tags
@@ -1686,6 +1790,7 @@ def _sanitize_tutor_response_for_phase(
             phase="explain",
             tag="learner_explanation",
         )
+        and not demo_script
     ):
         evidence_tags.remove("micro_check_correct")
     if phase == "evaluate":
@@ -1728,7 +1833,20 @@ def _sanitize_tutor_response_for_phase(
                 tutor_response.explanation_card if has_explanation else None
             ),
             "tool_suggestion": (
-                tutor_response.tool_suggestion if phase == "explore" else None
+                tutor_response.tool_suggestion
+                if phase == "explore"
+                or (
+                    phase == "engage"
+                    and tutor_response.tool_suggestion is not None
+                    and tutor_response.tool_suggestion.tool
+                    == "interactive_function_flow"
+                )
+                or (
+                    phase == "explain"
+                    and tutor_response.tool_suggestion is not None
+                    and tutor_response.tool_suggestion.tool == "demo_chain_rule_video"
+                )
+                else None
             ),
         }
     )

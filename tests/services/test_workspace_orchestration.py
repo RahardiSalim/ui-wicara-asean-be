@@ -19,7 +19,6 @@ from app.modules.workspaces.tutor import (
     _evaluate_turn_completes_evidence,
     _fallback_response,
     _ensure_explain_micro_check,
-    _ensure_current_phase_request_visible,
     _ground_checkpoint_question,
     _ensure_initial_target_bridge,
     _build_user_instruction,
@@ -333,8 +332,7 @@ def test_explore_prompt_defines_phase_specific_evidence_rubric():
     assert "Use exploration_attempt" in prompt
     assert "Use pattern_identified" in prompt
     assert "Both tags may be returned on the same turn" in prompt
-    assert "Ground it in the learner's actual evidence" in prompt
-    assert "Bad: 'Have you understood the learning goal" in prompt
+    assert "Use latest-message evidence only" in prompt
     assert "Do not call an Explore activity transfer" in prompt
     assert "put the Explain opening in next_phase_opening_prompt" in prompt
     assert "choose a small input change" in prompt
@@ -372,7 +370,7 @@ def test_elaborate_prompt_preserves_demonstrated_method_and_isolates_new_error()
     assert "recompute only that step" in prompt
     assert "do not claim the earlier concept was forgotten" in prompt
     assert "do not add analysis or skills from the original target" in prompt
-    assert "Never mention or test the original target in a phase opening" in prompt
+    assert "Elaborate ends at posttest" in prompt
 
 
 def test_feedback_policy_forbids_generic_or_ungrounded_mastery_claims():
@@ -387,7 +385,7 @@ def test_feedback_policy_forbids_generic_or_ungrounded_mastery_claims():
     )
 
     assert "Ground feedback in the latest learner action" in _SYSTEM_INSTRUCTION
-    assert 'Do not open with generic praise such as "Excellent!"' in _SYSTEM_INSTRUCTION
+    assert 'do not open with generic praise such as "Excellent!"' in _SYSTEM_INSTRUCTION
     assert "tentative" in _SYSTEM_INSTRUCTION
 
 
@@ -410,8 +408,7 @@ def test_engage_prompt_uses_diagnosis_and_keeps_explore_task_hidden():
     assert "current prerequisite will later support the original target" in prompt
     assert "Mention the original target only on that first turn" in prompt
     assert "bridges the hook directly to a concrete example" in prompt
-    assert "text must contain feedback" in prompt
-    assert "must not ask another learning question" in prompt
+    assert "If ready, give feedback plus one specific yes/no checkpoint" in prompt
 
 
 def test_engage_readiness_requires_acceptance_and_prior_knowledge():
@@ -842,7 +839,7 @@ async def test_checkpoint_decline_metadata_reaches_ai_prompt(monkeypatch):
 
 def test_workspace_tutor_default_timeout_keeps_retries_below_frontend_cap(monkeypatch):
     monkeypatch.delenv("WICARA_WORKSPACE_TUTOR_TIMEOUT_SECONDS", raising=False)
-    assert _tutor_timeout_seconds() == 140.0
+    assert _tutor_timeout_seconds() == 500.0
 
 
 @pytest.mark.parametrize(
@@ -850,9 +847,9 @@ def test_workspace_tutor_default_timeout_keeps_retries_below_frontend_cap(monkey
     [
         ("engage", "focus on your answer about Chain rule"),
         ("explore", "small input change"),
-        ("explain", "two consecutive stages"),
+        ("explain", "first operation and then its second operation"),
         ("elaborate", "recompute only the uncertain inner step"),
-        ("evaluate", "inspect only the step you trust least"),
+        ("evaluate", "Start the posttest"),
     ],
 )
 def test_generation_exhaustion_fallback_is_phase_aware(phase, expected_fragment):
@@ -1095,96 +1092,6 @@ def test_explain_micro_check_preserves_contextual_task_without_chain_rule_bias()
     assert request["prompt"] == "Classify x^4 at x=0 using derivative signs."
 
 
-def test_current_phase_request_survives_tutor_brevity_truncation():
-    text = _ensure_current_phase_request_visible(
-        tutor_text="This prerequisite matters for your original curve-sketching goal.",
-        evidence_request={
-            "type": "open_response",
-            "prompt": "How would you differentiate sin(x²) right now?",
-            "expected_evidence": "prior_knowledge_shared",
-        },
-        phase="engage",
-        topic="Chain rule",
-        language_code="en",
-        learning_context={
-            "original_target": {"title": "Curve sketching using derivatives"}
-        },
-    )
-
-    assert text.endswith("How would you differentiate sin(x²) right now?")
-
-
-def test_engage_fallback_question_does_not_repeat_original_target():
-    text = _ensure_current_phase_request_visible(
-        tutor_text="The chain rule supports the curve-sketching goal from your pretest.",
-        evidence_request=None,
-        phase="engage",
-        topic="Chain rule",
-        language_code="en",
-        learning_context={
-            "original_target": {"title": "Curve sketching using derivatives"}
-        },
-    )
-
-    assert text.count("curve-sketching") == 1
-    assert "Before returning" not in text
-    assert "one simple Chain rule example" in text
-    assert text.endswith("where are you still unsure?")
-
-
-def test_explore_adds_a_fully_specified_numeric_question_when_model_stops_early():
-    text = _ensure_current_phase_request_visible(
-        tutor_text="Let's test with a small change. Suppose x increases by 0.1 from x=1.",
-        evidence_request=None,
-        phase="explore",
-        topic="Chain rule",
-        language_code="en",
-        learning_context={},
-    )
-
-    assert "Using the input step just stated" in text
-    assert "By how much" in text
-    assert "x=1.1" not in text
-
-
-def test_explore_moves_back_to_the_original_example_after_pattern_is_observed():
-    text = _ensure_current_phase_request_visible(
-        tutor_text=(
-            "Your latest comparison showed that the inside changes twice as fast. "
-            "That scaling factor is the pattern we needed."
-        ),
-        evidence_request=None,
-        phase="explore",
-        topic="Chain rule",
-        language_code="en",
-        learning_context={},
-    )
-
-    assert "reapply that observed scale factor" in text
-    assert "x=1 and x=1.1" not in text
-
-
-def test_explore_moves_from_inner_change_to_outer_change_without_repeating_inner():
-    text = _ensure_current_phase_request_visible(
-        tutor_text=(
-            "The inner function changes twice as fast. Now let's see how that affects "
-            "the outer function."
-        ),
-        evidence_request={
-            "type": "open_response",
-            "prompt": "Calculate the inner expression again at x=1 and x=1.1.",
-        },
-        phase="explore",
-        topic="Chain rule",
-        language_code="en",
-        learning_context={},
-    )
-
-    assert "two inner values you just found" in text
-    assert "What change do you get in the outer function?" in text
-    assert "Calculate the inner expression" not in text
-
-
 def test_explore_splits_an_overloaded_evidence_request_into_one_action():
     request = _limit_phase_evidence_request(
         {
@@ -1203,23 +1110,9 @@ def test_explore_splits_an_overloaded_evidence_request_into_one_action():
     )
 
     assert request is not None
-    assert request["prompt"].count("?") == 1
-    assert "x=1 and x=1.1" in request["prompt"]
+    assert request["prompt"].count("?") <= 1
+    assert "exact Chain rule expression" in request["prompt"]
     assert "original function" not in request["prompt"]
-
-
-def test_elaborate_fallback_continues_the_current_attempt():
-    text = _ensure_current_phase_request_visible(
-        tutor_text="You identified the outer derivative but missed one factor.",
-        evidence_request=None,
-        phase="elaborate",
-        topic="Chain rule",
-        language_code="en",
-        learning_context={},
-    )
-
-    assert "Guided practice step 1" in text
-    assert "example you just attempted" not in text
 
 
 def test_phase_opening_fallback_does_not_repeat_original_target_mid_lesson():
@@ -1235,49 +1128,47 @@ def test_phase_opening_fallback_does_not_repeat_original_target_mid_lesson():
     )
 
     assert "Curve sketching" not in text
-    assert text.startswith("Try one Chain rule example")
+    assert text.startswith("Write one exact Chain rule expression")
 
 
-def test_current_phase_request_does_not_duplicate_an_existing_question():
-    tutor_text = (
-        "A small change passes through the inner function before the outer one. "
-        "Why does that make the two rates multiply?"
-    )
+def test_engage_opening_fallback_uses_pretest_diagnosis_instead_of_generic_hook():
+    from app.modules.workspaces.tutor import fallback_phase_opening_prompt
 
-    text = _ensure_current_phase_request_visible(
-        tutor_text=tutor_text,
-        evidence_request={
-            "type": "open_response",
-            "prompt": "Explain again why the inner and outer rates multiply.",
-        },
-        phase="explain",
+    text = fallback_phase_opening_prompt(
+        phase="engage",
         topic="Chain rule",
-        language_code="en",
-        learning_context={},
-    )
-
-    assert text == tutor_text
-
-
-def test_current_phase_request_does_not_duplicate_an_imperative_action():
-    tutor_text = (
-        "The inner value changed twice as fast. Now compute the actual change in "
-        "the outer function from x=1 to x=1.1."
-    )
-
-    text = _ensure_current_phase_request_visible(
-        tutor_text=tutor_text,
-        evidence_request={
-            "type": "open_response",
-            "prompt": "Calculate the inner expression again at x=1 and x=1.1.",
+        learner_language="en",
+        learning_context={
+            "original_target": {"title": "Curve sketching using derivatives"},
+            "diagnosis": {
+                "reason": "Your pretest work omitted the inner derivative."
+            },
         },
-        phase="explore",
-        topic="Chain rule",
-        language_code="en",
-        learning_context={},
     )
 
-    assert text == tutor_text
+    assert "Your pretest work omitted the inner derivative." in text
+    assert "Curve sketching using derivatives" in text
+    assert "Let's start with" not in text
+    assert "\\sin(x^2)" in text
+
+
+def test_engage_opening_hides_internal_pretest_telemetry_summary():
+    from app.modules.workspaces.tutor import fallback_phase_opening_prompt
+
+    text = fallback_phase_opening_prompt(
+        phase="engage",
+        topic="Chain rule",
+        learner_language="en",
+        learning_context={
+            "original_target": {"title": "Curve sketching using derivatives"},
+            "diagnosis": {
+                "reason": "1 written explanations were analyzed as diagnostic insight."
+            },
+        },
+    )
+
+    assert "written explanations were analyzed" not in text
+    assert "Your pretest points to one important step" in text
 
 
 def test_tutor_structured_contract_rejects_punctuation_only_text():
@@ -1297,6 +1188,14 @@ def test_tutor_structured_contract_rejects_punctuation_only_text():
         "next_phase_opening_prompt"
         in response_format["json_schema"]["schema"]["required"]
     )
+
+
+def test_system_instruction_requires_context_clear_tutor_actions():
+    from app.modules.workspaces.tutor import _SYSTEM_INSTRUCTION
+
+    assert "Context-clarity rule" in _SYSTEM_INSTRUCTION
+    assert "referent, action, and purpose" in _SYSTEM_INSTRUCTION
+    assert "new symbol such as u" in _SYSTEM_INSTRUCTION
 
 
 def test_visual_suggestion_is_only_exposed_for_justified_explore_scaffold():

@@ -221,6 +221,51 @@ def test_pretest_start_is_idempotent_and_generates_fresh_target_node_set(client)
         assert stored_question.metadata_json["non_reusable"] is True
 
 
+def test_hard_question_rejects_submission_without_reasoning_or_canvas(client):
+    _override_account(client)
+    learning_goal_id = _confirmed_goal_id(client)
+
+    start = client.post(
+        "/api/v1/pretests/start",
+        json={"learning_goal_id": learning_goal_id},
+    )
+    session_id = start.json()["session_id"]
+    medium_question = start.json()["current_question"]
+    medium_correct = next(
+        option for option in medium_question["options"] if option["text"] == "12"
+    )
+    medium_answer = client.post(
+        f"/api/v1/pretests/{session_id}/answers",
+        json={
+            "question_id": medium_question["id"],
+            "selected_option_id": medium_correct["id"],
+        },
+    )
+    hard_question = medium_answer.json()["next_question"]
+    assert hard_question["difficulty"] == "hard"
+    hard_option = hard_question["options"][0]
+
+    bare_submit = client.post(
+        f"/api/v1/pretests/{session_id}/answers",
+        json={
+            "question_id": hard_question["id"],
+            "selected_option_id": hard_option["id"],
+        },
+    )
+    assert bare_submit.status_code == 400
+    assert "require typed reasoning" in bare_submit.json()["detail"]
+
+    with_reasoning = client.post(
+        f"/api/v1/pretests/{session_id}/answers",
+        json={
+            "question_id": hard_question["id"],
+            "selected_option_id": hard_option["id"],
+            "typed_reasoning": "I counted 6 tables times 4 students then subtracted 2 absent.",
+        },
+    )
+    assert with_reasoning.status_code == 200
+
+
 def test_pretest_start_returns_503_when_ai_is_unavailable(client, monkeypatch):
     _override_account(client)
     monkeypatch.delenv("WICARA_ASSESSMENT_DEV_FALLBACK_QUESTIONS")
@@ -355,7 +400,11 @@ def test_finalize_and_path_selection_create_track(client):
     hard_correct = next(option for option in hard_question["options"] if option["label"] == "B")
     done = client.post(
         f"/api/v1/pretests/{session_id}/answers",
-        json={"question_id": hard_question["id"], "selected_option_id": hard_correct["id"]},
+        json={
+            "question_id": hard_question["id"],
+            "selected_option_id": hard_correct["id"],
+            "typed_reasoning": "6 tables times 4 students each is 24 students seated, then 24 minus the 2 absent students leaves 22 students present.",
+        },
     )
 
     assert done.status_code == 200
@@ -417,7 +466,11 @@ def test_target_hard_wrong_without_step_evidence_finalizes_for_review(client):
 
     probe_response = client.post(
         f"/api/v1/pretests/{session_id}/answers",
-        json={"question_id": hard_question["id"], "selected_option_id": hard_wrong["id"]},
+        json={
+            "question_id": hard_question["id"],
+            "selected_option_id": hard_wrong["id"],
+            "typed_reasoning": "I'm not sure, I just guessed between the options.",
+        },
     )
 
     assert probe_response.status_code == 200

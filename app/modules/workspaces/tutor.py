@@ -11,6 +11,7 @@ from typing import Any, NamedTuple
 from app.modules.ai import ai_client
 from app.modules.ai.errors import AIError, AIProviderError
 from app.modules.ai.schemas import AIGenerationResponse
+from app.core.config import get_settings
 from app.core.language import language_display_name, normalize_language_code
 from app.modules.workspaces.models import WorkspaceEvent, WorkspaceSession
 from app.modules.workspaces.schemas import TutorResponseRead, WorkspaceToolSuggestionRead
@@ -24,14 +25,210 @@ class TutorImageInput(NamedTuple):
     mime_type: str
 
 
-PROMPT_VERSION = "wicara_5e_natural_progression_v10"
+PROMPT_VERSION = "wicara_5e_natural_progression_v13"
 PHASE_SEQUENCE = ("engage", "explore", "explain", "elaborate", "evaluate")
-# Two bounded attempts plus retry overhead must finish before the FE's 5-minute request cap.
-DEFAULT_TUTOR_TIMEOUT_SECONDS = 140.0
+# The combined retry budget matches the workspace client's request cap.
+DEFAULT_TUTOR_TIMEOUT_SECONDS = 500.0
 MAX_SCAFFOLD_LEVEL = 6
 WORKED_EXAMPLE_SCAFFOLD_LEVEL = 3
 _TUTOR_MAX_ATTEMPTS = 2
 _TUTOR_RETRY_BACKOFF_SECONDS = 0.5
+
+
+def demo_script_enabled() -> bool:
+    """Whether the fixed Chain Rule demo is enabled for a local presentation."""
+
+    return bool(get_settings().workspace_demo_script_mode)
+
+
+def _is_demo_chain_rule_workspace(workspace: WorkspaceSession) -> bool:
+    if not demo_script_enabled():
+        return False
+    metadata = workspace.metadata_json if isinstance(workspace.metadata_json, dict) else {}
+    if bool(metadata.get("demo_script", False)):
+        return True
+    context = metadata.get("learning_context")
+    context = context if isinstance(context, dict) else {}
+    candidates = [
+        workspace.current_topic or "",
+        str(metadata.get("active_node_id") or ""),
+        str(context.get("active_node_id") or ""),
+    ]
+    return any(
+        "chain rule" in candidate.casefold()
+        or "chain_rule" in candidate.casefold()
+        or "aturan rantai" in candidate.casefold()
+        or "aturan_rantai" in candidate.casefold()
+        for candidate in candidates
+    )
+
+
+def demo_phase_opening_prompt(
+    *,
+    phase: str,
+    topic: str,
+    learner_language: str | None,
+    learning_context: dict[str, Any] | None = None,
+    force_demo: bool = False,
+) -> str:
+    """Presentation-only phase openings for the deterministic Chain Rule path."""
+
+    is_chain_rule = any(
+        marker in topic.casefold()
+        for marker in ("chain rule", "chain_rule", "aturan rantai", "aturan_rantai")
+    )
+    if not demo_script_enabled() or (not force_demo and not is_chain_rule):
+        return fallback_phase_opening_prompt(
+            phase=phase,
+            topic=topic,
+            learner_language=learner_language,
+            learning_context=learning_context,
+        )
+    prompts = {
+        "engage": (
+            "Let’s look at one answer from your pretest.\n\n"
+            "f(x) = sin(πx²)  →  f′(x) = cos(πx²)\n\n"
+            "You differentiated the sine correctly, but something inside it was left unchanged. "
+            "What part do you think that is?"
+        ),
+        "explain": (
+            "Exactly. Now explain it in your own words: why can’t we stop at cos(πx²)?"
+        ),
+        "elaborate": (
+            "Now let’s see if that idea transfers. Differentiate cos(2x³)."
+        ),
+        "evaluate": "The guided practice is complete. Continue to the post-test.",
+    }
+    prompt = prompts.get(_normalize_phase(phase))
+    if prompt is not None:
+        return prompt
+    return fallback_phase_opening_prompt(
+        phase=phase,
+        topic=topic,
+        learner_language=learner_language,
+        learning_context=learning_context,
+    )
+
+
+def _demo_script_response(
+    *,
+    workspace: WorkspaceSession,
+    phase: str,
+) -> tuple[TutorResponseRead, dict[str, Any]] | None:
+    """Return the next fixed demo turn; learner text intentionally is not judged."""
+
+    if not _is_demo_chain_rule_workspace(workspace):
+        return None
+    metadata = workspace.metadata_json if isinstance(workspace.metadata_json, dict) else {}
+    try:
+        step = max(0, int(metadata.get("demo_script_step", 0)))
+    except (TypeError, ValueError):
+        step = 0
+
+    scripted: dict[int, dict[str, Any]] = {
+        0: {
+            # The learner's first reply answers the fixed Engage opening. The
+            # service advances to Explore only after returning this scripted
+            # response, so labelling it Explore made the first turn miss the
+            # script and invoke the live provider.
+            "phase": "engage",
+            "text": (
+                "Exactly. Let’s see why that matters.\n\n"
+                "Before I explain it, try changing x here: x → πx² → sin(πx²). "
+                "Which part reacts first when x changes?"
+            ),
+            "tool": "interactive_function_flow",
+            "prompt": "Drag x and watch the change move through πx², then sin(πx²).",
+            "ready": True,
+        },
+        1: {
+            "phase": "explore",
+            "text": "Yes—the inner part πx² reacts first. And after πx² changes, what changes next?",
+        },
+        2: {
+            "phase": "explore",
+            "text": "Right. So does the change happen in one step, or does it pass through both functions?",
+        },
+        3: {
+            "phase": "explore",
+            "text": (
+                "Exactly: it passes through both. You have traced the two stages of change.\n\n"
+                "Now explain it in your own words: why can’t we stop at cos(πx²)?"
+            ),
+            "ready": True,
+            "tags": ["exploration_attempt", "pattern_identified"],
+        },
+        4: {
+            "phase": "explain",
+            "text": (
+                "That’s it. Because πx² is also changing, both rates of change matter.\n\n"
+                "d/dx sin(πx²) = cos(πx²) · 2πx\n\n"
+                "We multiply the derivative of the outside by the derivative of the inside. "
+                "This is the Chain Rule.\n\n"
+                "Here is a short video to help you visualize how the change moves through both functions."
+            ),
+            "ready": True,
+            "tags": ["learner_explanation", "micro_check_correct"],
+            "tool": "demo_chain_rule_video",
+            "prompt": "/demo-media/ChainRuleLesson.mp4",
+            "after_text": "Now let’s see if that idea transfers. Differentiate cos(2x³).",
+        },
+        5: {
+            "phase": "elaborate",
+            "text": (
+                "Your Chain Rule structure is correct. Keep that. Check only one thing: "
+                "what is d/dx(2x³)?"
+            ),
+            "tags": ["transfer_attempt"],
+        },
+        6: {
+            "phase": "elaborate",
+            "text": "Right. So your final derivative?",
+            "tags": ["transfer_attempt"],
+        },
+        7: {
+            "phase": "elaborate",
+            "text": "Correct. You can now apply the Chain Rule independently. Your post-test is ready.",
+            "ready": True,
+            "tags": ["transfer_attempt", "transfer_correct"],
+        },
+    }
+    turn = scripted.get(step)
+    if turn is None or turn["phase"] != phase:
+        return None
+    tool = None
+    if turn.get("tool"):
+        tool = WorkspaceToolSuggestionRead(
+            tool=str(turn["tool"]),
+            reason=(
+                "Watch the Chain Rule explanation before applying it."
+                if turn["tool"] == "demo_chain_rule_video"
+                else "Follow the change through the nested functions."
+            ),
+            prompt=str(turn["prompt"]),
+            after_text=(
+                str(turn["after_text"]) if turn.get("after_text") else None
+            ),
+        )
+    response = TutorResponseRead(
+        text=str(turn["text"]),
+        intent=_STAGE_INTENT.get(phase, "ask_followup"),
+        next_actions=_STAGE_ACTIONS.get(phase, ["ask_followup"]),
+        next_phase_ready=bool(turn.get("ready", False)),
+        phase_reasoning="demo_script",
+        phase_checkpoint_question=turn.get("checkpoint"),
+        evidence_tags=list(turn.get("tags", [])),
+        correctness="correct" if turn.get("tags") else "unknown",
+        misconception_status="none",
+        confidence=1.0,
+        tool_suggestion=tool,
+    )
+    return response, {
+        "ai_source": "demo_script",
+        "demo_script_step": step,
+        "demo_script_next_step": step + 1,
+        "degraded": False,
+    }
 
 _ALLOWED_EVIDENCE_TAGS = {
     "challenge_accepted",
@@ -196,51 +393,20 @@ _TUTOR_OUTPUT_SCHEMA: dict[str, Any] = {
 
 _SYSTEM_INSTRUCTION = """
 You are Wicara, a Socratic AI tutor for a STEAM learning platform.
-Guide students using the 5E learning model: Engage, Explore, Explain, Elaborate, Evaluate.
-
-Language rule:
-- Follow the required response language exactly.
-- If required response language is English, write in English.
-- If required response language is Indonesian, write in Indonesian.
-
-Teaching rules:
-- Be concise: avoid long generic monologues.
-- Use 1-3 short sentences and end with at most one guiding question or clear next action.
-- Lead the student to discover the answer. Obey the scaffold policy supplied with each
-  turn: it states the current backend scaffold level and what you may reveal at it.
-- Be warm, encouraging, and precise.
-- Treat a learner hypothesis, guess, or request for a simpler example as tentative. Do
-  not call it understanding, mastery, or a correctly identified rule until the learner
-  has supported it with reasoning or a successful application.
-- Ground feedback in the latest learner action. Name only what changed or was
-  demonstrated in that message. Do not open with generic praise such as "Excellent!",
-  "You've correctly identified...", or "You've shown a solid understanding...".
-- Preserve demonstrated progress. If earlier evidence shows that one skill is already
-  working, keep that skill stable in the next task and isolate the remaining error. Do
-  not reintroduce a resolved misconception unless the latest learner work actually
-  demonstrates it again.
-- If the learner repeats the same conceptual confusion, change teaching strategy instead
-  of paraphrasing the same question: move from diagnosis to a concrete small-change,
-  input-output, comparison, or visual model. For a calculation error, preserve the
-  correct structure and isolate only the uncertain calculation. For terminology
-  confusion, give one short definition plus an example.
-- Avoid repeating the same opening pattern (for example repeated "Imagine..." hooks).
-- Treat the supplied learning context as authoritative. Ground the activity in the
-  diagnosed evidence and remember the learner's original target.
-- Mention the original target only in the first Engage response and in final passed
-  Evaluate feedback. Explore, Explain, Elaborate, micro-checks, and phase-opening tasks
-  must stay inside the current module and must not test original-target subskills.
-- Keep every task inside its current 5E phase. Never display a task for the next phase
-  before the learner confirms the transition.
-- Report evidence only when the latest learner message actually demonstrates it.
-- Never claim mastery merely because the learner says they understand or watches media.
-- When an image accompanies the turn it is the learner's own drawing or worked solution:
-  read it, refer to something concrete you can actually see in it, and judge correctness
-  from the work shown. Never claim to have seen a drawing when no image was supplied.
-- A visualization is an optional Explore scaffold, never a phase requirement.
-- Suggest a visualization only in Explore after the learner has attempted the task and is
-  still confused, has repeated a misconception, or explicitly asks for a visual.
-- Do not suggest a visualization merely because the tool exists.
+Reply only in the required language, in 1–3 short sentences and one action.
+Context-clarity rule: every action states its referent, action, and purpose. Name the
+specific expression; never say “layers”, “change”, or “pattern” without it. Define a
+new symbol such as u in the same turn. A brief reply such as “x²”, “huh?”, or “okay”
+is not readiness: respond to it or clarify before a multi-step task.
+Treat a learner hypothesis as tentative. Ground feedback in the latest learner action;
+do not open with generic praise such as "Excellent!". Preserve demonstrated progress
+and isolate only the remaining error. On repeated confusion, change strategy; for a
+calculation error preserve the method and isolate the arithmetic. Before affirming a
+number, identify its quantity; never confuse a rate with a difference.
+Stay in the supplied phase and report evidence only from the latest message. Mention
+the original target only in first Engage. A visualization is optional only in Explore
+after an attempt plus confusion or an explicit request. For an image, refer only to
+work actually visible in it.
 """.strip()
 
 _PROMPTS: dict[str, str] = {
@@ -266,14 +432,17 @@ _PROMPTS: dict[str, str] = {
         "Conversation so far:\n{history}\n\n"
         "Student: {message}\n\n"
         "Assess the learner's response to the current Explore task. While Explore is not "
-        "complete, give one probing challenge or mini experiment in {response_language} "
+        "complete, first respond to the exact claim, question, or obstacle in the latest "
+        "message. Then give one probing challenge or mini experiment in {response_language} "
         "that pushes discovery. If the learner is unsure why two effects combine, make the "
         "experiment concrete: choose a small input change, track how it changes at each "
-        "layer, and ask one fully specified numerical question the learner can answer. Do not "
-        "stop after merely announcing the input change. Compare the scale factors, and then "
-        "ask the learner to reapply the observed "
-        "pattern to the original task. Do not jump to another analogous example when the "
-        "missing issue is the causal link itself. Do not label a pattern as identified until "
+        "named expression, and ask one fully specified numerical question the learner can "
+        "answer without a calculator. Ask for only one quantity per turn. State why that "
+        "quantity is being found before asking it. Do not stop after merely announcing the "
+        "input change. Compare the scale factors, and then ask the learner to reapply the "
+        "observed pattern to the original task. Do not jump to another analogous example "
+        "unless you first say why it makes the same missing causal link simpler. Do not label "
+        "a pattern as identified until "
         "the learner states or uses it. Do not call an Explore activity transfer. When Explore is "
         "complete, give feedback only; put the Explain opening in "
         "next_phase_opening_prompt. Keep it 1-2 sentences."
@@ -287,7 +456,7 @@ _PROMPTS: dict[str, str] = {
         "shows they successfully applied the discovered model. If they explicitly say they "
         "still cannot explain the reason, stop eliciting and teach the missing conceptual "
         "model concisely (for example, sequential changes act as consecutive scale factors), "
-        "then ask one concrete application question rather than asking for the same "
+        "using the exact expression currently being discussed. Then ask one concrete application question rather than asking for the same "
         "explanation again. If the latest message "
         "itself demonstrates learner_explanation, give a concise grounded formal explanation "
         "and end with exactly one concrete micro-check for the next learner turn. Also return "
@@ -317,7 +486,9 @@ _PROMPTS: dict[str, str] = {
         "next_phase_ready=true only after the context shows three correct applications. "
         "If it is an incorrect attempt, return transfer_attempt and one focused hint. Only "
         "when there is no substantive solution yet, give one new guided application task in "
-        "{response_language}. Keep it strictly within the current topic; do not add analysis "
+        "{response_language}. Name the exact expression, the one step to perform, and which "
+        "already-demonstrated skill the new example keeps stable or which new skill it isolates. "
+        "Keep it strictly within the current topic; do not add analysis "
         "or skills from the original target. When the third application is correct, give "
         "feedback only and leave next_phase_opening_prompt null; the next step is the posttest."
     ),
@@ -326,15 +497,9 @@ _PROMPTS: dict[str, str] = {
         "Stage: Evaluate\n"
         "Conversation so far:\n{history}\n\n"
         "Student answer: {message}\n\n"
-        "Respond in {response_language}. Collect evaluation evidence naturally across turns. "
-        "First assess an independent solution. On the next turn ask the learner to identify "
-        "and correct one plausible error. Independent work plus error analysis completes the "
-        "evaluation; reflection is optional and must never be requested as a required extra "
-        "turn. Request only the next missing item shown by phase_evidence; "
-        "do not ask the learner to recite evidence labels. If incorrect, give a hint without "
-        "revealing the answer. When evaluation_outcome=passed, give concise final feedback "
-        "without a question, connect the demonstrated prerequisite back to the original "
-        "learning target once, and return evidence_request=null."
+        "The guided workspace is complete: the posttest is the Evaluate assessment. Do not "
+        "create a new exercise, ask for evidence, or give a remediation task here. Briefly "
+        "direct the learner to begin the posttest and return evidence_request=null."
     ),
     "chat": (
         "Topic: {topic}\n"
@@ -488,12 +653,31 @@ def _build_user_instruction(
         f"- If a curriculum concept name has no clean translation, keep the concept term but explain it in {response_language}.\n"
         "- Keep wording natural and concise for student chat."
     )
+    phase_evidence = learning_context.get("phase_evidence")
+    active_context: dict[str, Any] = {
+        "scaffold_level": scaffold_level,
+        "phase_evidence": phase_evidence[-6:] if isinstance(phase_evidence, list) else [],
+    }
+    if current_phase == "engage":
+        active_context["diagnosis"] = learning_context.get("diagnosis", {})
+        active_context["original_target"] = learning_context.get("original_target", {})
+    if current_phase == "elaborate":
+        active_context["applications"] = learning_context.get("elaborate_application_count", 0)
+        active_context["correct_applications"] = learning_context.get(
+            "elaborate_success_count", 0
+        )
+    active_transition = (
+        f"Phase {current_phase}; next {next_phase or 'none'}. Ready only when: "
+        f"{_PHASE_TRANSITION_CRITERIA.get(current_phase, _PHASE_TRANSITION_CRITERIA['engage'])}. "
+        f"Evidence: {_PHASE_EVIDENCE_GUIDANCE.get(current_phase, '')}. "
+        "Use latest-message evidence only. If ready, give feedback plus one specific yes/no "
+        "checkpoint; otherwise checkpoint is null. Elaborate ends at posttest."
+    )
     return "\n\n".join(
         [
-            language_context,
+            f"Reply only in {response_language}.",
             scaffold_instruction,
-            "Authoritative learning context:\n"
-            + json.dumps(learning_context, ensure_ascii=False, default=str),
+            "Context: " + json.dumps(active_context, ensure_ascii=False, default=str),
             template.format(
                 topic=topic,
                 history=history,
@@ -502,7 +686,7 @@ def _build_user_instruction(
                 response_language=response_language,
             ),
             checkpoint_instruction,
-            transition_instruction,
+            active_transition,
         ]
     )
 
@@ -529,6 +713,30 @@ async def generate_tutor_response(
     topic = workspace.current_topic or "this module"
     history = _build_history(events)
     phase = _normalize_phase(current_phase)
+    demo_response = _demo_script_response(workspace=workspace, phase=phase)
+    if demo_response is not None:
+        # A small deliberate pause makes the pre-scripted tutor feel like a real
+        # turn without risking a provider timeout during a live presentation.
+        await asyncio.sleep(2)
+        return demo_response
+    if _is_demo_chain_rule_workspace(workspace):
+        # A presentation session must never silently fall back to the live
+        # provider. This only occurs if an old/corrupt session has an
+        # impossible script cursor; the learner can reopen the prepared demo.
+        return (
+            TutorResponseRead(
+                text=(
+                    "This prepared demo has reached an out-of-sequence step. "
+                    "Please reopen Prepared Chain Rule demo from Tracks."
+                ),
+                intent="ask_followup",
+                next_actions=["restart_demo"],
+                phase_reasoning="demo_script_out_of_sequence",
+                misconception_status="none",
+                confidence=1.0,
+            ),
+            {"ai_source": "demo_script_out_of_sequence", "degraded": False},
+        )
     language_code, response_language, language_source = _resolve_response_language(
         learner_language=learner_language,
         latest_message=text_payload,
@@ -637,7 +845,15 @@ async def generate_tutor_response(
     ai_response: AIGenerationResponse | None = None
     generation_instruction = user_instruction
     generation_attempt = 0
+    timeout_budget_seconds = _tutor_timeout_seconds()
+    deadline = asyncio.get_running_loop().time() + timeout_budget_seconds
     for generation_attempt in range(1, _TUTOR_MAX_ATTEMPTS + 1):
+        remaining_seconds = deadline - asyncio.get_running_loop().time()
+        if remaining_seconds <= 0:
+            last_error = TimeoutError(
+                f"Tutor response exceeded the {timeout_budget_seconds:.0f}-second total timeout."
+            )
+            break
         try:
             ai_response = await asyncio.wait_for(
                 ai_client.generate(
@@ -649,7 +865,7 @@ async def generate_tutor_response(
                         "response_format": _tutor_response_format(),
                     },
                 ),
-                timeout=_tutor_timeout_seconds(),
+                timeout=remaining_seconds,
             )
         except (AIError, TimeoutError) as exc:
             last_error = exc
@@ -789,15 +1005,6 @@ async def generate_tutor_response(
         )
     if next_phase_ready or (phase == "evaluate" and completes_evaluate):
         parsed["evidence_request"] = None
-    else:
-        tutor_text = _ensure_current_phase_request_visible(
-            tutor_text=tutor_text,
-            evidence_request=parsed["evidence_request"],
-            phase=phase,
-            topic=topic,
-            language_code=language_code,
-            learning_context=learning_context,
-        )
     audit["structured_parse_ok"] = parsed["parse_ok"]
     if not parsed["parse_ok"]:
         audit["structured_parse_fallback"] = True
@@ -1252,22 +1459,21 @@ def _anti_repeat_response(
         prompts = {
             "engage": f"Kita fokus pada jawabanmu tentang {topic}. Bagian mana yang paling ingin kamu uji?",
             "explore": (
-                "Kita ganti cara: pilih perubahan kecil pada input, ikuti perubahan itu "
-                "melewati setiap lapisan, lalu bandingkan faktor skalanya. Apa yang berubah "
-                "pada lapisan pertama?"
+                "Kita ganti cara. Tulis ekspresi tepat yang sedang kita bahas, lalu pilih "
+                "satu perubahan kecil pada input dan hitung perubahan pada operasi pertamanya. "
+                "Ini menunjukkan nilai apa yang diteruskan ke operasi berikutnya."
             ),
             "explain": (
-                "Jangan ulangi rumusnya dulu: satu perubahan melewati dua tahap berurutan, "
-                "jadi skala tahap pertama memengaruhi input tahap kedua. Coba terapkan model "
-                "dua tahap itu pada contoh yang baru dibahas."
+                "Gunakan ekspresi yang baru dibahas: tulis operasi pertama lalu operasi kedua. "
+                "Perubahan dari operasi pertama menjadi input bagi operasi kedua; jelaskan "
+                "bagaimana dua faktor perubahan itu digabungkan."
             ),
             "elaborate": (
                 "Pertahankan struktur yang sudah benar dan periksa hanya hitungan bagian "
                 "dalam yang masih meragukan. Berapa hasil langkah itu setelah dihitung ulang?"
             ),
             "evaluate": (
-                "Pertahankan jawabanmu dan periksa satu langkah yang paling meragukan tanpa "
-                "mengganti seluruh metode. Apa koreksi spesifiknya?"
+                "Latihan workspace sudah selesai. Lanjutkan ke posttest untuk evaluasi mandiri."
             ),
         }
         return prompts.get(
@@ -1279,21 +1485,21 @@ def _anti_repeat_response(
     prompts = {
         "engage": f"Let's focus on your answer about {topic}. Which part would you test first?",
         "explore": (
-            "Let's switch methods: choose a small input change, track it through each "
-            "layer, and compare the scale factors. What changes at the first layer?"
+            "Let's switch methods. Write the exact expression we are discussing, then choose "
+            "one small input change and calculate the change after its first operation. This "
+            "shows what value reaches the next operation."
         ),
         "explain": (
-            "Pause the formula: one change passes through two consecutive stages, so the "
-            "first scale changes what reaches the second. Apply that two-stage model to "
-            "the example we just discussed."
+            "Use the expression we just discussed: write its first operation and then its "
+            "second operation. The first change becomes input to the second, so explain how "
+            "their change factors combine."
         ),
         "elaborate": (
             "Keep the structure that already works and recompute only the uncertain inner "
             "step. What does that step give after you check it?"
         ),
         "evaluate": (
-            "Keep your solution and inspect only the step you trust least instead of "
-            "replacing the whole method. What specific correction is needed?"
+            "The guided workspace is complete. Start the posttest for the independent evaluation."
         ),
     }
     return prompts.get(
@@ -1435,35 +1641,108 @@ def fallback_phase_opening_prompt(
     """Return a phase-local opening only for legacy handoffs without an AI prompt."""
     normalized = _normalize_phase(phase)
     language_code = normalize_language_code(learner_language)
+    if normalized == "engage":
+        return _engage_opening_from_pretest(
+            topic=topic,
+            language_code=language_code,
+            learning_context=learning_context or {},
+        )
     if language_code == "id":
         prompts = {
-            "engage": f"Kita mulai dari {topic}. Apa yang sudah kamu perhatikan atau ingat tentang topik ini?",
-            "explore": f"Coba satu contoh {topic}: pisahkan bagian-bagiannya dan ceritakan pola yang kamu temukan.",
+            "explore": (
+                f"Tulis satu ekspresi tepat untuk contoh {topic} yang ingin kita cek. "
+                "Kita akan menamai setiap operasinya agar bisa melacak perubahan inputnya."
+            ),
             "explain": (
-                f"Dari pola yang baru kamu temukan, bagaimana kamu menjelaskan {topic} dengan kata-katamu sendiri?"
+                f"Gunakan ekspresi {topic} yang baru kamu selesaikan: sebutkan operasinya "
+                "secara berurutan dan jelaskan mengapa hasil tiap operasi memengaruhi operasi berikutnya."
             ),
             "elaborate": (
-                f"Sekarang kita latihan {topic} bertahap. Mulai dari contoh baru ini dan tunjukkan alasan untuk setiap langkahmu."
+                f"Pilih satu ekspresi baru untuk menerapkan {topic}. Tunjukkan satu langkah "
+                "yang ingin kamu periksa, supaya kita bisa memisahkan aturan yang sudah kuat dari yang baru dilatih."
             ),
             "evaluate": (
-                f"Kerjakan satu contoh baru tentang {topic} secara mandiri dan tuliskan langkah lengkapmu tanpa petunjuk."
+                "Latihan workspace sudah selesai. Lanjutkan ke posttest untuk evaluasi mandiri."
             ),
         }
     else:
         prompts = {
-            "engage": f"Let's start with {topic}. What do you already notice or remember about it?",
-            "explore": f"Try one {topic} example: separate its parts and describe the pattern you find.",
+            "explore": (
+                f"Write one exact {topic} expression you want to inspect. We will name each "
+                "operation so we can trace how an input change moves through it."
+            ),
             "explain": (
-                f"From the pattern you just found, how would you explain {topic} in your own words?"
+                f"Use the exact {topic} expression you just solved: name its operations in "
+                "order and explain why the output of one operation affects the next."
             ),
             "elaborate": (
-                f"Now we will practise {topic} in a short guided ladder. Start with this new example and justify each step."
+                f"Choose one new expression for applying {topic}. Show one step you want to "
+                "check, so we can separate the rule that is stable from the rule being practised."
             ),
             "evaluate": (
-                f"Solve one new {topic} example independently and show your complete reasoning without hints."
+                "The guided workspace is complete. Continue to the posttest for the independent evaluation."
             ),
         }
     return prompts.get(normalized, f"What do you already know about {topic}?")
+
+
+def _engage_opening_from_pretest(
+    *,
+    topic: str,
+    language_code: str,
+    learning_context: dict[str, Any],
+) -> str:
+    diagnosis = learning_context.get("diagnosis")
+    diagnosis = diagnosis if isinstance(diagnosis, dict) else {}
+    reason = _learner_facing_diagnosis_reason(
+        str(diagnosis.get("reason") or "").strip()
+    )
+    original_target = learning_context.get("original_target")
+    original_target = original_target if isinstance(original_target, dict) else {}
+    target = str(original_target.get("title") or "").strip()
+    topic_key = topic.casefold()
+    is_chain_rule = "chain" in topic_key or "rantai" in topic_key
+
+    if language_code == "id":
+        diagnosis_line = reason or f"Hasil pretest menunjukkan ada langkah penting pada {topic} yang perlu kita cek."
+        bridge = (
+            f"Kita rapikan ini sebelum kembali ke {target}."
+            if target
+            else f"Kita rapikan bagian {topic} ini dulu."
+        )
+        question = (
+            "Pada $f(x)=\\sin(x^2)$, bagian mana yang berubah lebih dulu ketika $x$ berubah?"
+            if is_chain_rule
+            else f"Pada satu contoh {topic}, langkah mana yang menurutmu perlu diperiksa lebih dulu?"
+        )
+    else:
+        diagnosis_line = reason or f"Your pretest points to one important step in {topic} to check."
+        bridge = (
+            f"Let's repair it before returning to {target}."
+            if target
+            else f"Let's repair that part of {topic}."
+        )
+        question = (
+            "In $f(x)=\\sin(x^2)$, which expression changes first when $x$ changes?"
+            if is_chain_rule
+            else f"In one {topic} example, which step would you check first?"
+        )
+    return f"{diagnosis_line} {bridge} {question}"
+
+
+def _learner_facing_diagnosis_reason(reason: str) -> str:
+    """Keep pretest processing telemetry out of the learner-facing opening."""
+    telemetry_markers = (
+        "written explanations were analyzed",
+        "work images were vision-evaluated",
+        "canvas submissions were stored",
+        "diagnostic insight",
+        "penjelasan tertulis dianalisis",
+        "foto/coretan dianalisis",
+    )
+    if any(marker in reason.casefold() for marker in telemetry_markers):
+        return ""
+    return reason
 
 
 def _tutor_response_format() -> dict[str, Any]:
@@ -1475,80 +1754,6 @@ def _tutor_response_format() -> dict[str, Any]:
             "schema": _TUTOR_OUTPUT_SCHEMA,
         },
     }
-
-
-def _ensure_current_phase_request_visible(
-    *,
-    tutor_text: str,
-    evidence_request: dict[str, Any] | None,
-    phase: str,
-    topic: str,
-    language_code: str,
-    learning_context: dict[str, Any],
-) -> str:
-    request = evidence_request if isinstance(evidence_request, dict) else {}
-    prompt = str(request.get("prompt") or "").strip()
-    if "?" in tutor_text or _contains_visible_action(tutor_text):
-        return tutor_text
-    normalized_phase = _normalize_phase(phase)
-    if normalized_phase == "explore" and re.search(
-        r"\b(?:small (?:step|change)|input step|h\s*=|delta x|Δx)\b",
-        tutor_text,
-        flags=re.IGNORECASE,
-    ):
-        fallback = (
-            "Dengan langkah input yang baru disebut, hitung nilai bagian dalam sebelum "
-            "dan sesudah perubahan. Berapa besar perubahannya?"
-            if language_code == "id"
-            else "Using the input step just stated, calculate the inner-function value "
-            "before and after the change. By how much does it change?"
-        )
-    elif normalized_phase == "explore" and re.search(
-        r"\bouter (?:function|layer)\b",
-        tutor_text,
-        flags=re.IGNORECASE,
-    ):
-        fallback = (
-            "Gunakan dua nilai bagian dalam yang baru kamu temukan untuk menghitung "
-            "nilai fungsi luarnya. Berapa perubahan pada bagian luar?"
-            if language_code == "id"
-            else "Use the two inner values you just found to calculate the corresponding "
-            "outer-function values. What change do you get in the outer function?"
-        )
-    elif normalized_phase == "explore" and re.search(
-        r"\b(?:scaling factor|scale factor|twice as|faktor skala|dua kali|pola)\b",
-        tutor_text,
-        flags=re.IGNORECASE,
-    ):
-        fallback = (
-            "Sekarang terapkan faktor skala yang kamu temukan pada turunan di "
-            "contoh awalmu. Apa turunan lengkap yang kamu peroleh?"
-            if language_code == "id"
-            else "Now reapply that observed scale factor to the derivative in your "
-            "original example. What complete derivative do you get?"
-        )
-    elif prompt and prompt.casefold() not in tutor_text.casefold():
-        return f"{tutor_text.rstrip()}\n\n{prompt}".strip()
-    elif prompt:
-        return tutor_text
-    else:
-        fallback = _fallback_current_phase_request(
-            phase=phase,
-            topic=topic,
-            language_code=language_code,
-            learning_context=learning_context,
-        )
-    return f"{tutor_text.rstrip()}\n\n{fallback}".strip()
-
-
-def _contains_visible_action(text: str) -> bool:
-    return bool(
-        re.search(
-            r"(?:^|[.!]\s+)(?:now\s+)?(?:calculate|compute|try|apply|explain|write|compare|state|identify|differentiate|solve|hitung|coba|terapkan|jelaskan|tulis|bandingkan|sebutkan|tentukan)\b",
-            str(text or ""),
-            flags=re.IGNORECASE,
-        )
-    )
 
 
 def _limit_phase_evidence_request(
@@ -1619,29 +1824,37 @@ def _fallback_current_phase_request(
         prompts = {
             "engage": f"Bagaimana kamu sekarang menangani satu contoh sederhana {topic}, dan bagian mana yang masih membuatmu ragu?",
             "explore": (
-                "Hitung nilai ekspresi bagian dalam pada x=1 dan x=1,1. "
-                "Ketika x berubah 0,1, berapa perubahan nilai bagian dalam itu?"
+                f"Tulis ekspresi tepat {topic} yang sedang kita gunakan. Lalu hitung satu "
+                "nilai bagian dalam sebelum dan sesudah perubahan input kecil; ini menunjukkan "
+                "perubahan yang diteruskan ke operasi berikutnya."
             ),
-            "explain": "Bagian mana dari idenya yang masih belum jelas, dan bagaimana kamu akan menjelaskan bagian itu sekarang?",
+            "explain": (
+                f"Pada ekspresi {topic} yang baru dibahas, sebutkan operasi pertama dan kedua, "
+                "lalu jelaskan mengapa faktor perubahan keduanya digabungkan."
+            ),
             "elaborate": (
                 f"Latihan bertahap langkah {application_step}: terapkan konsep pada "
                 "contoh baru ini dan tunjukkan alasan untuk setiap langkahmu."
             ),
-            "evaluate": f"Langkah apa yang masih perlu kamu periksa dalam solusi {topic} ini?",
+            "evaluate": "Latihan workspace sudah selesai. Mulai posttest untuk evaluasi mandiri.",
         }
     else:
         prompts = {
             "engage": f"How would you currently handle one simple {topic} example, and where are you still unsure?",
             "explore": (
-                "Calculate the inner expression at x=1 and x=1.1. When x changes "
-                "by 0.1, by how much does that inner value change?"
+                f"Write the exact {topic} expression we are using. Then calculate one inner "
+                "value before and after a small input change; this shows what change reaches "
+                "the next operation."
             ),
-            "explain": "Which part of the idea is still unclear, and how would you explain that part now?",
+            "explain": (
+                f"For the {topic} expression just discussed, name the first and second "
+                "operations, then explain why their change factors combine."
+            ),
             "elaborate": (
                 f"Guided practice step {application_step}: apply the concept to this "
                 "new example and show the reason for each step."
             ),
-            "evaluate": f"Which step in this {topic} solution still needs checking?",
+            "evaluate": "The guided workspace is complete. Start the posttest for the independent evaluation.",
         }
     return prompts.get(_normalize_phase(phase), f"What would you try next with {topic}?")
 
