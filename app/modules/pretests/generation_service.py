@@ -1295,6 +1295,7 @@ Question quality requirements:
 - stem must contain only the learner-facing question. Never append a note, summary, or commentary explaining why the question is well-designed, what the distractors represent, or how skill_trace/expected_reasoning/explanation were written.
 - Never mention field names from this schema (stem, skill_trace, expected_reasoning, explanation, distractors, correct_answer, question_type) to the learner in any field's visible text.
 - expected_reasoning and explanation must contain only the derivation or justification of the correct result. Never discuss, compare, number, or name answer options there because the backend assigns and shuffles options after generation.
+- Hard lexical rule for expected_reasoning and explanation: the words "option", "opsi", "pilihan", "choice", and the phrases "jawaban pertama/kedua/ketiga/keempat" and "first/second/third/fourth answer" are forbidden there. Write "hasilnya" or "nilai yang benar" instead of "pilihan yang benar". A pack containing any of those words is rejected outright.
 - Keep the stem short enough to read on a phone screen in a few seconds.
 - Difficulty must come from the reasoning, not from reading burden. Do not ask the learner to verify or describe an entire multi-part analysis in one question (e.g., "which statement correctly describes the whole curve" combining monotonicity, extrema, concavity, and inflection points all at once) — that forces every option into a long paragraph and tests reading stamina instead of the target skill.
 - Narrow the stem to one specific analytic decision (e.g., only monotonicity on a stated interval, or only the location of one extremum, or only concavity on a stated interval). Make that single decision genuinely hard through a subtle or counter-intuitive case, not through combining many facts.
@@ -1450,12 +1451,17 @@ def _validate_completed_reasoning(questions: list[dict[str, Any]]) -> None:
             raise QuestionGenerationPayloadError(
                 "Generated reasoning contains unresolved self-correction or drafting notes."
             )
-        if re.search(r"\b(?:option|opsi|pilihan|choice)\b", diagnostic_text) or re.search(
+        banned = re.search(r"\b(?:option|opsi|pilihan|choice)\b", diagnostic_text) or re.search(
             r"\b(?:first|second|third|fourth|pertama|kedua|ketiga|keempat)\s+(?:statement|answer|pernyataan|jawaban)\b",
             diagnostic_text,
-        ):
+        )
+        if banned:
+            # Name the offending word: this message is fed back into the retry
+            # prompt, and "must not discuss options" was too abstract to act on.
             raise QuestionGenerationPayloadError(
-                "Generated reasoning must not discuss backend-assigned answer options."
+                "Generated reasoning must not discuss backend-assigned answer options. "
+                f"Remove the word {banned.group(0)!r} from expected_reasoning and explanation "
+                "and state the derivation on its own instead."
             )
 
 
