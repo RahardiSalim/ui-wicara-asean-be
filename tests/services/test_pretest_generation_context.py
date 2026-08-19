@@ -2,6 +2,7 @@ from sqlalchemy import select
 
 import pytest
 
+from app.modules.pretests import generation_service
 from app.modules.curriculum.models import KnowledgeConcept
 from app.modules.curriculum.seed import seed_curriculum
 from app.modules.pretests.adaptive_service import (
@@ -140,6 +141,7 @@ def test_curve_sketching_pretest_uses_cached_golden_flow_questions(monkeypatch):
         code="km_f_matematika_tingkat_lanjut_sketsa_kurva_menggunakan_turunan",
         title="Sketsa kurva menggunakan turunan",
     )
+    monkeypatch.setenv("WICARA_GOLDEN_FLOW_QUESTION_CACHE", "true")
 
     async def unexpected_ai_call(**_kwargs):
         raise AssertionError("The golden-flow cache must not call the LLM.")
@@ -516,3 +518,21 @@ def test_hard_trace_must_cover_generic_selected_path():
         assert "outer.skill" in str(error)
     else:
         raise AssertionError("A hard question missing a selected path skill must be rejected")
+
+
+def test_golden_flow_cache_is_disabled_by_default(monkeypatch):
+    """A learner on a cached concept must still get generated questions."""
+
+    monkeypatch.delenv("WICARA_GOLDEN_FLOW_QUESTION_CACHE", raising=False)
+    concept = KnowledgeConcept(
+        code="km_f_matematika_tingkat_lanjut_sketsa_kurva_menggunakan_turunan",
+        title="Sketsa kurva menggunakan turunan",
+    )
+
+    assert (
+        generation_service._golden_flow_pretest_cache(
+            concept=concept,
+            assessment_type="pretest",
+        )
+        is None
+    )

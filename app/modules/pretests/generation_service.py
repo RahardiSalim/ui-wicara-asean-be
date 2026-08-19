@@ -1016,6 +1016,14 @@ def _golden_flow_pretest_cache(
     concept: KnowledgeConcept,
     assessment_type: str,
 ) -> dict[str, dict[str, Any]] | None:
+    """Return curated questions for a scripted demo run, if one is enabled.
+
+    This bypasses the model completely, so it stays behind an opt-in flag. A
+    normal learner on these concepts must get freshly generated questions.
+    """
+
+    if not _allow_golden_flow_question_cache():
+        return None
     if assessment_type != "pretest":
         return None
     return _AUTHORED_FALLBACK_PACKS.get(concept.code)
@@ -1930,6 +1938,14 @@ def _fallback_question_variant(
         "freshness_note": "Deterministic fallback variant; not reusable in future assessments.",
         "misconception_tags": [],
         "skill_trace": skill_trace,
+    }
+
+
+def _allow_golden_flow_question_cache() -> bool:
+    return os.getenv("WICARA_GOLDEN_FLOW_QUESTION_CACHE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
     }
 
 
