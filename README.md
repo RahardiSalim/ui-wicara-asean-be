@@ -448,6 +448,57 @@ The Compose services expose:
 | `backend` | `8000` | FastAPI API, `/health`, `/docs`, static local media mount. |
 | `media-worker` | none | Optional worker, enabled with `--profile worker`. |
 
+## Deployment
+
+The backend deploys as two pieces, because the API and the media pipeline have
+incompatible runtime needs. The stateless API runs on Vercel; media rendering runs on
+a container host.
+
+| Component | Host | Why |
+|---|---|---|
+| FastAPI API (`app.main:app`) | Vercel | Stateless, database-backed JSON. Fits a serverless function. |
+| Media worker (`app.workers.media_worker`) | Container host | Persistent loop, system binaries, multi-minute renders. |
+
+Both hosts share the same Supabase Postgres, Redis queue, and Supabase Storage bucket.
+
+### Why the media pipeline cannot run on Vercel
+
+- `app/modules/learning/render_engine.py` invokes Manim as `sys.executable -m manim`
+  through `subprocess`. That needs cairo, pango, and FFmpeg installed at the system
+  level, and Vercel's Python runtime has no way to install them.
+- `app/modules/learning/remotion_render_engine.py` shells out to `npx`, which needs a
+  Node toolchain and headless Chromium.
+- `MEDIA_FFMPEG_BINARY` and `MEDIA_FFPROBE_BINARY` both assume FFmpeg on `PATH`.
+- `app/workers/media_worker.py` is a long-lived `while True` loop. Serverless has
+  nowhere to run a daemon.
+- Render timeouts exceed the platform ceiling. `MEDIA_REMOTION_TIMEOUT_SECONDS`
+  defaults to `600` and `MEDIA_RENDER_TIMEOUT_SECONDS` to `240`, against a Vercel
+  maximum of 300 seconds on Hobby.
+
+### Vercel checklist for the API
+
+- Set `MEDIA_STORAGE_BACKEND=supabase`. The `local` backend writes to disk, and
+  `app/main.py` both creates `MEDIA_STORAGE_LOCAL_DIR` at import time and mounts it
+  through `StaticFiles`. Vercel's filesystem is read-only outside `/tmp`, so that
+  mount has to stay disabled in serverless.
+- Point `DATABASE_URL` at the Supabase transaction pooler on port `6543`. See
+  [Supabase pooler database URL](#supabase-pooler-database-url). A direct connection
+  will exhaust Postgres under serverless concurrency.
+- Set `MEDIA_JOB_QUEUE_BACKEND=redis` against a managed Redis, so API requests can
+  enqueue render jobs for the worker to pick up.
+- Drop `manim` from the dependency set installed for the Vercel build. No API code
+  imports it; the worker only ever invokes it as a subprocess. Keeping it risks the
+  250 MB unzipped function limit.
+- Run Alembic migrations out of band. They are not a build step. See
+  [Database and Seed Commands](#database-and-seed-commands).
+
+### Media host
+
+Use the existing `Dockerfile`, which already carries the system dependencies, and run
+the worker service described in
+[Optional Docker Media Worker](#optional-docker-media-worker). Any container host
+works: Railway, Render, Fly, or a plain VM.
+
 ## API Surface
 
 All v1 endpoints are mounted under `/api/v1`.
