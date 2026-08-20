@@ -482,6 +482,38 @@ Both hosts share the same Supabase Postgres, Redis queue, and Supabase Storage b
   defaults to `600` and `MEDIA_RENDER_TIMEOUT_SECONDS` to `240`, against a Vercel
   maximum of 300 seconds on Hobby.
 
+### Deploying the media worker
+
+`render.yaml` is a Render blueprint for it. Railway and Fly.io read the same
+`Dockerfile`; only the start command differs (`python -m app.workers.media_worker`).
+
+Verified end to end on 2026-08-20, API on Vercel and worker on a laptop, both
+against the production Supabase and an Upstash Redis:
+
+| Stage | Time |
+|---|---|
+| Manim render | 59.3s |
+| FFmpeg post-process | 23.4s |
+| Upload to Supabase Storage | 1.9s |
+| **Total** | **86.4s** |
+
+The worker picked the job off Redis 2s after the API enqueued it and produced a
+99-second 3.73 MB mp4 plus a thumbnail, and `GET /api/v1/workspaces/{id}`
+returned `latest_media.status = ready` with a public `video_url`.
+
+Two things that are easy to get wrong:
+
+- `REDIS_URL` must use the `rediss://` scheme. Upstash refuses plaintext
+  `redis://`, and the failure looks like a hang rather than an auth error.
+- The worker needs `SUPABASE_SERVICE_ROLE_KEY`, not the anon key. It writes to
+  the storage bucket.
+
+Redis is an optimisation, not a requirement. `app/workers/media_worker.py` falls
+back to polling `pick_next_queued_animation_job_id` whenever the queue returns
+nothing, so a worker still drains the backlog with
+`MEDIA_JOB_QUEUE_BACKEND=noop`. What cannot be skipped is having the worker
+process running somewhere.
+
 ### Vercel checklist for the API
 
 - Set `MEDIA_STORAGE_BACKEND=supabase`. The `local` backend writes to disk, and

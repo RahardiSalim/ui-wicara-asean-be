@@ -1,0 +1,53 @@
+# Media rendering cannot run on Vercel: Manim needs cairo/pango/FFmpeg at the
+# system level, Remotion needs a Node toolchain, and app/workers/media_worker.py
+# is a `while True` loop that outlives any serverless invocation. This deploys
+# that half. The API stays on Vercel.
+#
+#   render.com -> New -> Blueprint -> point at this repo
+#
+# Everything here is also true for Railway or Fly.io, which read the Dockerfile
+# directly; only the start command and env wiring differ.
+services:
+  - type: worker
+    name: wicara-media-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # The Dockerfile's CMD starts the API. A worker runs the loop instead.
+    dockerCommand: python -m app.workers.media_worker
+    plan: starter
+    envVars:
+      # Same Supabase Postgres the API writes jobs to.
+      - key: DATABASE_URL
+        sync: false
+      # Upstash. Must be rediss:// — Upstash refuses plaintext redis://.
+      - key: REDIS_URL
+        sync: false
+      - key: MEDIA_JOB_QUEUE_BACKEND
+        value: redis
+      - key: MEDIA_JOBS_QUEUE_KEY
+        value: wicara:media:jobs
+      # Uploads the finished mp4 and thumbnail. Needs the service role key,
+      # not the anon key: the worker writes to the bucket.
+      - key: MEDIA_STORAGE_BACKEND
+        value: supabase
+      - key: MEDIA_STORAGE_SUPABASE_BUCKET
+        value: media-artifacts
+      - key: SUPABASE_PROJECT_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      # context_auto asks the model to build the template spec before rendering.
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: AI_MODEL
+        value: deepseek/deepseek-v4-flash
+      - key: AI_PROVIDER_SORT
+        value: throughput
+      # A measured render is ~60s and post-process ~23s; these leave headroom
+      # without letting a wedged render hold the worker forever.
+      - key: MEDIA_RENDER_TIMEOUT_SECONDS
+        value: "240"
+      - key: MEDIA_REMOTION_TIMEOUT_SECONDS
+        value: "600"
+      - key: MEDIA_POSTPROCESS_TIMEOUT_SECONDS
+        value: "180"
