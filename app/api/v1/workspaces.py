@@ -9,6 +9,7 @@ from app.db.session import get_session
 from app.modules.accounts.dependencies import get_current_account
 from app.modules.accounts.models import UserAccount
 from app.modules.workspaces import schemas, service
+from app.modules.workspaces.service import WorkspaceTurnInProgressError
 
 router = APIRouter(prefix="/workspaces")
 
@@ -99,6 +100,8 @@ async def append_workspace_event(
             media_artifact_id=payload.media_artifact_id,
             metadata=payload.metadata,
         )
+    except WorkspaceTurnInProgressError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except LookupError as exc:

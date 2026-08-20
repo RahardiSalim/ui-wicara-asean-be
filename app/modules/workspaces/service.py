@@ -6,6 +6,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.language import normalize_language_code, preferred_language_code
@@ -1420,6 +1421,10 @@ def _resolve_owned_media_artifact(
     return artifact
 
 
+class WorkspaceTurnInProgressError(RuntimeError):
+    """Another turn already holds this workspace's row lock."""
+
+
 def _load_workspace(
     session: Session,
     *,
@@ -1436,8 +1441,25 @@ def _load_workspace(
         # Serialise concurrent appends against the same workspace. Without this two
         # in-flight events both read the same max(event_index) and the second commit
         # trips uq_workspace_events_session_index with a 500.
-        statement = statement.with_for_update()
-    return session.scalar(statement.options(selectinload(WorkspaceSession.events)))
+        #
+        # nowait matters as much as the lock. A turn holds this row across the
+        # tutor LLM call, which runs 15-240s, so a second request used to sit on
+        # the lock until Postgres killed it:
+        #
+        #   QueryCanceled: canceling statement due to statement timeout
+        #   CONTEXT: while locking tuple (7,3) in relation "workspace_sessions"
+        #
+        # A learner who taps send twice waited two minutes for a 500. Failing
+        # immediately lets the caller say "the tutor is still replying".
+        statement = statement.with_for_update(nowait=True)
+    try:
+        return session.scalar(statement.options(selectinload(WorkspaceSession.events)))
+    except OperationalError as exc:
+        session.rollback()
+        raise WorkspaceTurnInProgressError(
+            "The tutor is still answering the previous message in this workspace. "
+            "Wait for that reply before sending another."
+        ) from exc
 
 
 def _next_event_index(session: Session, *, workspace_id: UUID) -> int:
